@@ -31,7 +31,11 @@ while true; do
 
         cd "$BACKEND_DIR"
 
-        source .venv/bin/activate 2>/dev/null
+        if [ ! -d .venv ]; then
+            echo -e "\033[33mCreating virtual environment...\033[0m"
+            python3 -m venv .venv
+        fi
+        source .venv/bin/activate
         pip install --index-url https://pypi.org/simple/ -e ".[dev]" -q
 
         python -m train 2>&1
