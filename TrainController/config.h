@@ -30,7 +30,7 @@ const DetectorConfig DETECTORS[NUM_DETECTORS] = {
 };
 
 // Backend TCP server
-#define BACKEND_HOST "192.168.50.186"
+#define BACKEND_HOST "192.168.50.80"
 #define BACKEND_PORT 9000
 #define RECONNECT_MS 2000
 
