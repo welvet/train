@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import collections
 import logging
 from typing import Any
 
@@ -24,6 +25,27 @@ from train.core.events.train import (
 from train.core.module import Module
 
 RESPONSE_TIMEOUT = 2.0
+LOG_BUFFER_SIZE = 200
+
+
+class _BroadcastHandler(logging.Handler):
+    def __init__(
+        self,
+        queues: list[asyncio.Queue[str]],
+        buffer: collections.deque[str],
+    ) -> None:
+        super().__init__()
+        self._queues = queues
+        self._buffer = buffer
+
+    def emit(self, record: logging.LogRecord) -> None:
+        line = self.format(record)
+        self._buffer.append(line)
+        for q in list(self._queues):
+            try:
+                q.put_nowait(line)
+            except asyncio.QueueFull:
+                pass
 
 
 class WebApiModule(Module):
@@ -44,6 +66,9 @@ class WebApiModule(Module):
         self._log = logging.getLogger("train.web")
         self._state: dict[str, dict[str, Any]] = {}
         self._hub_state: dict[str, dict[str, Any]] = {}
+        self._log_subscribers: list[asyncio.Queue[str]] = []
+        self._log_buffer: collections.deque[str] = collections.deque(maxlen=LOG_BUFFER_SIZE)
+        self._log_handler: _BroadcastHandler | None = None
 
     async def start(self) -> None:
         self.bus.subscribe(TrainConnected, self._on_connected)
@@ -64,13 +89,21 @@ class WebApiModule(Module):
             self._handle_set_switch_position,
         )
         self._app.router.add_post("/stop", self._handle_stop)
+        self._app.router.add_get("/logs", self._handle_logs)
         self._runner = web.AppRunner(self._app)
         await self._runner.setup()
         site = web.TCPSite(self._runner, self._host, self._port)
         await site.start()
+
+        self._log_handler = _BroadcastHandler(self._log_subscribers, self._log_buffer)
+        self._log_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+        logging.getLogger().addHandler(self._log_handler)
+
         self._log.info("Listening on http://%s:%d", self._host, self._port)
 
     async def stop(self) -> None:
+        if self._log_handler is not None:
+            logging.getLogger().removeHandler(self._log_handler)
         if self._runner is not None:
             await self._runner.cleanup()
 
@@ -220,3 +253,25 @@ class WebApiModule(Module):
         self._log.info("Stop requested via API")
         self._shutdown_callback()
         return web.json_response({"ok": True})
+
+    async def _handle_logs(self, request: web.Request) -> web.StreamResponse:
+        resp = web.StreamResponse()
+        resp.content_type = "text/event-stream"
+        resp.headers["Cache-Control"] = "no-cache"
+        resp.headers["X-Accel-Buffering"] = "no"
+        await resp.prepare(request)
+
+        for line in self._log_buffer:
+            await resp.write(f"data: {line}\n\n".encode())
+
+        queue: asyncio.Queue[str] = asyncio.Queue(maxsize=500)
+        self._log_subscribers.append(queue)
+        try:
+            while True:
+                line = await queue.get()
+                await resp.write(f"data: {line}\n\n".encode())
+        except (asyncio.CancelledError, ConnectionResetError):
+            pass
+        finally:
+            self._log_subscribers.remove(queue)
+        return resp
