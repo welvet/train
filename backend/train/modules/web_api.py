@@ -256,20 +256,20 @@ class WebApiModule(Module):
 
     async def _handle_logs(self, request: web.Request) -> web.StreamResponse:
         resp = web.StreamResponse()
-        resp.content_type = "text/event-stream"
+        resp.content_type = "text/plain"
         resp.headers["Cache-Control"] = "no-cache"
         resp.headers["X-Accel-Buffering"] = "no"
         await resp.prepare(request)
 
         for line in self._log_buffer:
-            await resp.write(f"data: {line}\n\n".encode())
+            await resp.write(f"{line}\n".encode())
 
         queue: asyncio.Queue[str] = asyncio.Queue(maxsize=500)
         self._log_subscribers.append(queue)
         try:
             while True:
                 line = await queue.get()
-                await resp.write(f"data: {line}\n\n".encode())
+                await resp.write(f"{line}\n".encode())
         except (asyncio.CancelledError, ConnectionResetError):
             pass
         finally:
