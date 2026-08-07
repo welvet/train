@@ -2,7 +2,7 @@
 
 SKIP_WAIT=false
 COMMIT_MSG=""
-SERVER_URL="http://192.168.50.88:8080"
+SERVER_URL="http://192.168.50.80:8080"
 
 # Parse arguments
 if [ "$1" = "-s" ]; then
