@@ -37,7 +37,7 @@ sleep 5
 if [ "$SKIP_WAIT" = false ]; then
     echo ""
     echo "Waiting for server to come back online..."
-    while ! curl -s --connect-timeout 2 "$SERVER_URL/trains/arctic_express" > /dev/null 2>&1; do
+    while ! curl -s --connect-timeout 2 --max-time 3 "$SERVER_URL/logs" > /dev/null 2>&1; do
         printf "."
         sleep 2
     done
