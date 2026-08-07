@@ -1,0 +1,264 @@
+from __future__ import annotations
+
+import asyncio
+
+import pytest
+
+from train.core.event_bus import EventBus
+from train.core.events.hub import DetectorChanged, SetSwitchPosition, SwitchPositionChanged
+from train.core.events.system import SystemStarted
+from train.core.events.train import SetTrainSpeed, TrainConnected
+from train.modules.automation import (
+    DIVERGE,
+    STRAIGHT,
+    AutomationContext,
+    AutomationModule,
+)
+
+
+@pytest.fixture
+def bus() -> EventBus:
+    return EventBus()
+
+
+@pytest.fixture
+def ctx(bus: EventBus) -> AutomationContext:
+    return AutomationContext(bus)
+
+
+def _auto_ack_switches(bus: EventBus) -> None:
+    async def _ack(event: SetSwitchPosition) -> None:
+        await bus.publish(SwitchPositionChanged(
+            hub_name=event.hub_name, switch_name=event.switch_name,
+            angle=event.angle, ok=True,
+        ))
+
+    bus.subscribe(SetSwitchPosition, _ack)
+
+
+def _collect(bus: EventBus, event_type):
+    collected = []
+
+    async def handler(e):
+        collected.append(e)
+
+    bus.subscribe(event_type, handler)
+    return collected
+
+
+# --- AutomationContext unit tests ---
+
+
+async def test_set_speed_publishes(bus: EventBus, ctx: AutomationContext) -> None:
+    events = _collect(bus, SetTrainSpeed)
+    await ctx.set_speed("t1", 50)
+    assert len(events) == 1
+    assert events[0].train_name == "t1"
+    assert events[0].speed == 50
+
+
+async def test_set_switch_with_angle(bus: EventBus, ctx: AutomationContext) -> None:
+    _auto_ack_switches(bus)
+    events = _collect(bus, SetSwitchPosition)
+    await ctx.set_switch("hub", "S1", 58)
+    assert len(events) == 1
+    assert events[0].angle == 58
+
+
+async def test_set_switch_with_name(bus: EventBus, ctx: AutomationContext) -> None:
+    _auto_ack_switches(bus)
+    events = _collect(bus, SetSwitchPosition)
+    await ctx.set_switch("hub", "S1", "straight")
+    assert events[0].angle == STRAIGHT
+    await ctx.set_switch("hub", "S1", "diverge")
+    assert events[1].angle == DIVERGE
+
+
+async def test_wait_for_resolves(bus: EventBus, ctx: AutomationContext) -> None:
+    async def publish_later():
+        await asyncio.sleep(0.05)
+        await bus.publish(TrainConnected(train_name="t1", ble_address="AA:BB"))
+
+    asyncio.create_task(publish_later())
+    event = await ctx.wait_for(TrainConnected)
+    assert event.train_name == "t1"
+
+
+async def test_wait_for_with_filter(bus: EventBus, ctx: AutomationContext) -> None:
+    async def publish_later():
+        await asyncio.sleep(0.05)
+        await bus.publish(TrainConnected(train_name="t1"))
+        await asyncio.sleep(0.05)
+        await bus.publish(TrainConnected(train_name="t2"))
+
+    asyncio.create_task(publish_later())
+    event = await ctx.wait_for(TrainConnected, filter=lambda e: e.train_name == "t2")
+    assert event.train_name == "t2"
+
+
+async def test_wait_for_timeout(bus: EventBus, ctx: AutomationContext) -> None:
+    with pytest.raises(asyncio.TimeoutError):
+        await ctx.wait_for(TrainConnected, timeout=0.05)
+
+
+async def test_on_fires_callback(bus: EventBus, ctx: AutomationContext) -> None:
+    received = []
+
+    async def callback(event):
+        received.append(event)
+
+    ctx.on(DetectorChanged, callback)
+    await bus.publish(DetectorChanged(hub_name="h", detector_name="D1", triggered=True))
+    await asyncio.sleep(0.05)
+    assert len(received) == 1
+    assert received[0].detector_name == "D1"
+
+
+async def test_on_with_filter(bus: EventBus, ctx: AutomationContext) -> None:
+    received = []
+
+    async def callback(event):
+        received.append(event)
+
+    ctx.on(DetectorChanged, callback, filter=lambda e: e.triggered)
+    await bus.publish(DetectorChanged(hub_name="h", detector_name="D1", triggered=False))
+    await asyncio.sleep(0.05)
+    assert len(received) == 0
+
+    await bus.publish(DetectorChanged(hub_name="h", detector_name="D1", triggered=True))
+    await asyncio.sleep(0.05)
+    assert len(received) == 1
+
+
+async def test_on_throttle(bus: EventBus, ctx: AutomationContext) -> None:
+    received = []
+
+    async def callback(event):
+        received.append(event)
+
+    ctx.on(DetectorChanged, callback, throttle=0.3)
+
+    # first event fires immediately
+    await bus.publish(DetectorChanged(hub_name="h", detector_name="D1", triggered=True))
+    await asyncio.sleep(0.05)
+    assert len(received) == 1
+
+    # repeats within throttle window are suppressed
+    await bus.publish(DetectorChanged(hub_name="h", detector_name="D1", triggered=True))
+    await asyncio.sleep(0.05)
+    await bus.publish(DetectorChanged(hub_name="h", detector_name="D1", triggered=True))
+    await asyncio.sleep(0.05)
+    assert len(received) == 1
+
+    # events keep coming — keeps resetting the cooldown
+    await asyncio.sleep(0.2)
+    await bus.publish(DetectorChanged(hub_name="h", detector_name="D1", triggered=True))
+    await asyncio.sleep(0.2)
+    await bus.publish(DetectorChanged(hub_name="h", detector_name="D1", triggered=True))
+    await asyncio.sleep(0.05)
+    assert len(received) == 1
+
+    # quiet for >0.3s — rearms, next event fires
+    await asyncio.sleep(0.4)
+    await bus.publish(DetectorChanged(hub_name="h", detector_name="D1", triggered=True))
+    await asyncio.sleep(0.05)
+    assert len(received) == 2
+    await ctx.cleanup()
+
+
+async def test_on_callback_runs_as_task(bus: EventBus, ctx: AutomationContext) -> None:
+    started = asyncio.Event()
+
+    async def slow_callback(event):
+        started.set()
+        await asyncio.sleep(10)
+
+    ctx.on(TrainConnected, slow_callback)
+    await bus.publish(TrainConnected(train_name="t1"))
+    await asyncio.wait_for(started.wait(), timeout=0.5)
+    await ctx.cleanup()
+
+
+async def test_ramp_speed(bus: EventBus, ctx: AutomationContext) -> None:
+    events = _collect(bus, SetTrainSpeed)
+    await ctx.ramp_speed("t1", 0, 100, duration=0.1, steps=5)
+    speeds = [e.speed for e in events]
+    assert speeds[0] == 0
+    assert speeds[-1] == 100
+    assert speeds == sorted(speeds)
+    assert len(speeds) == 6
+
+
+async def test_ramp_speed_final_exact(bus: EventBus, ctx: AutomationContext) -> None:
+    events = _collect(bus, SetTrainSpeed)
+    await ctx.ramp_speed("t1", 0, 77, duration=0.05, steps=3)
+    assert events[-1].speed == 77
+
+
+async def test_cleanup_cancels_tasks(bus: EventBus, ctx: AutomationContext) -> None:
+    async def long_running():
+        await asyncio.sleep(100)
+
+    task = ctx.spawn(long_running())
+    assert not task.done()
+    await ctx.cleanup()
+    assert task.done()
+
+
+async def test_cleanup_unsubscribes(bus: EventBus, ctx: AutomationContext) -> None:
+    received = []
+
+    async def callback(event):
+        received.append(event)
+
+    ctx.on(TrainConnected, callback)
+    await ctx.cleanup()
+    await bus.publish(TrainConnected(train_name="t1"))
+    await asyncio.sleep(0.05)
+    assert len(received) == 0
+
+
+# --- AutomationModule tests ---
+
+
+async def test_module_runs_script(bus: EventBus) -> None:
+    flag = []
+
+    async def script(ctx):
+        flag.append(True)
+
+    mod = AutomationModule(bus, script=script)
+    await mod.start()
+    await asyncio.sleep(0.05)
+    assert flag
+    await mod.stop()
+
+
+async def test_module_stop_cleans_up(bus: EventBus) -> None:
+    received = []
+
+    async def script(ctx):
+        async def cb(event):
+            received.append(event)
+
+        ctx.on(TrainConnected, cb)
+        await asyncio.sleep(100)
+
+    mod = AutomationModule(bus, script=script)
+    await mod.start()
+    await asyncio.sleep(0.05)
+    await mod.stop()
+    await bus.publish(TrainConnected(train_name="t1"))
+    await asyncio.sleep(0.05)
+    assert len(received) == 0
+
+
+async def test_script_error_logged(bus: EventBus) -> None:
+    async def bad_script(ctx):
+        raise ValueError("boom")
+
+    mod = AutomationModule(bus, script=bad_script)
+    await mod.start()
+    await asyncio.sleep(0.05)
+    assert mod._task.done()
+    await mod.stop()

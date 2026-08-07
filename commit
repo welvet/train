@@ -1,0 +1,51 @@
+#!/bin/bash
+
+SKIP_WAIT=false
+COMMIT_MSG=""
+SERVER_URL="http://192.168.50.88:8080"
+
+# Parse arguments
+if [ "$1" = "-s" ]; then
+    SKIP_WAIT=true
+    shift
+    COMMIT_MSG="$*"
+else
+    COMMIT_MSG="$*"
+fi
+
+if [ -z "$COMMIT_MSG" ]; then
+    echo "Usage: ./commit [-s] <commit message>"
+    echo "  -s: Skip waiting for server to come back online"
+    exit 1
+fi
+
+echo "Running: git add -A"
+git add -A
+
+echo "Running: git commit -m \"$COMMIT_MSG\""
+git commit -m "$COMMIT_MSG"
+
+echo "Running: git push"
+git push
+
+echo "Triggering server shutdown..."
+curl -s -X POST "$SERVER_URL/stop"
+
+echo "Waiting 5 seconds for shutdown to complete..."
+sleep 5
+
+if [ "$SKIP_WAIT" = false ]; then
+    echo ""
+    echo "Waiting for server to come back online..."
+    while ! curl -s --connect-timeout 2 "$SERVER_URL/trains/arctic_express" > /dev/null 2>&1; do
+        printf "."
+        sleep 2
+    done
+    echo ""
+    echo "Server is back online!"
+else
+    echo ""
+    echo "Skipping server wait as requested."
+fi
+
+echo "Done!"

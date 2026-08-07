@@ -1,0 +1,5 @@
+{
+  "port": "/dev/cu.usbmodem9070692C57582",
+  "fqbn": "arduino:renesas_uno:unor4wifi",
+  "baudrate": 9600
+}
