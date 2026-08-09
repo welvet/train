@@ -11,6 +11,11 @@ import urllib.request
 SERVER = "http://192.168.50.80:8080"
 
 
+def set_server(url):
+    global SERVER
+    SERVER = url
+
+
 def req(method, path, body=None):
     data = json.dumps(body).encode() if body else None
     r = urllib.request.Request(f"{SERVER}{path}", data=data, method=method)
@@ -114,9 +119,7 @@ def main():
     sub.add_parser("shutdown", help="Stop the server")
 
     args = parser.parse_args()
-    if args.server != SERVER:
-        global SERVER
-        SERVER = args.server
+    set_server(args.server)
 
     commands = {
         "train": cmd_train,
