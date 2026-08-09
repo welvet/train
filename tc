@@ -125,6 +125,7 @@ def main():
     p.add_argument("position", help="straight (s), diverge (d), or angle")
     p.add_argument("--hub", default="A_HUB_1")
 
+    sub.add_parser("help", help="Show this help")
     sub.add_parser("logs", help="Stream server logs")
     sub.add_parser("halt", help="Pause automation (ignore detector events)")
     sub.add_parser("resume", help="Resume automation")
@@ -132,6 +133,10 @@ def main():
 
     args = parser.parse_args()
     set_server(args.server)
+
+    if args.command == "help":
+        parser.print_help()
+        return
 
     commands = {
         "train": cmd_train,
