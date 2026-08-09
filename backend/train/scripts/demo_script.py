@@ -11,7 +11,7 @@ HUB = "A_HUB_1"
 
 
 async def demo_script(ctx: AutomationContext) -> None:
-    switches_diverged = False
+    s1_diverged = False
 
     async def on_train_connected(event: TrainConnected) -> None:
         await ctx.sleep(2)
@@ -26,7 +26,7 @@ async def demo_script(ctx: AutomationContext) -> None:
     restart_task = None
 
     async def on_detector(event: DetectorChanged) -> None:
-        nonlocal switches_diverged, restart_task
+        nonlocal s1_diverged, restart_task
 
         if restart_task and not restart_task.done():
             restart_task.cancel()
@@ -34,12 +34,13 @@ async def demo_script(ctx: AutomationContext) -> None:
         await ctx.set_speed(TRAIN, 0)
 
         if event.detector_name == "D1":
-            target = "straight" if switches_diverged else "diverge"
+            s1_diverged = not s1_diverged
             await asyncio.gather(
-                ctx.set_switch(HUB, "S1", target),
-                ctx.set_switch(HUB, "S2", target),
+                ctx.set_switch(HUB, "S1", "diverge" if s1_diverged else "straight"),
+                ctx.set_switch(HUB, "S2", "diverge"),
             )
-            switches_diverged = not switches_diverged
+        elif event.detector_name == "D2":
+            await ctx.set_switch(HUB, "S2", "straight")
 
         async def wait_and_restart() -> None:
             await ctx.sleep(5)
