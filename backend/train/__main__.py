@@ -19,7 +19,7 @@ def main() -> None:
     app.add_module(
         LegoBleModule,
         train_map={
-            "FB81D51D-F808-C900-5C30-00076EBA9465": "arctic_express",
+            "FFE0916A-B323-1AA5-1083-0DE85F7DCB8D": "arctic_express",
         },
     )
     app.add_module(ArduinoHubModule)
