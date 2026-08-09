@@ -8,6 +8,7 @@ from typing import Any
 from aiohttp import web
 
 from train.core.event_bus import EventBus
+from train.core.events.system import AutomationHalt, AutomationResume
 from train.core.events.hub import (
     DetectorChanged,
     HubConnected,
@@ -89,6 +90,8 @@ class WebApiModule(Module):
             self._handle_set_switch_position,
         )
         self._app.router.add_post("/stop", self._handle_stop)
+        self._app.router.add_post("/halt", self._handle_halt)
+        self._app.router.add_post("/resume", self._handle_resume)
         self._app.router.add_get("/logs", self._handle_logs)
         self._runner = web.AppRunner(self._app)
         await self._runner.setup()
@@ -252,6 +255,14 @@ class WebApiModule(Module):
             return web.json_response({"error": "shutdown not available"}, status=503)
         self._log.info("Stop requested via API")
         self._shutdown_callback()
+        return web.json_response({"ok": True})
+
+    async def _handle_halt(self, request: web.Request) -> web.Response:
+        await self.bus.publish(AutomationHalt())
+        return web.json_response({"ok": True})
+
+    async def _handle_resume(self, request: web.Request) -> web.Response:
+        await self.bus.publish(AutomationResume())
         return web.json_response({"ok": True})
 
     async def _handle_logs(self, request: web.Request) -> web.StreamResponse:

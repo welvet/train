@@ -13,3 +13,13 @@ class SystemStarted(Event):
 @dataclass(frozen=True, slots=True)
 class SystemShutdown(Event):
     pass
+
+
+@dataclass(frozen=True, slots=True)
+class AutomationHalt(Event):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class AutomationResume(Event):
+    pass

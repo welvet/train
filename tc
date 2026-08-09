@@ -86,6 +86,16 @@ def cmd_logs(args):
         pass
 
 
+def cmd_halt(args):
+    r = req("POST", "/halt")
+    print("Automation halted")
+
+
+def cmd_resume(args):
+    r = req("POST", "/resume")
+    print("Automation resumed")
+
+
 def cmd_stop_server(args):
     r = req("POST", "/stop")
     print(f"ok={r.get('ok')}")
@@ -116,6 +126,8 @@ def main():
     p.add_argument("--hub", default="A_HUB_1")
 
     sub.add_parser("logs", help="Stream server logs")
+    sub.add_parser("halt", help="Pause automation (ignore detector events)")
+    sub.add_parser("resume", help="Resume automation")
     sub.add_parser("shutdown", help="Stop the server")
 
     args = parser.parse_args()
@@ -128,6 +140,8 @@ def main():
         "hub": cmd_hub,
         "sw": cmd_switch,
         "logs": cmd_logs,
+        "halt": cmd_halt,
+        "resume": cmd_resume,
         "shutdown": cmd_stop_server,
     }
     commands[args.command](args)

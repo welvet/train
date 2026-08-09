@@ -8,6 +8,7 @@ from typing import Any, Callable, Coroutine, TypeVar
 from train.core.event_bus import EventBus
 from train.core.events.base import Event
 from train.core.events.hub import SetSwitchPosition, SwitchPositionChanged
+from train.core.events.system import AutomationHalt, AutomationResume
 from train.core.events.train import SetTrainSpeed
 from train.core.module import Module
 
@@ -24,6 +25,7 @@ class AutomationContext:
         self._bus = bus
         self._tasks: list[asyncio.Task[Any]] = []
         self._subscriptions: list[tuple[type[Event], Any]] = []
+        self.halted = False
 
     async def set_speed(self, train: str, speed: int) -> None:
         await self._bus.publish(SetTrainSpeed(train_name=train, speed=speed))
@@ -97,6 +99,8 @@ class AutomationContext:
 
         async def _handler(event: E) -> None:
             nonlocal last_seen, armed, rearm_task
+            if self.halted:
+                return
             if filter is not None and not filter(event):
                 return
             if throttle is not None:
@@ -149,7 +153,17 @@ class AutomationModule(Module):
 
     async def start(self) -> None:
         self._ctx = AutomationContext(self.bus)
+        self.bus.subscribe(AutomationHalt, self._on_halt)
+        self.bus.subscribe(AutomationResume, self._on_resume)
         self._task = asyncio.create_task(self._run_script())
+
+    async def _on_halt(self, event: AutomationHalt) -> None:
+        self._log.info("Automation halted")
+        self.halted = True
+
+    async def _on_resume(self, event: AutomationResume) -> None:
+        self._log.info("Automation resumed")
+        self.halted = False
 
     async def _run_script(self) -> None:
         try:
@@ -158,6 +172,15 @@ class AutomationModule(Module):
             pass
         except Exception:
             self._log.error("Automation script failed", exc_info=True)
+
+    @property
+    def halted(self) -> bool:
+        return self._ctx.halted if self._ctx else False
+
+    @halted.setter
+    def halted(self, value: bool) -> None:
+        if self._ctx:
+            self._ctx.halted = value
 
     async def stop(self) -> None:
         if self._ctx:

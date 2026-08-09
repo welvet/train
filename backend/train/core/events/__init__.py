@@ -6,7 +6,7 @@ from train.core.events.hub import (
     SetSwitchPosition,
     SwitchPositionChanged,
 )
-from train.core.events.system import SystemShutdown, SystemStarted
+from train.core.events.system import AutomationHalt, AutomationResume, SystemShutdown, SystemStarted
 from train.core.events.train import (
     SetTrainSpeed,
     TrainConnected,
@@ -16,6 +16,8 @@ from train.core.events.train import (
 )
 
 __all__ = [
+    "AutomationHalt",
+    "AutomationResume",
     "DetectorChanged",
     "Event",
     "HubConnected",
