@@ -1,4 +1,0 @@
-#!/bin/bash
-curl -s -X POST http://192.168.50.80:8080/trains/arctic_express/speed -d '{"speed":0}' > /dev/null
-curl -s -X POST http://192.168.50.80:8080/halt > /dev/null
-echo "Train stopped, automation halted"
