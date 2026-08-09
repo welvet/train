@@ -13,12 +13,6 @@ HUB = "A_HUB_1"
 async def demo_script(ctx: AutomationContext) -> None:
     s1_diverged = False
 
-    async def on_train_connected(event: TrainConnected) -> None:
-        await ctx.sleep(2)
-        await ctx.set_speed(event.train_name, 80)
-
-    ctx.on(TrainConnected, on_train_connected)
-
     await ctx.wait_for(HubConnected, filter=lambda e: e.hub_name == HUB)
     await ctx.set_switch(HUB, "S1", "straight")
     await ctx.set_switch(HUB, "S2", "straight")
