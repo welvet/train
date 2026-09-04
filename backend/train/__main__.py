@@ -18,10 +18,11 @@ def main() -> None:
     config = load_runtime_config()
     automation = load_automation()
     app = App()
-    app.add_module(
+    automation_module = app.add_module(
         AutomationModule,
         configure=automation.configure,
         script=automation.run,
+        failure_callback=app.request_shutdown,
     )
     app.add_module(
         LegoBleModule,
@@ -39,6 +40,7 @@ def main() -> None:
         host=config.backend.api_host,
         port=config.backend.api_port,
         shutdown_callback=app.request_shutdown,
+        readiness_check=lambda: automation_module.healthy,
     )
     asyncio.run(app.run())
 

@@ -1,0 +1,47 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import sys
+import tempfile
+from pathlib import Path
+
+from _deployment import (
+    build_bundle,
+    load_deployment,
+    publish_bundle,
+    wait_until_active,
+)
+from _workspace import WorkspaceError, data_dir
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Build and deploy the backend plus local runtime data over FTP"
+    )
+    parser.add_argument(
+        "--no-wait", action="store_true", help="Do not wait for server activation"
+    )
+    args = parser.parse_args()
+    workspace = data_dir()
+    try:
+        config = load_deployment(workspace)
+        with tempfile.TemporaryDirectory(prefix="train-release-") as directory:
+            bundle = Path(directory) / "backend.tar.gz"
+            print("Building backend release...")
+            digest = build_bundle(workspace, bundle, config.target)
+            print(f"Uploading release {digest[:12]}...")
+            attempt = publish_bundle(config, bundle, digest)
+        if not args.no_wait:
+            print("Waiting for server activation...")
+            wait_until_active(config, digest, attempt)
+            print(f"Server is running release {digest[:12]}")
+        else:
+            print(f"Published release {digest[:12]}")
+    except (OSError, RuntimeError, TimeoutError, WorkspaceError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+
+
+if __name__ == "__main__":
+    main()

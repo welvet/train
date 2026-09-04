@@ -31,12 +31,31 @@ def init_workspace(root: Path) -> None:
     }
     trains = {"trains": []}
     arduinos = {"devices": {}}
-    secrets = {"devices": {}}
+    deployment = {
+        "ftp": {
+            "host": "",
+            "port": 21,
+            "username": "",
+            "remote_dir": "/train/deploy",
+            "tls": False,
+        },
+        "health_url": "",
+        "target": {
+            "system": "",
+            "machine": "",
+            "implementation": "",
+            "python": "",
+            "platform": "",
+            "soabi": "",
+        },
+    }
+    secrets = {"devices": {}, "deployment": {"ftp_password": ""}}
 
     for name, value in (
         ("backend.json", backend),
         ("trains.json", trains),
         ("arduinos.json", arduinos),
+        ("deployment.json", deployment),
         ("secrets.json", secrets),
     ):
         if write_json(root / name, value):

@@ -291,11 +291,32 @@ async def test_module_stop_cleans_up(bus: EventBus) -> None:
 
 
 async def test_script_error_logged(bus: EventBus) -> None:
+    failed = []
+
     async def bad_script(ctx):
         raise ValueError("boom")
 
-    mod = AutomationModule(bus, script=bad_script)
+    mod = AutomationModule(bus, script=bad_script, failure_callback=lambda: failed.append(True))
     await mod.start()
     await asyncio.sleep(0.05)
     assert mod._task.done()
+    assert not mod.healthy
+    assert failed == [True]
+    await mod.stop()
+
+
+async def test_script_return_triggers_failure_callback(bus: EventBus) -> None:
+    failed = []
+
+    async def completed_script(ctx):
+        return
+
+    mod = AutomationModule(
+        bus, script=completed_script, failure_callback=lambda: failed.append(True)
+    )
+    await mod.start()
+    await asyncio.sleep(0)
+
+    assert not mod.healthy
+    assert failed == [True]
     await mod.stop()

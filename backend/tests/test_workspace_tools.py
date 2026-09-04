@@ -32,6 +32,8 @@ def test_data_initializer_creates_isolated_workspace_scaffold(
     validate_automation(tmp_path)
     assert (tmp_path / "secrets.json").stat().st_mode & 0o777 == 0o600
     assert (tmp_path / "trains.json").read_text().strip() == '{\n  "trains": []\n}'
+    deployment = (tmp_path / "deployment.json").read_text()
+    assert '"remote_dir": "/train/deploy"' in deployment
 
 
 def test_generated_firmware_config_supports_multiple_devices() -> None:

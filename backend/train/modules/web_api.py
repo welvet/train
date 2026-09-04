@@ -3,7 +3,8 @@ from __future__ import annotations
 import asyncio
 import collections
 import logging
-from typing import Any
+import os
+from typing import Any, Callable
 
 from aiohttp import web
 
@@ -58,11 +59,13 @@ class WebApiModule(Module):
         host: str = "0.0.0.0",
         port: int = 8080,
         shutdown_callback: Any = None,
+        readiness_check: Callable[[], bool] | None = None,
     ) -> None:
         super().__init__(bus)
         self._host = host
         self._port = port
         self._shutdown_callback = shutdown_callback
+        self._readiness_check = readiness_check or (lambda: True)
         self._app: web.Application | None = None
         self._runner: web.AppRunner | None = None
         self._log = logging.getLogger("train.web")
@@ -84,6 +87,7 @@ class WebApiModule(Module):
         self.bus.subscribe(TagRemoved, self._on_tag_removed)
 
         self._app = web.Application()
+        self._app.router.add_get("/health", self._handle_health)
         self._app.router.add_get("/trains/{train_name}", self._handle_get_train)
         self._app.router.add_post("/trains/{train_name}/speed", self._handle_set_speed)
         self._app.router.add_get("/hubs/{hub_name}", self._handle_get_hub)
@@ -105,6 +109,13 @@ class WebApiModule(Module):
         logging.getLogger().addHandler(self._log_handler)
 
         self._log.info("Listening on http://%s:%d", self._host, self._port)
+
+    async def _handle_health(self, request: web.Request) -> web.Response:
+        ready = self._readiness_check()
+        return web.json_response({
+            "status": "ok" if ready else "error",
+            "release": os.environ.get("TRAIN_RELEASE_ID", "development"),
+        }, status=200 if ready else 503)
 
     async def stop(self) -> None:
         if self._log_handler is not None:

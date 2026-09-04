@@ -1,0 +1,451 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import fcntl
+import hashlib
+import json
+import logging
+import os
+import platform
+import signal
+import subprocess
+import sys
+import sysconfig
+import tarfile
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+POLL_SECONDS = 2
+READINESS_TIMEOUT_SECONDS = 15
+STOP_TIMEOUT_SECONDS = 10
+RELEASE_RETENTION = 3
+RUNTIME_DATA_FILES = {
+    "data/backend.json",
+    "data/trains.json",
+    "data/arduinos.json",
+    "data/automation.py",
+}
+
+
+class ReleaseError(RuntimeError):
+    pass
+
+
+class ServerLoop:
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self.deploy_dir = root / "deploy"
+        self.releases_dir = root / "releases"
+        self.current_link = root / "current"
+        self.child: subprocess.Popen | None = None
+        self.active_digest: str | None = None
+        self.failed_attempt: str | None = None
+        self.stopping = False
+        self.log = logging.getLogger("train.server-loop")
+
+    def run(self) -> None:
+        self.deploy_dir.mkdir(parents=True, exist_ok=True)
+        self.releases_dir.mkdir(parents=True, exist_ok=True)
+        self._reconcile_committed_release()
+        while not self.stopping:
+            try:
+                self._tick()
+            except Exception as exc:
+                self.log.exception("Supervisor iteration failed")
+                self._write_status(
+                    "supervisor_error", self.active_digest, None, str(exc)
+                )
+            time.sleep(POLL_SECONDS)
+        self._stop_child()
+
+    def stop(self, *_: object) -> None:
+        self.stopping = True
+
+    def _tick(self) -> None:
+        requested = self._read_request(self.deploy_dir / "release.json")
+        if (
+            requested
+            and requested[0] != self.active_digest
+            and requested[1] != self.failed_attempt
+        ):
+            self._activate(*requested)
+            return
+        if self.child is not None and self.child.poll() is not None:
+            code = self.child.returncode
+            self.log.error("Backend exited with code %s; restarting", code)
+            self.child = None
+            self._write_status(
+                "restarting", self.active_digest, None, f"backend exited: {code}"
+            )
+        if self.child is None and self.active_digest:
+            self._start(self.active_digest)
+
+    def _activate(self, digest: str, attempt: str) -> None:
+        previous = self.active_digest
+        self._write_status("preparing", digest, attempt, "verifying release")
+        try:
+            release = self._prepare_release(digest)
+        except Exception as exc:
+            self.log.exception("Release %s failed preparation", digest[:12])
+            self.failed_attempt = attempt
+            self._write_status("failed", digest, attempt, str(exc))
+            return
+
+        self._stop_child()
+        try:
+            self._start(digest)
+            self._wait_ready(release, digest)
+        except Exception as exc:
+            self.log.exception("Release %s failed startup", digest[:12])
+            self.failed_attempt = attempt
+            self._write_status("failed", digest, attempt, str(exc))
+            self._stop_child()
+            if previous:
+                self._start(previous)
+            return
+
+        self._switch_current(release)
+        self.active_digest = digest
+        self.failed_attempt = None
+        (self.deploy_dir / "active.sha256").write_text(digest + "\n")
+        self._write_status("active", digest, attempt, "release is healthy")
+        self._prune(previous)
+        self.log.info("Activated release %s", digest[:12])
+
+    def _prepare_release(self, digest: str) -> Path:
+        archive = self.deploy_dir / f"release-{digest}.tar.gz"
+        if not archive.is_file() or _sha256(archive) != digest:
+            raise ReleaseError("release archive is missing or has the wrong checksum")
+        release = self.releases_dir / digest
+        if release.is_dir():
+            _verify_manifest(release, allow_runtime=True)
+            if not (release / ".runtime-ready").is_file():
+                raise ReleaseError("existing release has no prepared runtime")
+            return release
+
+        temporary = self.releases_dir / f".{digest}.extracting"
+        if temporary.exists():
+            _remove_tree(temporary)
+        temporary.mkdir()
+        try:
+            with tarfile.open(archive, "r:gz") as bundle:
+                _safe_extract(bundle, temporary)
+            _verify_manifest(temporary)
+            self._prepare_runtime(temporary)
+            (temporary / ".runtime-ready").write_text("ready\n")
+            temporary.rename(release)
+        except Exception:
+            _remove_tree(temporary)
+            raise
+        return release
+
+    def _prepare_runtime(self, release: Path) -> None:
+        runtime = release / ".venv"
+        with (self.deploy_dir / "install.log").open("a") as install_log:
+            print(f"Preparing release {release.name}", file=install_log, flush=True)
+            subprocess.run(
+                [sys.executable, "-m", "venv", str(runtime)],
+                check=True,
+                stdout=install_log,
+                stderr=subprocess.STDOUT,
+            )
+            subprocess.run(
+                [
+                    str(runtime / "bin" / "python"),
+                    "-m",
+                    "pip",
+                    "install",
+                    "--no-index",
+                    "--find-links",
+                    str(release / "wheels"),
+                    "train",
+                ],
+                check=True,
+                stdout=install_log,
+                stderr=subprocess.STDOUT,
+            )
+
+    def _start(self, digest: str) -> None:
+        release = self.releases_dir / digest
+        python = release / ".venv" / "bin" / "python"
+        if not python.is_file():
+            raise ReleaseError(f"release Python is missing: {python}")
+        environment = os.environ.copy()
+        environment["TRAIN_DATA_DIR"] = str(release / "data")
+        environment["TRAIN_RELEASE_ID"] = digest
+        log_file = (self.deploy_dir / "backend.log").open("ab")
+        try:
+            self.child = subprocess.Popen(
+                [str(python), "-m", "train"],
+                cwd=release,
+                env=environment,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+            )
+        finally:
+            log_file.close()
+        self.log.info("Started backend release %s as pid %d", digest[:12], self.child.pid)
+
+    def _wait_ready(self, release: Path, digest: str) -> None:
+        backend = json.loads((release / "data" / "backend.json").read_text())
+        health_url = str(backend["api"]["url"]).rstrip("/") + "/health"
+        deadline = time.monotonic() + READINESS_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            if self.child is None or self.child.poll() is not None:
+                code = None if self.child is None else self.child.returncode
+                raise ReleaseError(f"backend exited during startup with code {code}")
+            try:
+                with urllib.request.urlopen(health_url, timeout=2) as response:
+                    value = json.loads(response.read())
+                if value == {"status": "ok", "release": digest}:
+                    return
+            except (OSError, ValueError, KeyError, urllib.error.URLError):
+                pass
+            time.sleep(0.5)
+        raise ReleaseError("backend health check timed out")
+
+    def _stop_child(self) -> None:
+        if self.child is None or self.child.poll() is not None:
+            self.child = None
+            return
+        self.child.terminate()
+        try:
+            self.child.wait(timeout=STOP_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            self.child.kill()
+            self.child.wait()
+        self.child = None
+
+    def _switch_current(self, release: Path) -> None:
+        temporary = self.root / ".current.next"
+        temporary.unlink(missing_ok=True)
+        temporary.symlink_to(release)
+        os.replace(temporary, self.current_link)
+
+    def _reconcile_committed_release(self) -> None:
+        digest = self._read_digest(self.deploy_dir / "active.sha256")
+        if not digest:
+            return
+        release = self.releases_dir / digest
+        try:
+            _verify_manifest(release, allow_runtime=True)
+            if not (release / ".runtime-ready").is_file():
+                raise ReleaseError("committed release runtime is incomplete")
+            self._switch_current(release)
+        except Exception as exc:
+            self._write_status(
+                "failed", digest, None, f"committed release invalid: {exc}"
+            )
+            return
+        self.active_digest = digest
+
+    def _read_digest(self, path: Path) -> str | None:
+        if not path.is_file():
+            return None
+        digest = path.read_text().strip().lower()
+        if len(digest) != 64 or any(value not in "0123456789abcdef" for value in digest):
+            self.log.error("Ignoring invalid release pointer: %s", path.name)
+            return None
+        return digest
+
+    def _read_request(self, path: Path) -> tuple[str, str] | None:
+        if not path.is_file():
+            return None
+        try:
+            value = json.loads(path.read_text())
+            digest = value["release"]
+            attempt = value["attempt"]
+        except (json.JSONDecodeError, KeyError, TypeError):
+            self.log.error("Ignoring invalid release request: %s", path.name)
+            return None
+        if not isinstance(digest, str) or not _is_digest(digest.lower()):
+            self.log.error("Ignoring invalid release digest: %s", path.name)
+            return None
+        if (
+            not isinstance(attempt, str)
+            or len(attempt) != 32
+            or any(character not in "0123456789abcdef" for character in attempt)
+        ):
+            self.log.error("Ignoring invalid release attempt: %s", path.name)
+            return None
+        return digest.lower(), attempt
+
+    def _write_status(
+        self, state: str, digest: str | None, attempt: str | None, message: str
+    ) -> None:
+        value = {
+            "state": state,
+            "release": digest,
+            "attempt": attempt,
+            "message": message,
+        }
+        temporary = self.deploy_dir / ".status.json.next"
+        temporary.write_text(json.dumps(value, sort_keys=True) + "\n")
+        os.replace(temporary, self.deploy_dir / "status.json")
+
+    def _prune(self, previous: str | None) -> None:
+        releases = sorted(
+            (
+                path for path in self.releases_dir.iterdir()
+                if path.is_dir() and _is_digest(path.name)
+            ),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        keep = {value for value in (self.active_digest, previous) if value}
+        keep.update(path.name for path in releases[:RELEASE_RETENTION])
+        for release in releases:
+            if release.name not in keep:
+                _remove_tree(release)
+        for archive in self.deploy_dir.glob("release-*.tar.gz"):
+            digest = archive.name.removeprefix("release-").removesuffix(".tar.gz")
+            if digest not in keep:
+                archive.unlink()
+
+
+def _safe_extract(bundle: tarfile.TarFile, destination: Path) -> None:
+    root = destination.resolve()
+    names: set[str] = set()
+    for member in bundle.getmembers():
+        target = (destination / member.name).resolve()
+        if target != root and root not in target.parents:
+            raise ReleaseError(f"unsafe archive path: {member.name}")
+        if not (member.isfile() or member.isdir()):
+            raise ReleaseError(f"unsupported archive entry: {member.name}")
+        if member.name in names:
+            raise ReleaseError(f"duplicate archive entry: {member.name}")
+        names.add(member.name)
+    bundle.extractall(destination)
+
+
+def _verify_manifest(release: Path, *, allow_runtime: bool = False) -> None:
+    try:
+        manifest = json.loads((release / "manifest.json").read_text())
+        files = manifest["files"]
+        components = manifest["components"]
+    except (FileNotFoundError, KeyError, json.JSONDecodeError, TypeError) as exc:
+        raise ReleaseError("invalid release manifest") from exc
+    if manifest.get("format") != 1 or not isinstance(files, dict):
+        raise ReleaseError("unsupported release manifest")
+    _verify_runtime(manifest.get("runtime"))
+    if not isinstance(components, dict) or not {"backend", "data"} <= set(components):
+        raise ReleaseError("release is missing required components")
+    if set(components) - {"backend", "data", "web"}:
+        raise ReleaseError("release contains unsupported components")
+    if components["backend"] != {"wheelhouse": "wheels", "package": "train"}:
+        raise ReleaseError("invalid backend component")
+    if components["data"] != {"path": "data"}:
+        raise ReleaseError("invalid data component")
+    if not RUNTIME_DATA_FILES <= set(files):
+        raise ReleaseError("release is missing runtime data")
+    if not any(name.startswith("wheels/train-") and name.endswith(".whl") for name in files):
+        raise ReleaseError("release is missing the backend wheel")
+
+    for name, expected in files.items():
+        if not isinstance(name, str) or not isinstance(expected, str):
+            raise ReleaseError("release manifest contains invalid file entries")
+        path = release / name
+        root = release.resolve()
+        target = path.resolve()
+        if (
+            target == root
+            or root not in target.parents
+            or not path.is_file()
+            or _sha256(path) != expected
+        ):
+            raise ReleaseError(f"release file failed verification: {name}")
+
+    actual = {
+        str(path.relative_to(release))
+        for path in release.rglob("*")
+        if path.is_file()
+        and path.name != "manifest.json"
+        and (not allow_runtime or ".venv" not in path.parts)
+        and (not allow_runtime or path.name != ".runtime-ready")
+    }
+    if actual != set(files):
+        raise ReleaseError("release payload does not match its manifest")
+
+
+def _verify_runtime(runtime: object) -> None:
+    expected = {
+        "system": platform.system(),
+        "machine": platform.machine(),
+        "implementation": platform.python_implementation().lower(),
+        "python": f"{sys.version_info.major}.{sys.version_info.minor}",
+        "platform": sysconfig.get_platform(),
+        "soabi": str(sysconfig.get_config_var("SOABI")),
+    }
+    if runtime != expected:
+        raise ReleaseError(
+            f"release runtime does not match server: release={runtime} server={expected}"
+        )
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _is_digest(value: str) -> bool:
+    return len(value) == 64 and all(character in "0123456789abcdef" for character in value)
+
+
+def _remove_tree(path: Path) -> None:
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+        return
+    for child in path.iterdir():
+        if child.is_dir() and not child.is_symlink():
+            _remove_tree(child)
+        else:
+            child.unlink()
+    path.rmdir()
+
+
+def _lock(root: Path):
+    lock_path = root / "deploy" / "server-loop.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    handle = lock_path.open("a+")
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as exc:
+        handle.close()
+        raise SystemExit("Another server-loop instance is already running") from exc
+    return handle
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Run FTP-published train releases")
+    parser.add_argument(
+        "--root", type=Path, default=Path(__file__).resolve().parents[1]
+    )
+    args = parser.parse_args()
+    root = args.root.resolve()
+    lock = _lock(root)
+    deploy_dir = root / "deploy"
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        handlers=[
+            logging.StreamHandler(),
+            logging.FileHandler(deploy_dir / "server-loop.log"),
+        ],
+    )
+    loop = ServerLoop(root)
+    signal.signal(signal.SIGINT, loop.stop)
+    signal.signal(signal.SIGTERM, loop.stop)
+    try:
+        loop.run()
+    finally:
+        lock.close()
+
+
+if __name__ == "__main__":
+    main()

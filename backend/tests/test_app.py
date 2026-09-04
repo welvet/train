@@ -28,9 +28,8 @@ class RecorderModule(Module):
 
 async def test_module_lifecycle() -> None:
     app = App()
-    app.add_module(RecorderModule)
-    mod = app._modules[0]
-    assert isinstance(mod, RecorderModule)
+    mod = app.add_module(RecorderModule)
+    assert app._modules == [mod]
 
     task = asyncio.create_task(app.run())
     await asyncio.sleep(0.05)

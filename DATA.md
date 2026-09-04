@@ -68,11 +68,54 @@ switches and multiple PN532 readers sharing the hardware SPI bus:
 
 ### `secrets.json`
 
-Provides Wi-Fi credentials per Arduino device:
+Provides Wi-Fi credentials per Arduino device and the FTP deployment password:
 
 ```json
-{"devices": {"arduino_1": {"wifi_ssid": "...", "wifi_password": "..."}}}
+{
+  "devices": {
+    "arduino_1": {"wifi_ssid": "...", "wifi_password": "..."}
+  },
+  "deployment": {"ftp_password": "..."}
+}
 ```
+
+### `deployment.json`
+
+Defines where `tools/server-push` publishes backend releases:
+
+```json
+{
+  "ftp": {
+    "host": "192.168.1.10",
+    "port": 2121,
+    "username": "operator",
+    "remote_dir": "/train/deploy",
+    "tls": false
+  },
+  "health_url": "http://192.168.1.10:8080",
+  "target": {
+    "system": "Darwin",
+    "machine": "arm64",
+    "implementation": "cpython",
+    "python": "3.14",
+    "platform": "macosx-26.0-arm64",
+    "soabi": "cpython-314-darwin"
+  }
+}
+```
+
+The password is deliberately separate from this file. Set `tls` when the server
+supports explicit FTPS. Certificate verification uses the system trust store;
+set `ftp.ca_file` to a local CA bundle for a private certificate authority.
+Plain FTP is an explicitly trusted-LAN mode because it does not encrypt
+credentials or release contents.
+
+The target fields are an exact deployment contract. Builds fail unless the
+build machine has the same operating system, architecture, Python
+implementation, and Python major/minor version as the server. Runtime
+dependencies are pinned with hashes in a target-keyed file under
+`backend/requirements/`. `tools/data init` leaves the target empty because it
+is an installation choice; copy these values from the server's Python runtime.
 
 ### `automation.py`
 
@@ -107,9 +150,31 @@ tools/arduino upload arduino_1
 tools/arduino monitor arduino_1
 tools/train --help
 tools/scan-ble
-tools/commit "commit message"
-tools/run-loop
+tools/server-push
 ```
 
 `tools/data init` creates an intentionally empty scaffold. Add at least one
 train and one Arduino device, then run `tools/data validate`.
+
+## Server deployment
+
+`tools/server-push` builds the backend and all Python dependencies into a wheel
+bundle with only the runtime data files. Wi-Fi and FTP secrets are never
+included. The release is uploaded under its SHA-256 name, and `release.json`
+with a unique publication attempt is updated last to trigger activation. The
+command returns only after both the FTP activation marker and the backend's
+release-aware health endpoint agree.
+
+Bootstrap the permanent watcher once on the server from the FTP root:
+
+```sh
+python3 /train/deploy/server-loop --root /train
+```
+
+`server-push` uploads this bootstrap script alongside every release. Run it
+under the server's process supervisor so it survives logout and reboot. The FTP
+`remote_dir` must map to `<server root>/deploy`; for the example above that is
+`/train/deploy`. The loop verifies and prepares each release in `releases/`,
+starts the candidate before atomically updating `current`, and writes supervisor,
+backend, dependency-install, and status logs under `deploy/`. A release that fails readiness is
+rolled back, and only the three newest healthy/rollback releases are retained.
