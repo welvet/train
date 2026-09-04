@@ -26,9 +26,29 @@ from train.core.events.train import (
     TrainStatus,
 )
 from train.core.module import Module
+from train.domain.hubs import HubState
 
 RESPONSE_TIMEOUT = 2.0
 LOG_BUFFER_SIZE = 200
+
+
+def _hub_api_response(state: HubState) -> dict[str, Any]:
+    return {
+        "hub_name": state.hub_name,
+        "connected": state.connected,
+        "switches": [
+            {"name": switch.name, "angle": switch.angle}
+            for switch in state.switches.values()
+        ],
+        "detectors": [
+            {
+                "name": detector.name,
+                "triggered": detector.triggered,
+                "train_id": detector.train_id,
+            }
+            for detector in state.detectors.values()
+        ],
+    }
 
 
 class _BroadcastHandler(logging.Handler):
@@ -70,7 +90,7 @@ class WebApiModule(Module):
         self._runner: web.AppRunner | None = None
         self._log = logging.getLogger("train.web")
         self._state: dict[str, dict[str, Any]] = {}
-        self._hub_state: dict[str, dict[str, Any]] = {}
+        self._hub_state: dict[str, HubState] = {}
         self._log_subscribers: list[asyncio.Queue[str]] = []
         self._log_buffer: collections.deque[str] = collections.deque(maxlen=LOG_BUFFER_SIZE)
         self._log_handler: _BroadcastHandler | None = None
@@ -189,63 +209,49 @@ class WebApiModule(Module):
 
     # --- Hub state ---
 
-    def _get_hub(self, hub_name: str) -> dict[str, Any]:
+    def _get_hub(self, hub_name: str) -> HubState:
         if hub_name not in self._hub_state:
-            self._hub_state[hub_name] = {
-                "hub_name": hub_name,
-                "connected": False,
-                "switches": [],
-                "detectors": [],
-            }
+            state = HubState.from_topology(hub_name, (), ())
+            state.connected = False
+            self._hub_state[hub_name] = state
         return self._hub_state[hub_name]
 
     async def _on_hub_connected(self, event: HubConnected) -> None:
-        state = self._get_hub(event.hub_name)
-        active_trains = dict(event.active_trains)
-        state["connected"] = True
-        state["switches"] = [{"name": s, "angle": 0} for s in event.switches]
-        state["detectors"] = [
-            {
-                "name": d,
-                "triggered": d in active_trains,
-                "train_id": active_trains.get(d),
-            }
-            for d in event.detectors
-        ]
+        self._hub_state[event.hub_name] = HubState.from_topology(
+            event.hub_name,
+            event.switches,
+            event.detectors,
+            dict(event.active_trains),
+        )
 
     async def _on_hub_disconnected(self, event: HubDisconnected) -> None:
-        self._get_hub(event.hub_name)["connected"] = False
+        self._get_hub(event.hub_name).connected = False
 
     async def _on_switch_changed(self, event: SwitchPositionChanged) -> None:
         if not event.ok:
             return
-        state = self._get_hub(event.hub_name)
-        for sw in state["switches"]:
-            if sw["name"] == event.switch_name:
-                sw["angle"] = event.angle
-                break
+        self._get_hub(event.hub_name).set_switch_angle(
+            event.switch_name,
+            event.angle,
+        )
 
     async def _on_tag_detected(self, event: TagDetected) -> None:
-        state = self._get_hub(event.hub_name)
-        for det in state["detectors"]:
-            if det["name"] == event.detector_name:
-                det["triggered"] = True
-                det["train_id"] = event.train_id
-                break
+        self._get_hub(event.hub_name).detect_train(
+            event.detector_name,
+            event.train_id,
+        )
 
     async def _on_tag_removed(self, event: TagRemoved) -> None:
-        state = self._get_hub(event.hub_name)
-        for det in state["detectors"]:
-            if det["name"] == event.detector_name:
-                det["triggered"] = False
-                det["train_id"] = None
-                break
+        self._get_hub(event.hub_name).remove_train(
+            event.detector_name,
+            event.train_id,
+        )
 
     async def _handle_get_hub(self, request: web.Request) -> web.Response:
         hub_name = request.match_info["hub_name"]
         if hub_name not in self._hub_state:
             return web.json_response({"error": "unknown hub"}, status=404)
-        return web.json_response(self._hub_state[hub_name])
+        return web.json_response(_hub_api_response(self._hub_state[hub_name]))
 
     async def _handle_set_switch_position(self, request: web.Request) -> web.Response:
         hub_name = request.match_info["hub_name"]

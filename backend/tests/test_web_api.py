@@ -193,6 +193,43 @@ async def test_get_hub_info(bus: EventBus, client: TestClient) -> None:
     }
 
 
+async def test_get_hub_ignores_stale_train_removal(
+    bus: EventBus,
+    client: TestClient,
+) -> None:
+    await bus.publish(HubConnected(
+        hub_name="A_HUB_1",
+        switches=(),
+        detectors=("D1",),
+    ))
+    await bus.publish(TagDetected(
+        hub_name="A_HUB_1",
+        detector_name="D1",
+        train_id="arctic_express",
+    ))
+    await bus.publish(TagDetected(
+        hub_name="A_HUB_1",
+        detector_name="D1",
+        train_id="cargo_train",
+    ))
+    await bus.publish(TagRemoved(
+        hub_name="A_HUB_1",
+        detector_name="D1",
+        train_id="arctic_express",
+    ))
+
+    response = await client.get("/hubs/A_HUB_1")
+
+    assert response.status == 200
+    assert (await response.json())["detectors"] == [
+        {
+            "name": "D1",
+            "triggered": True,
+            "train_id": "cargo_train",
+        }
+    ]
+
+
 async def test_set_switch_position_success(bus: EventBus, client: TestClient) -> None:
     async def fake_hub(event: SetSwitchPosition) -> None:
         angle = event.target if isinstance(event.target, int) else 58
