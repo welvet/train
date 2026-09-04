@@ -57,6 +57,32 @@ async def test_set_speed_success(bus: EventBus, client: TestClient) -> None:
     assert body["success"] is True
 
 
+async def test_health_reports_release(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TRAIN_RELEASE_ID", "release-id")
+
+    response = await client.get("/health")
+
+    assert response.status == 200
+    assert await response.json() == {"status": "ok", "release": "release-id"}
+
+
+async def test_health_reports_failed_readiness(bus: EventBus) -> None:
+    mod = WebApiModule(bus, host="127.0.0.1", port=0, readiness_check=lambda: False)
+    await mod.start()
+    assert mod._app is not None
+    client = TestClient(TestServer(mod._app))
+    await client.start_server()
+    try:
+        response = await client.get("/health")
+        assert response.status == 503
+        assert (await response.json())["status"] == "error"
+    finally:
+        await client.close()
+        await mod.stop()
+
+
 async def test_set_speed_failure(bus: EventBus, client: TestClient) -> None:
     async def fake_ble(event: SetTrainSpeed) -> None:
         await bus.publish(TrainSpeedChanged(

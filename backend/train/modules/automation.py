@@ -156,13 +156,16 @@ class AutomationModule(Module):
         *,
         script: ScriptFn,
         configure: ConfigureFn | None = None,
+        failure_callback: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(bus)
         self._script = script
         self._configure = configure or (lambda _: None)
+        self._failure_callback = failure_callback
         self._ctx: AutomationContext | None = None
         self._task: asyncio.Task[None] | None = None
         self._log = logging.getLogger("train.automation")
+        self._failure: str | None = None
 
     async def start(self) -> None:
         self._ctx = AutomationContext(self.bus)
@@ -183,9 +186,19 @@ class AutomationModule(Module):
         try:
             await self._script(self._ctx)
         except asyncio.CancelledError:
-            pass
-        except Exception:
+            return
+        except Exception as exc:
+            self._failure = str(exc)
             self._log.error("Automation script failed", exc_info=True)
+        else:
+            self._failure = "automation script returned unexpectedly"
+            self._log.error(self._failure)
+        if self._failure_callback is not None:
+            self._failure_callback()
+
+    @property
+    def healthy(self) -> bool:
+        return self._task is not None and not self._task.done() and self._failure is None
 
     @property
     def halted(self) -> bool:

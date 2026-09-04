@@ -13,4 +13,6 @@ excluded from Git.
 - Product code belongs in `backend/`, `firmware/`, and `tools/`. Runtime
   choices—trains, Arduino devices, track automation, and secrets—belong only
   in `data/`.
+- `deploy/`, `releases/`, and `current` are server-loop runtime state. They are
+  ignored and must never be staged or treated as source.
 - See `DATA.md` for the workspace schema and supported commands.

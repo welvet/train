@@ -8,7 +8,7 @@ ignored `data/` workspace documented in `DATA.md`.
 
 - `backend/` — event bus, hardware modules, web API, and automation runtime
 - `firmware/TrainController/` — generic UNO R4 WiFi firmware
-- `tools/` — workspace, firmware, control, deployment, and commit commands
+- `tools/` — workspace, firmware, control, and FTP deployment commands
 - `data/` — ignored local configuration, secrets, and automation
 - `DATA.md` — workspace schema and operator guide
 
@@ -87,10 +87,15 @@ pytest tests -q
 ```sh
 tools/train --help
 tools/scan-ble
-tools/commit "message"
-tools/run-loop
+tools/server-push
 ```
 
 All operational URLs and device choices come from the ignored workspace. Tools
 may accept explicit command-line overrides, but tracked files must not contain
 installation-specific addresses, IDs, ports, credentials, or automation.
+
+`tools/server-push` produces a content-addressed backend wheel bundle and
+publishes it with the configured FTP server. `tools/server-loop` is the stable
+server-side supervisor: it verifies releases, atomically switches `current`,
+restarts the backend, and rolls back startup failures. The server does not pull
+or run repository code through Git.

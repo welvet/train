@@ -3,11 +3,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import signal
-from typing import Any
+from typing import Any, TypeVar
 
 from train.core.event_bus import EventBus
 from train.core.events import SystemShutdown, SystemStarted
 from train.core.module import Module
+
+M = TypeVar("M", bound=Module)
 
 
 class App:
@@ -20,10 +22,11 @@ class App:
     def request_shutdown(self) -> None:
         self._shutdown_event.set()
 
-    def add_module(self, module_cls: type[Module], **kwargs: Any) -> None:
+    def add_module(self, module_cls: type[M], **kwargs: Any) -> M:
         mod = module_cls(self.bus, **kwargs)
         self._modules.append(mod)
         self._log.info("Registered module: %s", mod.name)
+        return mod
 
     async def run(self) -> None:
         loop = asyncio.get_running_loop()
