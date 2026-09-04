@@ -8,17 +8,25 @@ from typing import Any
 
 from train.core.event_bus import EventBus
 from train.core.events.hub import (
-    DetectorChanged,
     HubConnected,
     HubDisconnected,
     SetSwitchPosition,
     SwitchPositionChanged,
+    TagDetected,
+    TagRemoved,
 )
 from train.core.module import Module
 
 
 class ArduinoHubModule(Module):
-    def __init__(self, bus: EventBus, *, host: str = "0.0.0.0", port: int = 9000) -> None:
+    def __init__(
+        self,
+        bus: EventBus,
+        *,
+        host: str = "0.0.0.0",
+        port: int = 9000,
+        train_tag_map: dict[str, str] | None = None,
+    ) -> None:
         super().__init__(bus)
         self._host = host
         self._port = port
@@ -27,6 +35,11 @@ class ArduinoHubModule(Module):
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._pending_tasks: set[asyncio.Task[None]] = set()
         self._hub_info: dict[str, dict[str, Any]] = {}
+        self._train_tag_map = {
+            self._normalize_tag_id(tag_id): train_id
+            for tag_id, train_id in (train_tag_map or {}).items()
+            if tag_id
+        }
         self._log = logging.getLogger("train.hub")
 
     async def start(self) -> None:
@@ -76,6 +89,11 @@ class ArduinoHubModule(Module):
                     hub_name = msg.get("hub", "")
                     switches = tuple(msg.get("switches", []))
                     detectors = tuple(msg.get("detectors", []))
+                    previous_info = self._hub_info.get(hub_name)
+                    previous_tags = self._active_trains_by_detector(previous_info)
+                    current_tags = self._resolve_tag_snapshot(
+                        hub_name, detectors, msg.get("detected_tags", [])
+                    )
                     old_writer = self._clients.get(hub_name)
                     if old_writer is not None:
                         with suppress(Exception):
@@ -88,18 +106,53 @@ class ArduinoHubModule(Module):
                         "hub_name": hub_name,
                         "connected": True,
                         "switches": {s: {"name": s, "angle": 0} for s in switches},
-                        "detectors": {d: {"name": d, "triggered": False} for d in detectors},
+                        "detectors": {
+                            d: {
+                                "name": d,
+                                "triggered": d in current_tags,
+                                "train_id": current_tags.get(d),
+                            }
+                            for d in detectors
+                        },
                     }
                     self._log.info("Hub %s registered: switches=%s detectors=%s", hub_name, switches, detectors)
-                    await self.bus.publish(HubConnected(hub_name=hub_name, switches=switches, detectors=detectors))
+                    await self.bus.publish(HubConnected(
+                        hub_name=hub_name,
+                        switches=switches,
+                        detectors=detectors,
+                        active_trains=tuple(current_tags.items()),
+                    ))
+                    await self._publish_snapshot_changes(
+                        hub_name, previous_tags, current_tags
+                    )
 
-                elif event == "detector" and hub_name:
-                    name = msg.get("name", "")
-                    triggered = msg.get("triggered", False)
+                elif event in {"tag_detected", "tag_removed"} and hub_name:
+                    name = msg.get("detector", "")
+                    tag_id = self._normalize_tag_id(msg.get("tag_id", ""))
+                    train_id = self._train_tag_map.get(tag_id)
+                    if not train_id:
+                        self._log.warning(
+                            "Ignoring unknown train tag %s from %s/%s",
+                            tag_id,
+                            hub_name,
+                            name,
+                        )
+                        continue
+
                     info = self._hub_info.get(hub_name)
-                    if info and name in info["detectors"]:
-                        info["detectors"][name]["triggered"] = triggered
-                    await self.bus.publish(DetectorChanged(hub_name=hub_name, detector_name=name, triggered=triggered))
+                    if not info or name not in info["detectors"]:
+                        self._log.warning(
+                            "Ignoring tag event from unknown detector %s/%s",
+                            hub_name,
+                            name,
+                        )
+                        continue
+                    await self._apply_tag_change(
+                        hub_name=hub_name,
+                        detector_name=name,
+                        train_id=train_id,
+                        detected=event == "tag_detected",
+                    )
 
                 elif event == "move_ack" and hub_name:
                     switch_name = msg.get("switch", "")
@@ -121,12 +174,13 @@ class ArduinoHubModule(Module):
         except Exception as exc:
             self._log.warning("Client error: %s", exc)
 
-        if hub_name:
+        if hub_name and self._clients.get(hub_name) is writer:
             self._clients.pop(hub_name, None)
             info = self._hub_info.get(hub_name)
             if info:
                 info["connected"] = False
-            self._tasks.pop(hub_name, None)
+            if self._tasks.get(hub_name) is asyncio.current_task():
+                self._tasks.pop(hub_name, None)
             self._log.info("Hub %s disconnected", hub_name)
             with suppress(BaseException):
                 await self.bus.publish(HubDisconnected(hub_name=hub_name))
@@ -154,3 +208,106 @@ class ArduinoHubModule(Module):
 
     def get_hub_info(self, hub_name: str) -> dict[str, Any] | None:
         return self._hub_info.get(hub_name)
+
+    @staticmethod
+    def _normalize_tag_id(tag_id: object) -> str:
+        return str(tag_id).strip().upper()
+
+    @staticmethod
+    def _active_trains_by_detector(
+        info: dict[str, Any] | None,
+    ) -> dict[str, str]:
+        if not info:
+            return {}
+        return {
+            name: detector["train_id"]
+            for name, detector in info["detectors"].items()
+            if detector.get("triggered") and detector.get("train_id")
+        }
+
+    def _resolve_tag_snapshot(
+        self,
+        hub_name: str,
+        detectors: tuple[str, ...],
+        detected_tags: object,
+    ) -> dict[str, str]:
+        if not isinstance(detected_tags, list):
+            return {}
+
+        resolved: dict[str, str] = {}
+        for tag in detected_tags:
+            if not isinstance(tag, dict):
+                continue
+            detector_name = str(tag.get("detector", ""))
+            tag_id = self._normalize_tag_id(tag.get("tag_id", ""))
+            train_id = self._train_tag_map.get(tag_id)
+            if detector_name in detectors and train_id:
+                resolved[detector_name] = train_id
+            else:
+                self._log.warning(
+                    "Ignoring invalid train tag snapshot %s from %s/%s",
+                    tag_id,
+                    hub_name,
+                    detector_name,
+                )
+        return resolved
+
+    async def _apply_tag_change(
+        self,
+        *,
+        hub_name: str,
+        detector_name: str,
+        train_id: str,
+        detected: bool,
+    ) -> None:
+        detector = self._hub_info[hub_name]["detectors"][detector_name]
+        active_train_id = detector.get("train_id") if detector.get("triggered") else None
+
+        if detected:
+            if active_train_id == train_id:
+                return
+            if active_train_id:
+                await self.bus.publish(TagRemoved(
+                    hub_name=hub_name,
+                    detector_name=detector_name,
+                    train_id=active_train_id,
+                ))
+            detector["triggered"] = True
+            detector["train_id"] = train_id
+            await self.bus.publish(TagDetected(
+                hub_name=hub_name,
+                detector_name=detector_name,
+                train_id=train_id,
+            ))
+            return
+
+        if active_train_id != train_id:
+            return
+        detector["triggered"] = False
+        detector["train_id"] = None
+        await self.bus.publish(TagRemoved(
+            hub_name=hub_name,
+            detector_name=detector_name,
+            train_id=train_id,
+        ))
+
+    async def _publish_snapshot_changes(
+        self,
+        hub_name: str,
+        previous: dict[str, str],
+        current: dict[str, str],
+    ) -> None:
+        for detector_name, train_id in previous.items():
+            if current.get(detector_name) != train_id:
+                await self.bus.publish(TagRemoved(
+                    hub_name=hub_name,
+                    detector_name=detector_name,
+                    train_id=train_id,
+                ))
+        for detector_name, train_id in current.items():
+            if previous.get(detector_name) != train_id:
+                await self.bus.publish(TagDetected(
+                    hub_name=hub_name,
+                    detector_name=detector_name,
+                    train_id=train_id,
+                ))

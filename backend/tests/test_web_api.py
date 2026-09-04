@@ -8,10 +8,11 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from train.core.event_bus import EventBus
 from train.core.events.hub import (
-    DetectorChanged,
     HubConnected,
     SetSwitchPosition,
     SwitchPositionChanged,
+    TagDetected,
+    TagRemoved,
 )
 from train.core.events.train import (
     SetTrainSpeed,
@@ -131,7 +132,9 @@ async def test_get_hub_unknown(bus: EventBus, client: TestClient) -> None:
 async def test_get_hub_info(bus: EventBus, client: TestClient) -> None:
     await bus.publish(HubConnected(hub_name="A_HUB_1", switches=("S1", "S2"), detectors=("D1", "D2")))
     await bus.publish(SwitchPositionChanged(hub_name="A_HUB_1", switch_name="S1", angle=100, ok=True))
-    await bus.publish(DetectorChanged(hub_name="A_HUB_1", detector_name="D1", triggered=True))
+    await bus.publish(TagDetected(
+        hub_name="A_HUB_1", detector_name="D1", train_id="arctic_express"
+    ))
 
     resp = await client.get("/hubs/A_HUB_1")
     assert resp.status == 200
@@ -141,8 +144,27 @@ async def test_get_hub_info(bus: EventBus, client: TestClient) -> None:
     assert len(body["switches"]) == 2
     assert body["switches"][0] == {"name": "S1", "angle": 100}
     assert body["switches"][1] == {"name": "S2", "angle": 0}
-    assert body["detectors"][0] == {"name": "D1", "triggered": True}
-    assert body["detectors"][1] == {"name": "D2", "triggered": False}
+    assert body["detectors"][0] == {
+        "name": "D1",
+        "triggered": True,
+        "train_id": "arctic_express",
+    }
+    assert body["detectors"][1] == {
+        "name": "D2",
+        "triggered": False,
+        "train_id": None,
+    }
+
+    await bus.publish(TagRemoved(
+        hub_name="A_HUB_1", detector_name="D1", train_id="arctic_express"
+    ))
+    resp = await client.get("/hubs/A_HUB_1")
+    body = await resp.json()
+    assert body["detectors"][0] == {
+        "name": "D1",
+        "triggered": False,
+        "train_id": None,
+    }
 
 
 async def test_set_switch_position_success(bus: EventBus, client: TestClient) -> None:

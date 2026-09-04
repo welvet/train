@@ -10,11 +10,12 @@ from aiohttp import web
 from train.core.event_bus import EventBus
 from train.core.events.system import AutomationHalt, AutomationResume
 from train.core.events.hub import (
-    DetectorChanged,
     HubConnected,
     HubDisconnected,
     SetSwitchPosition,
     SwitchPositionChanged,
+    TagDetected,
+    TagRemoved,
 )
 from train.core.events.train import (
     SetTrainSpeed,
@@ -79,7 +80,8 @@ class WebApiModule(Module):
         self.bus.subscribe(HubConnected, self._on_hub_connected)
         self.bus.subscribe(HubDisconnected, self._on_hub_disconnected)
         self.bus.subscribe(SwitchPositionChanged, self._on_switch_changed)
-        self.bus.subscribe(DetectorChanged, self._on_detector_changed)
+        self.bus.subscribe(TagDetected, self._on_tag_detected)
+        self.bus.subscribe(TagRemoved, self._on_tag_removed)
 
         self._app = web.Application()
         self._app.router.add_get("/trains/{train_name}", self._handle_get_train)
@@ -188,9 +190,17 @@ class WebApiModule(Module):
 
     async def _on_hub_connected(self, event: HubConnected) -> None:
         state = self._get_hub(event.hub_name)
+        active_trains = dict(event.active_trains)
         state["connected"] = True
         state["switches"] = [{"name": s, "angle": 0} for s in event.switches]
-        state["detectors"] = [{"name": d, "triggered": False} for d in event.detectors]
+        state["detectors"] = [
+            {
+                "name": d,
+                "triggered": d in active_trains,
+                "train_id": active_trains.get(d),
+            }
+            for d in event.detectors
+        ]
 
     async def _on_hub_disconnected(self, event: HubDisconnected) -> None:
         self._get_hub(event.hub_name)["connected"] = False
@@ -204,11 +214,20 @@ class WebApiModule(Module):
                 sw["angle"] = event.angle
                 break
 
-    async def _on_detector_changed(self, event: DetectorChanged) -> None:
+    async def _on_tag_detected(self, event: TagDetected) -> None:
         state = self._get_hub(event.hub_name)
         for det in state["detectors"]:
             if det["name"] == event.detector_name:
-                det["triggered"] = event.triggered
+                det["triggered"] = True
+                det["train_id"] = event.train_id
+                break
+
+    async def _on_tag_removed(self, event: TagRemoved) -> None:
+        state = self._get_hub(event.hub_name)
+        for det in state["detectors"]:
+            if det["name"] == event.detector_name:
+                det["triggered"] = False
+                det["train_id"] = None
                 break
 
     async def _handle_get_hub(self, request: web.Request) -> web.Response:

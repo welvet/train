@@ -156,6 +156,8 @@ class AutomationModule(Module):
         self.bus.subscribe(AutomationHalt, self._on_halt)
         self.bus.subscribe(AutomationResume, self._on_resume)
         self._task = asyncio.create_task(self._run_script())
+        # Let the script install event subscriptions before hardware modules start.
+        await asyncio.sleep(0)
 
     async def _on_halt(self, event: AutomationHalt) -> None:
         self._log.info("Automation halted")

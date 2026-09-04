@@ -4,14 +4,13 @@ import asyncio
 import logging
 from enum import Enum, auto
 
-from train.core.events.hub import DetectorChanged
+from train.core.events.hub import TagDetected, TagRemoved
 from train.core.events.train import TrainSpeedChanged
 from train.modules.automation import AutomationContext
 
 TRAIN = "arctic_express"
 HUB = "A_HUB_1"
 PITSTOP_DETECTOR = "D1"
-ARMING_DETECTOR = "D2"
 PITSTOP_SWITCH = "S2"
 DEFAULT_RESUME_SPEED = 80
 
@@ -26,8 +25,8 @@ class PitStopState(Enum):
 
 class PitStopSignal(Enum):
     START = auto()
-    D1_TRIGGERED = auto()
-    D2_TRIGGERED = auto()
+    TAG_DETECTED = auto()
+    TAG_REMOVED = auto()
     ENTRY_TIMER_ELAPSED = auto()
     DWELL_TIMER_ELAPSED = auto()
     TRAIN_SPEED_CHANGED = auto()
@@ -53,6 +52,7 @@ class PitStopController:
         self._timers: set[asyncio.Task[None]] = set()
         self._log = logging.getLogger("train.pitstop")
         self._resume_speed = DEFAULT_RESUME_SPEED
+        self._pending_tag_signals: list[PitStopSignal] = []
         self.state = PitStopState.PITSTOP_ARMED
 
     @property
@@ -63,6 +63,9 @@ class PitStopController:
     async def start(self) -> None:
         self._worker = asyncio.create_task(self._run(), name="pitstop-controller")
         await self.handle(PitStopSignal.START)
+        for signal in self._pending_tag_signals:
+            await self.handle(signal)
+        self._pending_tag_signals.clear()
 
     async def stop(self) -> None:
         for timer in self._timers:
@@ -75,12 +78,18 @@ class PitStopController:
             await asyncio.gather(self._worker, return_exceptions=True)
             self._worker = None
 
-    async def on_detector(self, event: DetectorChanged) -> None:
-        signal = {
-            PITSTOP_DETECTOR: PitStopSignal.D1_TRIGGERED,
-            ARMING_DETECTOR: PitStopSignal.D2_TRIGGERED,
-        }.get(event.detector_name)
-        if signal is not None:
+    async def on_tag_detected(self, event: TagDetected) -> None:
+        if event.detector_name == PITSTOP_DETECTOR:
+            await self._handle_or_buffer_tag_signal(PitStopSignal.TAG_DETECTED)
+
+    async def on_tag_removed(self, event: TagRemoved) -> None:
+        if event.detector_name == PITSTOP_DETECTOR:
+            await self._handle_or_buffer_tag_signal(PitStopSignal.TAG_REMOVED)
+
+    async def _handle_or_buffer_tag_signal(self, signal: PitStopSignal) -> None:
+        if self._worker is None:
+            self._pending_tag_signals.append(signal)
+        else:
             await self.handle(signal)
 
     async def on_speed_changed(self, event: TrainSpeedChanged) -> None:
@@ -127,7 +136,7 @@ class PitStopController:
             await self._ctx.set_switch(HUB, PITSTOP_SWITCH, "diverge")
 
         elif self.state is PitStopState.PITSTOP_ARMED:
-            if signal is PitStopSignal.D1_TRIGGERED:
+            if signal is PitStopSignal.TAG_DETECTED:
                 self.state = PitStopState.ENTERING_PITSTOP
                 self._start_timer(self._entry_delay, PitStopSignal.ENTRY_TIMER_ELAPSED)
 
@@ -143,14 +152,14 @@ class PitStopController:
                 self.state = PitStopState.COMING_FROM_PITSTOP
 
         elif self.state is PitStopState.COMING_FROM_PITSTOP:
-            if signal is PitStopSignal.D1_TRIGGERED:
+            if signal is PitStopSignal.TAG_DETECTED:
                 await self._ctx.set_speed(TRAIN, 0)
                 await self._ctx.set_switch(HUB, PITSTOP_SWITCH, "straight")
                 await self._ctx.set_speed(TRAIN, self._resume_speed)
                 self.state = PitStopState.NORMAL
 
         elif self.state is PitStopState.NORMAL:
-            if signal is PitStopSignal.D2_TRIGGERED:
+            if signal is PitStopSignal.TAG_REMOVED:
                 await self._ctx.set_switch(HUB, PITSTOP_SWITCH, "diverge")
                 self.state = PitStopState.PITSTOP_ARMED
 
