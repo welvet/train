@@ -10,10 +10,10 @@ from train.core.events.hub import (
 
 
 def test_set_switch_position_fields() -> None:
-    e = SetSwitchPosition(hub_name="A_HUB_1", switch_name="S1", angle=100)
+    e = SetSwitchPosition(hub_name="A_HUB_1", switch_name="S1", target=100)
     assert e.hub_name == "A_HUB_1"
     assert e.switch_name == "S1"
-    assert e.angle == 100
+    assert e.target == 100
     assert e.timestamp > 0
 
 
@@ -70,7 +70,7 @@ def test_all_events_are_subclass_of_event() -> None:
 
 
 def test_events_are_frozen() -> None:
-    e = SetSwitchPosition(hub_name="A_HUB_1", switch_name="S1", angle=100)
+    e = SetSwitchPosition(hub_name="A_HUB_1", switch_name="S1", target=100)
     try:
         e.angle = 50  # type: ignore[misc]
         assert False, "Should have raised"

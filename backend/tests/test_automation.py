@@ -8,12 +8,7 @@ from train.core.event_bus import EventBus
 from train.core.events.hub import SetSwitchPosition, SwitchPositionChanged, TagDetected
 from train.core.events.system import SystemStarted
 from train.core.events.train import SetTrainSpeed, TrainConnected
-from train.modules.automation import (
-    DIVERGE,
-    STRAIGHT,
-    AutomationContext,
-    AutomationModule,
-)
+from train.modules.automation import AutomationContext, AutomationModule
 
 
 @pytest.fixture
@@ -28,9 +23,10 @@ def ctx(bus: EventBus) -> AutomationContext:
 
 def _auto_ack_switches(bus: EventBus) -> None:
     async def _ack(event: SetSwitchPosition) -> None:
+        angle = event.target if isinstance(event.target, int) else 0
         await bus.publish(SwitchPositionChanged(
             hub_name=event.hub_name, switch_name=event.switch_name,
-            angle=event.angle, ok=True,
+            angle=angle, ok=True,
         ))
 
     bus.subscribe(SetSwitchPosition, _ack)
@@ -62,16 +58,40 @@ async def test_set_switch_with_angle(bus: EventBus, ctx: AutomationContext) -> N
     events = _collect(bus, SetSwitchPosition)
     await ctx.set_switch("hub", "S1", 58)
     assert len(events) == 1
-    assert events[0].angle == 58
+    assert events[0].target == 58
 
 
 async def test_set_switch_with_name(bus: EventBus, ctx: AutomationContext) -> None:
     _auto_ack_switches(bus)
     events = _collect(bus, SetSwitchPosition)
     await ctx.set_switch("hub", "S1", "straight")
-    assert events[0].angle == STRAIGHT
+    assert events[0].target == "straight"
     await ctx.set_switch("hub", "S1", "diverge")
-    assert events[1].angle == DIVERGE
+    assert events[1].target == "diverge"
+
+
+@pytest.mark.parametrize("target", [-1, 181, True, "left"])
+async def test_set_switch_rejects_invalid_target(
+    ctx: AutomationContext, target: object
+) -> None:
+    with pytest.raises(ValueError, match="switch position"):
+        await ctx.set_switch("hub", "S1", target)  # type: ignore[arg-type]
+
+
+async def test_set_switch_raises_when_move_fails(
+    bus: EventBus, ctx: AutomationContext
+) -> None:
+    async def reject(event: SetSwitchPosition) -> None:
+        await bus.publish(SwitchPositionChanged(
+            hub_name=event.hub_name,
+            switch_name=event.switch_name,
+            angle=0,
+            ok=False,
+        ))
+
+    bus.subscribe(SetSwitchPosition, reject)
+    with pytest.raises(RuntimeError, match="switch move failed"):
+        await ctx.set_switch("hub", "S1", "straight")
 
 
 async def test_wait_for_resolves(bus: EventBus, ctx: AutomationContext) -> None:
@@ -231,6 +251,23 @@ async def test_module_runs_script(bus: EventBus) -> None:
     await mod.start()
     await asyncio.sleep(0.05)
     assert flag
+    await mod.stop()
+
+
+async def test_module_configures_before_script_starts(bus: EventBus) -> None:
+    order = []
+
+    def configure(ctx):
+        order.append("configure")
+
+    async def script(ctx):
+        order.append("run")
+
+    mod = AutomationModule(bus, configure=configure, script=script)
+    await mod.start()
+    assert order == ["configure"]
+    await asyncio.sleep(0)
+    assert order == ["configure", "run"]
     await mod.stop()
 
 

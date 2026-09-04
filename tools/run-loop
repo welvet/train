@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -u
+
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+BACKEND_DIR="$REPO_ROOT/backend"
+export TRAIN_DATA_DIR="${TRAIN_DATA_DIR:-$REPO_ROOT/data}"
+
+echo "Starting continuous deployment loop (Ctrl-C to stop)"
+while true; do
+    cd "$REPO_ROOT" || exit 1
+    if git pull; then
+        cd "$BACKEND_DIR" || exit 1
+        if [ ! -d .venv ]; then
+            python3 -m venv .venv
+        fi
+        . .venv/bin/activate
+        pip install --index-url https://pypi.org/simple/ -e ".[dev]" -q
+        python -m train 2>&1
+        echo "Backend exited; restarting"
+    else
+        echo "Git pull failed; retrying in 5 seconds"
+        sleep 5
+    fi
+done

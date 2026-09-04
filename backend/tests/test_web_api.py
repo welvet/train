@@ -169,9 +169,10 @@ async def test_get_hub_info(bus: EventBus, client: TestClient) -> None:
 
 async def test_set_switch_position_success(bus: EventBus, client: TestClient) -> None:
     async def fake_hub(event: SetSwitchPosition) -> None:
+        angle = event.target if isinstance(event.target, int) else 58
         await bus.publish(SwitchPositionChanged(
             hub_name=event.hub_name, switch_name=event.switch_name,
-            angle=event.angle, ok=True,
+            angle=angle, ok=True,
         ))
 
     bus.subscribe(SetSwitchPosition, fake_hub)
@@ -183,6 +184,12 @@ async def test_set_switch_position_success(bus: EventBus, client: TestClient) ->
     assert body["switch_name"] == "S1"
     assert body["angle"] == 100
     assert body["ok"] is True
+
+    resp = await client.post(
+        "/hubs/A_HUB_1/switches/S1/position", json={"position": "straight"}
+    )
+    assert resp.status == 200
+    assert (await resp.json())["angle"] == 58
 
 
 async def test_set_switch_position_timeout(bus: EventBus, client: TestClient) -> None:

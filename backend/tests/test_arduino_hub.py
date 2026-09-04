@@ -17,6 +17,30 @@ from train.core.events.hub import (
 )
 from train.modules.arduino_hub import ArduinoHubModule
 
+HUB_CONFIG = {
+    "A_HUB_1": {
+        "switches": {
+            "S1": {"straight": 58, "diverge": 100},
+            "S2": {"straight": 58, "diverge": 100},
+        },
+        "detectors": ("D1", "D2"),
+    },
+    "HUB_A": {
+        "switches": {
+            "S1": {"straight": 58, "diverge": 100},
+            "S2": {"straight": 58, "diverge": 100},
+        },
+        "detectors": ("D1", "D2"),
+    },
+    "HUB_B": {
+        "switches": {
+            "S1": {"straight": 58, "diverge": 100},
+            "S2": {"straight": 58, "diverge": 100},
+        },
+        "detectors": ("D1", "D2"),
+    },
+}
+
 
 def _collect_events(bus: EventBus) -> list[Event]:
     events: list[Event] = []
@@ -53,6 +77,7 @@ async def hub(bus: EventBus):
             "04:A1:B2:C3": "arctic_express",
             "04:11:22:33": "cargo_train",
         },
+        hub_config=HUB_CONFIG,
     )
     await mod.start()
     port = mod._server.sockets[0].getsockname()[1]
@@ -89,6 +114,39 @@ async def test_hello_publishes_hub_connected(bus: EventBus, hub) -> None:
     assert connected[0].hub_name == "A_HUB_1"
     assert connected[0].switches == ("S1", "S2")
     assert connected[0].detectors == ("D1", "D2")
+
+    writer.close()
+    await writer.wait_closed()
+
+
+async def test_unconfigured_hub_is_rejected(bus: EventBus, hub) -> None:
+    mod, port = hub
+    events = _collect_events(bus)
+    reader, writer = await _connect_hub(port, hub_name="unknown")
+
+    assert await asyncio.wait_for(reader.read(), timeout=2.0) == b""
+    assert "unknown" not in mod._clients
+    assert not [event for event in events if isinstance(event, HubConnected)]
+
+    writer.close()
+    await writer.wait_closed()
+
+
+async def test_mismatched_switch_topology_is_rejected(bus: EventBus, hub) -> None:
+    mod, port = hub
+    events = _collect_events(bus)
+    reader, writer = await asyncio.open_connection("127.0.0.1", port)
+    await _send_line(writer, {
+        "event": "hello",
+        "hub": "A_HUB_1",
+        "switches": ["S1", "unexpected"],
+        "detectors": ["D1"],
+        "detected_tags": [],
+    })
+
+    assert await asyncio.wait_for(reader.read(), timeout=2.0) == b""
+    assert "A_HUB_1" not in mod._clients
+    assert not [event for event in events if isinstance(event, HubConnected)]
 
     writer.close()
     await writer.wait_closed()
@@ -300,10 +358,11 @@ async def test_duplicate_hub_connection_takes_over_without_disconnect_event(
     await asyncio.sleep(0.05)
 
     await bus.publish(
-        SetSwitchPosition(hub_name="A_HUB_1", switch_name="S1", angle=100)
+        SetSwitchPosition(hub_name="A_HUB_1", switch_name="S1", target="diverge")
     )
     command = await _read_line(reader2)
     assert command["cmd"] == "move"
+    assert command["angle"] == 100
     assert not [event for event in events if isinstance(event, HubDisconnected)]
     assert len([event for event in events if isinstance(event, TagDetected)]) == 1
 
@@ -318,7 +377,7 @@ async def test_move_command_and_ack(bus: EventBus, hub) -> None:
     events = _collect_events(bus)
     reader, writer = await _connect_hub(port)
 
-    await bus.publish(SetSwitchPosition(hub_name="A_HUB_1", switch_name="S1", angle=100))
+    await bus.publish(SetSwitchPosition(hub_name="A_HUB_1", switch_name="S1", target=100))
     cmd = await _read_line(reader)
     assert cmd["cmd"] == "move"
     assert cmd["switch"] == "S1"
@@ -339,7 +398,7 @@ async def test_move_disconnected_hub(bus: EventBus, hub) -> None:
     mod, port = hub
     events = _collect_events(bus)
 
-    await bus.publish(SetSwitchPosition(hub_name="A_HUB_1", switch_name="S1", angle=100))
+    await bus.publish(SetSwitchPosition(hub_name="A_HUB_1", switch_name="S1", target=100))
     await asyncio.sleep(0.05)
 
     acks = [e for e in events if isinstance(e, SwitchPositionChanged)]
@@ -402,7 +461,9 @@ async def test_hub_info_tracks_state(bus: EventBus, hub) -> None:
 
 
 async def test_clean_shutdown(bus: EventBus) -> None:
-    mod = ArduinoHubModule(bus, host="127.0.0.1", port=0)
+    mod = ArduinoHubModule(
+        bus, host="127.0.0.1", port=0, hub_config=HUB_CONFIG
+    )
     await mod.start()
     port = mod._server.sockets[0].getsockname()[1]
 

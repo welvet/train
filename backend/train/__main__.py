@@ -2,12 +2,11 @@ import asyncio
 import logging
 
 from train.core.app import App
-from train.config import TRAINS
+from train.config import load_automation, load_runtime_config
 from train.modules.arduino_hub import ArduinoHubModule
 from train.modules.automation import AutomationModule
 from train.modules.lego_ble import LegoBleModule
 from train.modules.web_api import WebApiModule
-from train.scripts.demo_script import demo_script
 
 
 def main() -> None:
@@ -16,17 +15,31 @@ def main() -> None:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
     logging.getLogger("bleak").setLevel(logging.WARNING)
+    config = load_runtime_config()
+    automation = load_automation()
     app = App()
     app.add_module(
-        LegoBleModule,
-        train_map={train.ble_address: train.train_id for train in TRAINS},
+        AutomationModule,
+        configure=automation.configure,
+        script=automation.run,
     )
-    app.add_module(AutomationModule, script=demo_script)
+    app.add_module(
+        LegoBleModule,
+        train_map=config.train_map,
+    )
     app.add_module(
         ArduinoHubModule,
-        train_tag_map={train.tag_id: train.train_id for train in TRAINS if train.tag_id},
+        host=config.backend.arduino_host,
+        port=config.backend.arduino_port,
+        train_tag_map=config.train_tag_map,
+        hub_config=config.arduino_hubs,
     )
-    app.add_module(WebApiModule, shutdown_callback=app.request_shutdown)
+    app.add_module(
+        WebApiModule,
+        host=config.backend.api_host,
+        port=config.backend.api_port,
+        shutdown_callback=app.request_shutdown,
+    )
     asyncio.run(app.run())
 
 
