@@ -4,7 +4,7 @@ Arduino + Python system for controlling a LEGO model train with TrixBrix switch 
 
 ## Project structure
 
-- `TrainController/` — Arduino firmware (WiFi, sensors, motor control)
+- `TrainController/` — Arduino firmware (WiFi, PN532 tag reader, switch control)
 - `backend/` — Python backend (control logic, web API, event bus)
 - `ard` — CLI wrapper around `arduino-cli`
 - `arduino.json` — Arduino CLI config (port, FQBN, baud rate)
@@ -16,6 +16,7 @@ Arduino + Python system for controlling a LEGO model train with TrixBrix switch 
 - **Board**: Arduino UNO R4 WiFi
 - **FQBN**: `arduino:renesas_uno:unor4wifi`
 - **WiFi library**: `WiFiS3.h`
+- **Tag reader library**: `Adafruit_PN532.h` over hardware SPI
 
 ### Files
 
@@ -47,8 +48,9 @@ Defines board identity and all connected devices. The `.ino` is generic and neve
 // Switches: {name, pin, angleStraight, angleDiverge}
 const SwitchConfig SWITCHES[] = { {"S1", 9, 58, 100}, {"S2", 10, 58, 100} };
 
-// Detectors: {name, pin, activeLow}
-const DetectorConfig DETECTORS[] = { {"D1", 2, true}, {"D2", 3, true} };
+// PN532 train-tag detector (hardware SPI; SS on D4)
+#define DETECTOR_NAME "D1"
+const uint8_t PN532_SS_PIN = 4;
 
 // Backend TCP server
 #define BACKEND_HOST "192.168.50.186"
@@ -62,8 +64,9 @@ To add a new board: duplicate `config.h`, change values. The `.ino` doesn't chan
 Board connects to backend as a TCP client. Newline-delimited JSON both ways.
 
 **Board → Backend:**
-- `{"event":"hello","hub":"A_HUB_1","switches":["S1","S2"],"detectors":["D1","D2"]}` — on connect
-- `{"event":"detector","hub":"A_HUB_1","name":"D1","triggered":true}` — on state change
+- `{"event":"hello","hub":"A_HUB_1","switches":["S1","S2"],"detectors":["D1"]}` — on connect
+- `{"event":"tag_detected","hub":"A_HUB_1","detector":"D1","tag_id":"04:A1:B2:C3"}` — when a tag arrives
+- `{"event":"tag_removed","hub":"A_HUB_1","detector":"D1","tag_id":"04:A1:B2:C3"}` — when that tag leaves
 - `{"event":"move_ack","hub":"A_HUB_1","switch":"S1","angle":100,"ok":true}` — after move
 - `{"event":"pong","hub":"A_HUB_1"}` — reply to ping
 
@@ -71,7 +74,9 @@ Board connects to backend as a TCP client. Newline-delimited JSON both ways.
 - `{"cmd":"move","switch":"S1","angle":100}` — move a switch
 - `{"cmd":"ping"}` — health check
 
-Board reconnects every 2s if connection drops. Detector events are silently dropped when disconnected.
+Board reconnects every 2s if connection drops. The `hello` message includes a
+`detected_tags` snapshot so the backend can reconcile tags added or removed
+while the connection was down.
 
 ### LED states
 
@@ -100,20 +105,20 @@ Python 3.11+ asyncio application. Runtime deps: `bleak` (BLE), `aiohttp` (HTTP).
   - `base.py` — `Event` base class
   - `system.py` — `SystemStarted`, `SystemShutdown`
   - `train.py` — `SetTrainSpeed`, `TrainSpeedChanged`, `TrainConnected`, `TrainDisconnected`, `TrainStatus`
-  - `hub.py` — `SetSwitchPosition`, `SwitchPositionChanged`, `HubConnected`, `HubDisconnected`, `DetectorChanged`
+  - `hub.py` — `SetSwitchPosition`, `SwitchPositionChanged`, `HubConnected`, `HubDisconnected`, `TagDetected`, `TagRemoved`
 - `train/core/module.py` — `Module` ABC with `start()`/`stop()` lifecycle
 - `train/core/app.py` — `App` orchestrator; registers modules with `**kwargs`, handles SIGINT/SIGTERM, starts/stops in order
 
 ### Modules
 
 - `train/modules/lego_ble.py` — LEGO Powered Up BLE connector. Uses `bleak` + LWP3 protocol directly. Manages per-train connection loops with auto-reconnect. Subscribes to `SetTrainSpeed`, publishes `TrainSpeedChanged`, `TrainConnected`, `TrainDisconnected`, `TrainStatus`. Motor command uses StartPower (sub-command `0x51`) on port `0x01`.
-- `train/modules/arduino_hub.py` — TCP server for Arduino hubs. Accepts connections on `:9000`. Handles `hello`/`detector`/`move_ack`/`pong` messages. Subscribes to `SetSwitchPosition`, publishes `HubConnected`, `HubDisconnected`, `DetectorChanged`, `SwitchPositionChanged`.
+- `train/modules/arduino_hub.py` — TCP server for Arduino hubs. Accepts connections on `:9000`. Maps `tag_detected`/`tag_removed` UIDs to configured train IDs and publishes `TagDetected`/`TagRemoved` events. Also handles `hello`/`move_ack`/`pong` and switch commands.
 - `train/modules/web_api.py` — REST API via `aiohttp`. Listens on `:8080`. Maintains in-memory state cache built from events.
 - `train/modules/automation.py` — Automation DSL module. Provides `AutomationContext` with `set_speed()`, `set_switch()`, `wait_for()`, `on()`, `ramp_speed()`, `spawn()`. Runs a script function as an async task.
 
 ### Automation scripts
 
-- `train/scripts/demo_script.py` — demo: sets switches straight on hub connect, starts train on BLE connect, stops on detector, toggles switches on D1.
+- `train/scripts/demo_script.py` — pit-stop demo driven by tag arrival/removal events for the configured train.
 
 ### LEGO BLE protocol notes
 
@@ -132,12 +137,12 @@ Python 3.11+ asyncio application. Runtime deps: `bleak` (BLE), `aiohttp` (HTTP).
 
 ### Train config
 
-Trains are mapped by BLE address in `train/__main__.py`:
+Each train's BLE address and PN532 tag UID are configured together in
+`train/config.py`. Set the physical tag UID in the environment before starting
+the backend:
 
-```python
-app.add_module(LegoBleModule, train_map={
-    "FB81D51D-F808-C900-5C30-00076EBA9465": "arctic_express",
-})
+```sh
+export ARCTIC_EXPRESS_TAG_ID="04:A1:B2:C3"
 ```
 
 ### Scripts

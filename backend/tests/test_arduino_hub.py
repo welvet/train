@@ -8,11 +8,12 @@ import pytest
 from train.core.event_bus import EventBus
 from train.core.events import Event
 from train.core.events.hub import (
-    DetectorChanged,
     HubConnected,
     HubDisconnected,
     SetSwitchPosition,
     SwitchPositionChanged,
+    TagDetected,
+    TagRemoved,
 )
 from train.modules.arduino_hub import ArduinoHubModule
 
@@ -44,20 +45,34 @@ def bus() -> EventBus:
 
 @pytest.fixture
 async def hub(bus: EventBus):
-    mod = ArduinoHubModule(bus, host="127.0.0.1", port=0)
+    mod = ArduinoHubModule(
+        bus,
+        host="127.0.0.1",
+        port=0,
+        train_tag_map={
+            "04:A1:B2:C3": "arctic_express",
+            "04:11:22:33": "cargo_train",
+        },
+    )
     await mod.start()
     port = mod._server.sockets[0].getsockname()[1]
     yield mod, port
     await mod.stop()
 
 
-async def _connect_hub(port: int, hub_name: str = "A_HUB_1"):
+async def _connect_hub(
+    port: int,
+    hub_name: str = "A_HUB_1",
+    *,
+    detected_tags: list[dict[str, str]] | None = None,
+):
     reader, writer = await asyncio.open_connection("127.0.0.1", port)
     await _send_line(writer, {
         "event": "hello",
         "hub": hub_name,
         "switches": ["S1", "S2"],
         "detectors": ["D1", "D2"],
+        "detected_tags": detected_tags or [],
     })
     await asyncio.sleep(0.05)
     return reader, writer
@@ -79,21 +94,223 @@ async def test_hello_publishes_hub_connected(bus: EventBus, hub) -> None:
     await writer.wait_closed()
 
 
-async def test_detector_event(bus: EventBus, hub) -> None:
+async def test_tag_events_include_train_id(bus: EventBus, hub) -> None:
     mod, port = hub
     events = _collect_events(bus)
     reader, writer = await _connect_hub(port)
 
-    await _send_line(writer, {"event": "detector", "hub": "A_HUB_1", "name": "D1", "triggered": True})
+    await _send_line(writer, {
+        "event": "tag_detected",
+        "hub": "A_HUB_1",
+        "detector": "D1",
+        "tag_id": "04:a1:b2:c3",
+    })
+    await _send_line(writer, {
+        "event": "tag_removed",
+        "hub": "A_HUB_1",
+        "detector": "D1",
+        "tag_id": "04:A1:B2:C3",
+    })
     await asyncio.sleep(0.05)
 
-    detector_events = [e for e in events if isinstance(e, DetectorChanged)]
-    assert len(detector_events) == 1
-    assert detector_events[0].detector_name == "D1"
-    assert detector_events[0].triggered is True
+    detected = [e for e in events if isinstance(e, TagDetected)]
+    removed = [e for e in events if isinstance(e, TagRemoved)]
+    assert len(detected) == 1
+    assert detected[0].detector_name == "D1"
+    assert detected[0].train_id == "arctic_express"
+    assert len(removed) == 1
+    assert removed[0].train_id == "arctic_express"
 
     writer.close()
     await writer.wait_closed()
+
+
+async def test_initial_snapshot_publishes_detected_train(bus: EventBus, hub) -> None:
+    mod, port = hub
+    events = _collect_events(bus)
+    reader, writer = await _connect_hub(
+        port,
+        detected_tags=[{"detector": "D1", "tag_id": "04:a1:b2:c3"}],
+    )
+
+    connected = [event for event in events if isinstance(event, HubConnected)]
+    detected = [event for event in events if isinstance(event, TagDetected)]
+    assert connected[0].active_trains == (("D1", "arctic_express"),)
+    assert len(detected) == 1
+    assert detected[0].hub_name == "A_HUB_1"
+    assert detected[0].detector_name == "D1"
+    assert detected[0].train_id == "arctic_express"
+    info = mod.get_hub_info("A_HUB_1")
+    assert info is not None
+    assert info["detectors"]["D1"]["train_id"] == "arctic_express"
+
+    writer.close()
+    await writer.wait_closed()
+
+
+async def test_same_tag_reconnect_does_not_repeat_tag_events(bus: EventBus, hub) -> None:
+    mod, port = hub
+    events = _collect_events(bus)
+    snapshot = [{"detector": "D1", "tag_id": "04:A1:B2:C3"}]
+    reader1, writer1 = await _connect_hub(port, detected_tags=snapshot)
+    events.clear()
+
+    reader2, writer2 = await _connect_hub(port, detected_tags=snapshot)
+    await asyncio.sleep(0.05)
+
+    assert len([event for event in events if isinstance(event, HubConnected)]) == 1
+    assert not [
+        event for event in events if isinstance(event, (TagDetected, TagRemoved))
+    ]
+    assert not [event for event in events if isinstance(event, HubDisconnected)]
+    assert await asyncio.wait_for(reader1.read(), timeout=2.0) == b""
+    assert "A_HUB_1" in mod._clients
+    assert mod.get_hub_info("A_HUB_1")["connected"] is True
+
+    writer1.close()
+    await writer1.wait_closed()
+    writer2.close()
+    await writer2.wait_closed()
+
+
+async def test_reconnect_reconciles_tag_removed_while_disconnected(
+    bus: EventBus, hub
+) -> None:
+    mod, port = hub
+    events = _collect_events(bus)
+    reader1, writer1 = await _connect_hub(
+        port,
+        detected_tags=[{"detector": "D1", "tag_id": "04:A1:B2:C3"}],
+    )
+    events.clear()
+
+    reader2, writer2 = await _connect_hub(port)
+    await asyncio.sleep(0.05)
+
+    removed = [event for event in events if isinstance(event, TagRemoved)]
+    assert len(removed) == 1
+    assert removed[0].hub_name == "A_HUB_1"
+    assert removed[0].detector_name == "D1"
+    assert removed[0].train_id == "arctic_express"
+    info = mod.get_hub_info("A_HUB_1")
+    assert info is not None
+    assert info["detectors"]["D1"] == {
+        "name": "D1",
+        "triggered": False,
+        "train_id": None,
+    }
+
+    writer1.close()
+    await writer1.wait_closed()
+    writer2.close()
+    await writer2.wait_closed()
+
+
+async def test_unknown_tags_are_ignored(bus: EventBus, hub) -> None:
+    mod, port = hub
+    events = _collect_events(bus)
+    reader, writer = await _connect_hub(
+        port,
+        detected_tags=[{"detector": "D1", "tag_id": "DE:AD:BE:EF"}],
+    )
+    await _send_line(writer, {
+        "event": "tag_detected",
+        "hub": "A_HUB_1",
+        "detector": "D1",
+        "tag_id": "DE:AD:BE:EF",
+    })
+    await asyncio.sleep(0.05)
+
+    assert not [
+        event for event in events if isinstance(event, (TagDetected, TagRemoved))
+    ]
+    info = mod.get_hub_info("A_HUB_1")
+    assert info is not None
+    assert info["detectors"]["D1"]["triggered"] is False
+
+    writer.close()
+    await writer.wait_closed()
+
+
+async def test_live_tag_events_are_idempotent_and_reconcile_replacement(
+    bus: EventBus, hub
+) -> None:
+    mod, port = hub
+    events = _collect_events(bus)
+    reader, writer = await _connect_hub(port)
+    first_tag = {
+        "event": "tag_detected",
+        "hub": "A_HUB_1",
+        "detector": "D1",
+        "tag_id": "04:A1:B2:C3",
+    }
+    await _send_line(writer, first_tag)
+    await _send_line(writer, first_tag)
+    await _send_line(writer, {
+        "event": "tag_removed",
+        "hub": "A_HUB_1",
+        "detector": "D1",
+        "tag_id": "04:11:22:33",
+    })
+    await _send_line(writer, {
+        "event": "tag_detected",
+        "hub": "A_HUB_1",
+        "detector": "D1",
+        "tag_id": "04:11:22:33",
+    })
+    await asyncio.sleep(0.05)
+
+    tag_events = [
+        event for event in events if isinstance(event, (TagDetected, TagRemoved))
+    ]
+    assert [type(event) for event in tag_events] == [
+        TagDetected,
+        TagRemoved,
+        TagDetected,
+    ]
+    assert [event.train_id for event in tag_events] == [
+        "arctic_express",
+        "arctic_express",
+        "cargo_train",
+    ]
+    info = mod.get_hub_info("A_HUB_1")
+    assert info is not None
+    assert info["detectors"]["D1"]["train_id"] == "cargo_train"
+
+    writer.close()
+    await writer.wait_closed()
+
+
+async def test_duplicate_hub_connection_takes_over_without_disconnect_event(
+    bus: EventBus, hub
+) -> None:
+    mod, port = hub
+    events = _collect_events(bus)
+    reader1, writer1 = await _connect_hub(port)
+    events.clear()
+
+    reader2, writer2 = await _connect_hub(port)
+    await asyncio.sleep(0.05)
+    await _send_line(writer2, {
+        "event": "tag_detected",
+        "hub": "A_HUB_1",
+        "detector": "D1",
+        "tag_id": "04:A1:B2:C3",
+    })
+    await asyncio.sleep(0.05)
+
+    await bus.publish(
+        SetSwitchPosition(hub_name="A_HUB_1", switch_name="S1", angle=100)
+    )
+    command = await _read_line(reader2)
+    assert command["cmd"] == "move"
+    assert not [event for event in events if isinstance(event, HubDisconnected)]
+    assert len([event for event in events if isinstance(event, TagDetected)]) == 1
+
+    writer1.close()
+    await writer1.wait_closed()
+    writer2.close()
+    await writer2.wait_closed()
 
 
 async def test_move_command_and_ack(bus: EventBus, hub) -> None:
@@ -167,12 +384,18 @@ async def test_hub_info_tracks_state(bus: EventBus, hub) -> None:
     mod, port = hub
     reader, writer = await _connect_hub(port)
 
-    await _send_line(writer, {"event": "detector", "hub": "A_HUB_1", "name": "D1", "triggered": True})
+    await _send_line(writer, {
+        "event": "tag_detected",
+        "hub": "A_HUB_1",
+        "detector": "D1",
+        "tag_id": "04:A1:B2:C3",
+    })
     await asyncio.sleep(0.05)
 
     info = mod.get_hub_info("A_HUB_1")
     assert info is not None
     assert info["detectors"]["D1"]["triggered"] is True
+    assert info["detectors"]["D1"]["train_id"] == "arctic_express"
 
     writer.close()
     await writer.wait_closed()

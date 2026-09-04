@@ -17,17 +17,11 @@ const SwitchConfig SWITCHES[NUM_SWITCHES] = {
 };
 const unsigned long SERVO_SETTLE_MS = 500;
 
-struct DetectorConfig {
-  const char* name;
-  int pin;
-  bool activeLow;
-};
-
-const int NUM_DETECTORS = 2;
-const DetectorConfig DETECTORS[NUM_DETECTORS] = {
-  { "D1", 2, true },
-  { "D2", 3, true },
-};
+// PN532 train-tag detector. Hardware SPI uses D13/SCK, D12/MISO, D11/MOSI.
+#define DETECTOR_NAME "D1"
+const uint8_t PN532_SS_PIN = 4;
+const uint16_t TAG_READ_TIMEOUT_MS = 250;
+const unsigned long TAG_REMOVAL_DELAY_MS = 750;
 
 // Backend TCP server
 #define BACKEND_HOST "192.168.50.80"

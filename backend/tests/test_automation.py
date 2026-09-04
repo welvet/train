@@ -5,7 +5,7 @@ import asyncio
 import pytest
 
 from train.core.event_bus import EventBus
-from train.core.events.hub import DetectorChanged, SetSwitchPosition, SwitchPositionChanged
+from train.core.events.hub import SetSwitchPosition, SwitchPositionChanged, TagDetected
 from train.core.events.system import SystemStarted
 from train.core.events.train import SetTrainSpeed, TrainConnected
 from train.modules.automation import (
@@ -107,8 +107,8 @@ async def test_on_fires_callback(bus: EventBus, ctx: AutomationContext) -> None:
     async def callback(event):
         received.append(event)
 
-    ctx.on(DetectorChanged, callback)
-    await bus.publish(DetectorChanged(hub_name="h", detector_name="D1", triggered=True))
+    ctx.on(TagDetected, callback)
+    await bus.publish(TagDetected(hub_name="h", detector_name="D1", train_id="t1"))
     await asyncio.sleep(0.05)
     assert len(received) == 1
     assert received[0].detector_name == "D1"
@@ -120,12 +120,12 @@ async def test_on_with_filter(bus: EventBus, ctx: AutomationContext) -> None:
     async def callback(event):
         received.append(event)
 
-    ctx.on(DetectorChanged, callback, filter=lambda e: e.triggered)
-    await bus.publish(DetectorChanged(hub_name="h", detector_name="D1", triggered=False))
+    ctx.on(TagDetected, callback, filter=lambda e: e.train_id == "t1")
+    await bus.publish(TagDetected(hub_name="h", detector_name="D1", train_id="t2"))
     await asyncio.sleep(0.05)
     assert len(received) == 0
 
-    await bus.publish(DetectorChanged(hub_name="h", detector_name="D1", triggered=True))
+    await bus.publish(TagDetected(hub_name="h", detector_name="D1", train_id="t1"))
     await asyncio.sleep(0.05)
     assert len(received) == 1
 
@@ -136,31 +136,31 @@ async def test_on_throttle(bus: EventBus, ctx: AutomationContext) -> None:
     async def callback(event):
         received.append(event)
 
-    ctx.on(DetectorChanged, callback, throttle=0.3)
+    ctx.on(TagDetected, callback, throttle=0.3)
 
     # first event fires immediately
-    await bus.publish(DetectorChanged(hub_name="h", detector_name="D1", triggered=True))
+    await bus.publish(TagDetected(hub_name="h", detector_name="D1", train_id="t1"))
     await asyncio.sleep(0.05)
     assert len(received) == 1
 
     # repeats within throttle window are suppressed
-    await bus.publish(DetectorChanged(hub_name="h", detector_name="D1", triggered=True))
+    await bus.publish(TagDetected(hub_name="h", detector_name="D1", train_id="t1"))
     await asyncio.sleep(0.05)
-    await bus.publish(DetectorChanged(hub_name="h", detector_name="D1", triggered=True))
+    await bus.publish(TagDetected(hub_name="h", detector_name="D1", train_id="t1"))
     await asyncio.sleep(0.05)
     assert len(received) == 1
 
     # events keep coming — keeps resetting the cooldown
     await asyncio.sleep(0.2)
-    await bus.publish(DetectorChanged(hub_name="h", detector_name="D1", triggered=True))
+    await bus.publish(TagDetected(hub_name="h", detector_name="D1", train_id="t1"))
     await asyncio.sleep(0.2)
-    await bus.publish(DetectorChanged(hub_name="h", detector_name="D1", triggered=True))
+    await bus.publish(TagDetected(hub_name="h", detector_name="D1", train_id="t1"))
     await asyncio.sleep(0.05)
     assert len(received) == 1
 
     # quiet for >0.3s — rearms, next event fires
     await asyncio.sleep(0.4)
-    await bus.publish(DetectorChanged(hub_name="h", detector_name="D1", triggered=True))
+    await bus.publish(TagDetected(hub_name="h", detector_name="D1", train_id="t1"))
     await asyncio.sleep(0.05)
     assert len(received) == 2
     await ctx.cleanup()

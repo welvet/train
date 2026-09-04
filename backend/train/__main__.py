@@ -2,6 +2,7 @@ import asyncio
 import logging
 
 from train.core.app import App
+from train.config import TRAINS
 from train.modules.arduino_hub import ArduinoHubModule
 from train.modules.automation import AutomationModule
 from train.modules.lego_ble import LegoBleModule
@@ -18,13 +19,14 @@ def main() -> None:
     app = App()
     app.add_module(
         LegoBleModule,
-        train_map={
-            "FFE0916A-B323-1AA5-1083-0DE85F7DCB8D": "arctic_express",
-        },
+        train_map={train.ble_address: train.train_id for train in TRAINS},
     )
-    app.add_module(ArduinoHubModule)
-    app.add_module(WebApiModule, shutdown_callback=app.request_shutdown)
     app.add_module(AutomationModule, script=demo_script)
+    app.add_module(
+        ArduinoHubModule,
+        train_tag_map={train.tag_id: train.train_id for train in TRAINS if train.tag_id},
+    )
+    app.add_module(WebApiModule, shutdown_callback=app.request_shutdown)
     asyncio.run(app.run())
 
 
