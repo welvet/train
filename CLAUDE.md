@@ -1,165 +1,96 @@
 # LEGO Train Automation
 
-Arduino + Python system for controlling a LEGO model train with TrixBrix switch motors and sensors.
+Reusable Arduino firmware and a Python backend for a configurable LEGO model
+railway. Repository code is fixed product logic; one installation lives in the
+ignored `data/` workspace documented in `DATA.md`.
 
-## Project structure
+## Structure
 
-- `TrainController/` — Arduino firmware (WiFi, PN532 tag reader, switch control)
-- `backend/` — Python backend (control logic, web API, event bus)
-- `ard` — CLI wrapper around `arduino-cli`
-- `arduino.json` — Arduino CLI config (port, FQBN, baud rate)
+- `backend/` — event bus, hardware modules, web API, and automation runtime
+- `firmware/TrainController/` — generic UNO R4 WiFi firmware
+- `tools/` — workspace, firmware, control, deployment, and commit commands
+- `data/` — ignored local configuration, secrets, and automation
+- `DATA.md` — workspace schema and operator guide
 
-## Arduino (`TrainController/`)
+Follow `AGENTS.md`: do not inspect or mutate the local `data/` directory unless
+the user explicitly requests workspace-data work.
 
-### Board
-
-- **Board**: Arduino UNO R4 WiFi
-- **FQBN**: `arduino:renesas_uno:unor4wifi`
-- **WiFi library**: `WiFiS3.h`
-- **Tag reader library**: `Adafruit_PN532.h` over hardware SPI
-
-### Files
-
-- `TrainController.ino` — main sketch; generic controller logic, reads all config from `config.h`
-- `config.h` — board identity, device wiring, backend address. One per board variant.
-- `secrets.h` — WiFi credentials (`WIFI_SSID`, `WIFI_PASS`). Do not commit.
-
-### CLI (`./ard`)
-
-Wraps `arduino-cli` and reads settings from `arduino.json`.
-
-```
-./ard compile     # compile the sketch
-./ard upload      # upload to board
-./ard go          # compile + upload
-./ard monitor     # open serial monitor
-./ard boards      # list connected boards
-```
-
-Sketch is auto-detected. Override with `--sketch`, `--port`, or `--baudrate`.
-
-### Config (`config.h`)
-
-Defines board identity and all connected devices. The `.ino` is generic and never hardcodes pins or counts.
-
-```c
-#define HUB_NAME "A_HUB_1"
-
-// Switches: {name, pin, angleStraight, angleDiverge}
-const SwitchConfig SWITCHES[] = { {"S1", 9, 58, 100}, {"S2", 10, 58, 100} };
-
-// PN532 train-tag detector (hardware SPI; SS on D4)
-#define DETECTOR_NAME "D1"
-const uint8_t PN532_SS_PIN = 4;
-
-// Backend TCP server
-#define BACKEND_HOST "192.168.50.186"
-#define BACKEND_PORT 9000
-```
-
-To add a new board: duplicate `config.h`, change values. The `.ino` doesn't change.
-
-### TCP protocol
-
-Board connects to backend as a TCP client. Newline-delimited JSON both ways.
-
-**Board → Backend:**
-- `{"event":"hello","hub":"A_HUB_1","switches":["S1","S2"],"detectors":["D1"]}` — on connect
-- `{"event":"tag_detected","hub":"A_HUB_1","detector":"D1","tag_id":"04:A1:B2:C3"}` — when a tag arrives
-- `{"event":"tag_removed","hub":"A_HUB_1","detector":"D1","tag_id":"04:A1:B2:C3"}` — when that tag leaves
-- `{"event":"move_ack","hub":"A_HUB_1","switch":"S1","angle":100,"ok":true}` — after move
-- `{"event":"pong","hub":"A_HUB_1"}` — reply to ping
-
-**Backend → Board:**
-- `{"cmd":"move","switch":"S1","angle":100}` — move a switch
-- `{"cmd":"ping"}` — health check
-
-Board reconnects every 2s if connection drops. The `hello` message includes a
-`detected_tags` snapshot so the backend can reconcile tags added or removed
-while the connection was down.
-
-### LED states
-
-- **Fast blink** — no backend connection (or WiFi connecting)
-- **Off** — connected
-
-### Servo behavior
-
-Servos use attach/move/detach pattern — attached only during a throw (500ms settle), then detached to eliminate buzz. Multiple servos can move simultaneously (2A+ USB charger + 1000µF cap handles the combined draw).
-
-### Arduino workflow
-
-```
-./ard go          # build and flash
-./ard monitor     # watch serial output (Ctrl-C to exit)
-```
-
-## Backend (`backend/`)
-
-Python 3.11+ asyncio application. Runtime deps: `bleak` (BLE), `aiohttp` (HTTP).
-
-### Architecture
-
-- `train/core/event_bus.py` — typed pub/sub event bus; subscribe by event class, `isinstance`-based dispatch
-- `train/core/events/` — event definitions (frozen dataclasses)
-  - `base.py` — `Event` base class
-  - `system.py` — `SystemStarted`, `SystemShutdown`
-  - `train.py` — `SetTrainSpeed`, `TrainSpeedChanged`, `TrainConnected`, `TrainDisconnected`, `TrainStatus`
-  - `hub.py` — `SetSwitchPosition`, `SwitchPositionChanged`, `HubConnected`, `HubDisconnected`, `TagDetected`, `TagRemoved`
-- `train/core/module.py` — `Module` ABC with `start()`/`stop()` lifecycle
-- `train/core/app.py` — `App` orchestrator; registers modules with `**kwargs`, handles SIGINT/SIGTERM, starts/stops in order
-
-### Modules
-
-- `train/modules/lego_ble.py` — LEGO Powered Up BLE connector. Uses `bleak` + LWP3 protocol directly. Manages per-train connection loops with auto-reconnect. Subscribes to `SetTrainSpeed`, publishes `TrainSpeedChanged`, `TrainConnected`, `TrainDisconnected`, `TrainStatus`. Motor command uses StartPower (sub-command `0x51`) on port `0x01`.
-- `train/modules/arduino_hub.py` — TCP server for Arduino hubs. Accepts connections on `:9000`. Maps `tag_detected`/`tag_removed` UIDs to configured train IDs and publishes `TagDetected`/`TagRemoved` events. Also handles `hello`/`move_ack`/`pong` and switch commands.
-- `train/modules/web_api.py` — REST API via `aiohttp`. Listens on `:8080`. Maintains in-memory state cache built from events.
-- `train/modules/automation.py` — Automation DSL module. Provides `AutomationContext` with `set_speed()`, `set_switch()`, `wait_for()`, `on()`, `ramp_speed()`, `spawn()`. Runs a script function as an async task.
-
-### Automation scripts
-
-- `train/scripts/demo_script.py` — pit-stop demo driven by tag arrival/removal events for the configured train.
-
-### LEGO BLE protocol notes
-
-- Hub Service UUID: `00001623-1212-efde-1623-785feabcd123`
-- Hub Characteristic UUID: `00001624-1212-efde-1623-785feabcd123`
-- Motor is on port `0x01` (Port B). Uses StartPower sub-command `0x51`, not StartSpeed `0x07`.
-- Battery: Hub Property `0x06`, request with operation `0x05`, enable updates with `0x02`
-- Voltage: Port `0x3C`, subscribe via Port Input Format Setup (`0x41`)
-
-### REST API
-
-- `POST /trains/{train_name}/speed` — body: `{"speed": <-100..100>}`. Returns `{"train_name", "speed", "success"}`. Times out at 2s → 504.
-- `GET /trains/{train_name}` — returns `{"train_name", "connected", "speed", "battery_pct", "voltage"}`. 404 if train not seen.
-- `GET /hubs/{hub_name}` — returns `{"hub_name", "connected", "switches": [...], "detectors": [...]}`. 404 if hub not seen.
-- `POST /hubs/{hub_name}/switches/{switch_name}/position` — body: `{"angle": <int>}`. Returns `{"hub_name", "switch_name", "angle", "ok"}`. Times out at 2s → 504.
-
-### Train config
-
-Each train's BLE address and PN532 tag UID are configured together in
-`train/config.py`. Set the physical tag UID in the environment before starting
-the backend:
+## Workspace
 
 ```sh
-export ARCTIC_EXPRESS_TAG_ID="04:A1:B2:C3"
+tools/data init
+tools/data validate
 ```
 
-### Scripts
+Set `TRAIN_DATA_DIR` to use a workspace outside the repository. Backend startup
+fails with a guided error when required data is absent or invalid.
 
-- `scripts/scan_ble.py` — scan for nearby LEGO Powered Up hubs
-- `scripts/hub_info.py` — connect to hub, show attached devices and ports
-- `scripts/test_motor.py` — try different motor commands to find working port/sub-command
-- `scripts/test_battery.py` — test battery and voltage reading
+## Firmware
 
-### Backend workflow
+`firmware/TrainController/TrainController.ino` contains no installation values.
+`tools/arduino` selects a named device from `data/arduinos.json`, validates all
+switch and PN532 reader IDs/pins, generates `generated_config.h` in a temporary
+sketch, then calls Arduino CLI.
 
+```sh
+tools/arduino list
+tools/arduino compile arduino_1
+tools/arduino upload arduino_1
+tools/arduino monitor arduino_1
 ```
+
+Multiple switches and PN532 readers are supported per device. Readers share the
+hardware SPI bus and use separate SS pins. A failed reader is omitted from the
+hello handshake while switches and healthy readers continue operating.
+
+### Arduino TCP protocol
+
+Newline-delimited JSON:
+
+- `hello`: hub ID, switch IDs, healthy detector IDs, and authoritative active tags
+- `tag_detected`: hub, detector ID, and raw tag UID
+- `tag_removed`: hub, detector ID, and raw tag UID
+- `move_ack`: switch command result
+- `pong`: health response
+
+The backend resolves raw UIDs to train IDs using `data/trains.json`; firmware
+never contains train identity.
+
+## Backend
+
+Python 3.11+ asyncio application with `bleak` and `aiohttp`.
+
+- `train/config.py` validates local backend/train configuration and loads the
+  programmable `data/automation.py` entry point.
+- `train/modules/lego_ble.py` manages configured LEGO hubs.
+- `train/modules/arduino_hub.py` reconciles Arduino snapshots and tag events.
+- `train/modules/automation.py` provides the public `AutomationContext` DSL.
+- `train/modules/web_api.py` exposes train, hub, automation, and log endpoints.
+
+Local automation imports its API from `train.automation`, registers event
+handlers in synchronous `configure(ctx)`, and performs long-running work in
+`async run(ctx)`.
+
+Run locally:
+
+```sh
 cd backend
-python -m venv .venv && source .venv/bin/activate
+python -m venv .venv
+. .venv/bin/activate
 pip install --index-url https://pypi.org/simple/ -e ".[dev]"
-python -m train            # run (Ctrl-C to stop)
-pytest tests/ -v           # run tests
+python -m train
+pytest tests -q
 ```
 
-Note: pip defaults to Spotify's internal artifactory which may be unreachable. Use `--index-url https://pypi.org/simple/` to install from public PyPI.
+## Operator tools
+
+```sh
+tools/train --help
+tools/scan-ble
+tools/commit "message"
+tools/run-loop
+```
+
+All operational URLs and device choices come from the ignored workspace. Tools
+may accept explicit command-line overrides, but tracked files must not contain
+installation-specific addresses, IDs, ports, credentials, or automation.

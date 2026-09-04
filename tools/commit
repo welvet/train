@@ -1,0 +1,55 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import subprocess
+import time
+import urllib.error
+import urllib.request
+
+from _workspace import REPO_ROOT, backend_url
+
+
+def git(*args: str) -> None:
+    print(f"→ git {' '.join(args)}")
+    subprocess.run(["git", *args], cwd=REPO_ROOT, check=True)
+
+
+def request(url: str, method: str = "GET", timeout: float = 3) -> bool:
+    try:
+        with urllib.request.urlopen(
+            urllib.request.Request(url, method=method), timeout=timeout
+        ):
+            return True
+    except urllib.error.URLError:
+        return False
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Commit, push, and restart the backend")
+    parser.add_argument("-s", "--skip-wait", action="store_true")
+    parser.add_argument("message", nargs="+")
+    args = parser.parse_args()
+    message = " ".join(args.message)
+    server = backend_url()
+
+    git("add", "-A")
+    git("commit", "-m", message)
+    git("push")
+
+    print("→ requesting backend shutdown")
+    request(f"{server}/stop", method="POST")
+    time.sleep(5)
+    if args.skip_wait:
+        print("Skipping backend wait")
+        return
+
+    print("Waiting for backend", end="", flush=True)
+    while not request(f"{server}/logs"):
+        print(".", end="", flush=True)
+        time.sleep(2)
+    print("\nBackend is online")
+
+
+if __name__ == "__main__":
+    main()

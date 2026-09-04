@@ -9,7 +9,7 @@ from train.core.events.base import Event
 class SetSwitchPosition(Event):
     hub_name: str = ""
     switch_name: str = ""
-    angle: int = 0
+    target: str | int = 0
 
 
 @dataclass(frozen=True, slots=True)

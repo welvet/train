@@ -26,6 +26,7 @@ class ArduinoHubModule(Module):
         host: str = "0.0.0.0",
         port: int = 9000,
         train_tag_map: dict[str, str] | None = None,
+        hub_config: dict[str, dict[str, Any]],
     ) -> None:
         super().__init__(bus)
         self._host = host
@@ -40,6 +41,7 @@ class ArduinoHubModule(Module):
             for tag_id, train_id in (train_tag_map or {}).items()
             if tag_id
         }
+        self._hub_config = hub_config
         self._log = logging.getLogger("train.hub")
 
     async def start(self) -> None:
@@ -89,6 +91,11 @@ class ArduinoHubModule(Module):
                     hub_name = msg.get("hub", "")
                     switches = tuple(msg.get("switches", []))
                     detectors = tuple(msg.get("detectors", []))
+                    if not self._matches_config(hub_name, switches, detectors):
+                        self._log.warning(
+                            "Rejecting unconfigured hub topology: %s", hub_name
+                        )
+                        break
                     previous_info = self._hub_info.get(hub_name)
                     previous_tags = self._active_trains_by_detector(previous_info)
                     current_tags = self._resolve_tag_snapshot(
@@ -188,14 +195,20 @@ class ArduinoHubModule(Module):
             writer.close()
 
     async def _on_set_switch(self, event: SetSwitchPosition) -> None:
+        requested_angle = self._resolve_switch_angle(event)
         writer = self._clients.get(event.hub_name)
-        if writer is None:
+        if writer is None or requested_angle is None:
             await self.bus.publish(SwitchPositionChanged(
                 hub_name=event.hub_name, switch_name=event.switch_name,
-                angle=event.angle, ok=False,
+                angle=requested_angle or 0, ok=False,
             ))
             return
-        cmd = json.dumps({"cmd": "move", "switch": event.switch_name, "angle": event.angle})
+        command: dict[str, object] = {
+            "cmd": "move",
+            "switch": event.switch_name,
+            "angle": requested_angle,
+        }
+        cmd = json.dumps(command)
         try:
             writer.write((cmd + "\n").encode())
             await writer.drain()
@@ -203,11 +216,34 @@ class ArduinoHubModule(Module):
             self._log.error("Failed to send command to %s", event.hub_name, exc_info=True)
             await self.bus.publish(SwitchPositionChanged(
                 hub_name=event.hub_name, switch_name=event.switch_name,
-                angle=event.angle, ok=False,
+                angle=requested_angle, ok=False,
             ))
 
     def get_hub_info(self, hub_name: str) -> dict[str, Any] | None:
         return self._hub_info.get(hub_name)
+
+    def _matches_config(
+        self, hub_name: object, switches: tuple[object, ...], detectors: tuple[object, ...]
+    ) -> bool:
+        configured = self._hub_config.get(str(hub_name))
+        if configured is None:
+            return False
+        return (
+            set(switches) == set(configured["switches"])
+            and set(detectors) <= set(configured["detectors"])
+        )
+
+    def _resolve_switch_angle(self, event: SetSwitchPosition) -> int | None:
+        if isinstance(event.target, int):
+            return event.target
+        hub = self._hub_config.get(event.hub_name)
+        if hub is None:
+            return None
+        switch = hub["switches"].get(event.switch_name)
+        if switch is None:
+            return None
+        angle = switch.get(event.target)
+        return angle if isinstance(angle, int) else None
 
     @staticmethod
     def _normalize_tag_id(tag_id: object) -> str:

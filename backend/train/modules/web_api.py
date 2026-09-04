@@ -242,9 +242,26 @@ class WebApiModule(Module):
 
         try:
             body = await request.json()
-            angle = int(body["angle"])
-        except (KeyError, ValueError, TypeError):
-            return web.json_response({"error": "body must be {\"angle\": <int>}"}, status=400)
+        except (ValueError, TypeError):
+            return web.json_response({"error": "invalid JSON body"}, status=400)
+        if "position" in body and isinstance(body["position"], str):
+            target: str | int = body["position"].lower()
+            target = {"s": "straight", "d": "diverge"}.get(target, target)
+            if target not in {"straight", "diverge"}:
+                return web.json_response(
+                    {"error": "position must be straight or diverge"}, status=400
+                )
+        elif "angle" in body:
+            try:
+                target = int(body["angle"])
+            except (ValueError, TypeError):
+                return web.json_response({"error": "angle must be an integer"}, status=400)
+            if not 0 <= target <= 180:
+                return web.json_response({"error": "angle must be in 0..180"}, status=400)
+        else:
+            return web.json_response(
+                {"error": "body must contain position or angle"}, status=400
+            )
 
         future: asyncio.Future[SwitchPositionChanged] = asyncio.get_running_loop().create_future()
 
@@ -255,7 +272,7 @@ class WebApiModule(Module):
         self.bus.subscribe(SwitchPositionChanged, _on_response)
         try:
             await self.bus.publish(SetSwitchPosition(
-                hub_name=hub_name, switch_name=switch_name, angle=angle,
+                hub_name=hub_name, switch_name=switch_name, target=target,
             ))
             result = await asyncio.wait_for(future, timeout=RESPONSE_TIMEOUT)
             return web.json_response({

@@ -5,8 +5,8 @@ __pycache__/
 .venv/
 .pytest_cache/
 
-# Arduino
-TrainController/secrets.h
+# Local railway workspace (configuration, automation, and secrets)
+/data/
 
 # IDE
 .vscode/

@@ -12,12 +12,9 @@ from train.core.events.system import AutomationHalt, AutomationResume
 from train.core.events.train import SetTrainSpeed
 from train.core.module import Module
 
-STRAIGHT = 58
-DIVERGE = 100
-SWITCH_POSITIONS = {"straight": STRAIGHT, "diverge": DIVERGE}
-
 E = TypeVar("E", bound=Event)
 ScriptFn = Callable[["AutomationContext"], Coroutine[Any, Any, None]]
+ConfigureFn = Callable[["AutomationContext"], None]
 
 
 class AutomationContext:
@@ -31,11 +28,13 @@ class AutomationContext:
         await self._bus.publish(SetTrainSpeed(train_name=train, speed=speed))
 
     async def set_switch(self, hub: str, switch: str, position: str | int) -> None:
-        if isinstance(position, str):
-            angle = SWITCH_POSITIONS[position]
-        else:
-            angle = position
-
+        if isinstance(position, bool) or not (
+            isinstance(position, int) and 0 <= position <= 180
+            or isinstance(position, str) and position in {"straight", "diverge"}
+        ):
+            raise ValueError(
+                "switch position must be straight, diverge, or an angle in 0..180"
+            )
         future: asyncio.Future[SwitchPositionChanged] = asyncio.get_running_loop().create_future()
 
         async def _on_ack(event: SwitchPositionChanged) -> None:
@@ -44,8 +43,12 @@ class AutomationContext:
 
         self._bus.subscribe(SwitchPositionChanged, _on_ack)
         try:
-            await self._bus.publish(SetSwitchPosition(hub_name=hub, switch_name=switch, angle=angle))
-            await asyncio.wait_for(future, timeout=3.0)
+            await self._bus.publish(
+                SetSwitchPosition(hub_name=hub, switch_name=switch, target=position)
+            )
+            result = await asyncio.wait_for(future, timeout=3.0)
+            if not result.ok:
+                raise RuntimeError(f"switch move failed: {hub}/{switch}")
         finally:
             self._bus.unsubscribe(SwitchPositionChanged, _on_ack)
 
@@ -75,6 +78,9 @@ class AutomationContext:
 
     async def sleep(self, seconds: float) -> None:
         await asyncio.sleep(seconds)
+
+    async def forever(self) -> None:
+        await self.wait_for(Event, filter=lambda _: False)
 
     def on(
         self,
@@ -144,9 +150,16 @@ class AutomationContext:
 
 
 class AutomationModule(Module):
-    def __init__(self, bus: EventBus, *, script: ScriptFn) -> None:
+    def __init__(
+        self,
+        bus: EventBus,
+        *,
+        script: ScriptFn,
+        configure: ConfigureFn | None = None,
+    ) -> None:
         super().__init__(bus)
         self._script = script
+        self._configure = configure or (lambda _: None)
         self._ctx: AutomationContext | None = None
         self._task: asyncio.Task[None] | None = None
         self._log = logging.getLogger("train.automation")
@@ -155,9 +168,8 @@ class AutomationModule(Module):
         self._ctx = AutomationContext(self.bus)
         self.bus.subscribe(AutomationHalt, self._on_halt)
         self.bus.subscribe(AutomationResume, self._on_resume)
+        self._configure(self._ctx)
         self._task = asyncio.create_task(self._run_script())
-        # Let the script install event subscriptions before hardware modules start.
-        await asyncio.sleep(0)
 
     async def _on_halt(self, event: AutomationHalt) -> None:
         self._log.info("Automation halted")
