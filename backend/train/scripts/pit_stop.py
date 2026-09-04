@@ -5,6 +5,7 @@ import logging
 from enum import Enum, auto
 
 from train.core.events.hub import DetectorChanged
+from train.core.events.train import TrainSpeedChanged
 from train.modules.automation import AutomationContext
 
 TRAIN = "arctic_express"
@@ -12,7 +13,7 @@ HUB = "A_HUB_1"
 PITSTOP_DETECTOR = "D1"
 ARMING_DETECTOR = "D2"
 PITSTOP_SWITCH = "S2"
-CRUISE_SPEED = 80
+DEFAULT_RESUME_SPEED = 80
 
 
 class PitStopState(Enum):
@@ -29,6 +30,7 @@ class PitStopSignal(Enum):
     D2_TRIGGERED = auto()
     ENTRY_TIMER_ELAPSED = auto()
     DWELL_TIMER_ELAPSED = auto()
+    TRAIN_SPEED_CHANGED = auto()
 
 
 class PitStopController:
@@ -38,18 +40,19 @@ class PitStopController:
         self,
         ctx: AutomationContext,
         *,
-        entry_delay: float = 3.0,
+        entry_delay: float = 4.0,
         dwell_time: float = 2.0,
     ) -> None:
         self._ctx = ctx
         self._entry_delay = entry_delay
         self._dwell_time = dwell_time
         self._queue: asyncio.Queue[
-            tuple[PitStopSignal, asyncio.Future[None]]
+            tuple[PitStopSignal, int | None, asyncio.Future[None]]
         ] = asyncio.Queue()
         self._worker: asyncio.Task[None] | None = None
         self._timers: set[asyncio.Task[None]] = set()
         self._log = logging.getLogger("train.pitstop")
+        self._resume_speed = DEFAULT_RESUME_SPEED
         self.state = PitStopState.PITSTOP_ARMED
 
     @property
@@ -80,18 +83,25 @@ class PitStopController:
         if signal is not None:
             await self.handle(signal)
 
-    async def handle(self, signal: PitStopSignal) -> None:
+    async def on_speed_changed(self, event: TrainSpeedChanged) -> None:
+        if event.train_name == TRAIN and event.success and event.speed != 0:
+            if self._worker is None:
+                self._resume_speed = event.speed
+            else:
+                await self.handle(PitStopSignal.TRAIN_SPEED_CHANGED, value=event.speed)
+
+    async def handle(self, signal: PitStopSignal, *, value: int | None = None) -> None:
         if self._worker is None:
             raise RuntimeError("PitStopController has not been started")
         completed = asyncio.get_running_loop().create_future()
-        await self._queue.put((signal, completed))
+        await self._queue.put((signal, value, completed))
         await completed
 
     async def _run(self) -> None:
         while True:
-            signal, completed = await self._queue.get()
+            signal, value, completed = await self._queue.get()
             try:
-                await self._transition(signal)
+                await self._transition(signal, value=value)
             except Exception as exc:
                 if not completed.done():
                     completed.set_exception(exc)
@@ -102,10 +112,18 @@ class PitStopController:
             finally:
                 self._queue.task_done()
 
-    async def _transition(self, signal: PitStopSignal) -> None:
+    async def _transition(
+        self, signal: PitStopSignal, *, value: int | None = None
+    ) -> None:
         previous = self.state
 
-        if signal is PitStopSignal.START:
+        if signal is PitStopSignal.TRAIN_SPEED_CHANGED:
+            if value is None:
+                raise ValueError("TRAIN_SPEED_CHANGED requires a speed")
+            self._resume_speed = value
+            self._log.info("Pit-stop resume speed: %d", value)
+
+        elif signal is PitStopSignal.START:
             await self._ctx.set_switch(HUB, PITSTOP_SWITCH, "diverge")
 
         elif self.state is PitStopState.PITSTOP_ARMED:
@@ -121,14 +139,14 @@ class PitStopController:
 
         elif self.state is PitStopState.PITSTOP_DWELL:
             if signal is PitStopSignal.DWELL_TIMER_ELAPSED:
-                await self._ctx.set_speed(TRAIN, CRUISE_SPEED)
+                await self._ctx.set_speed(TRAIN, self._resume_speed)
                 self.state = PitStopState.COMING_FROM_PITSTOP
 
         elif self.state is PitStopState.COMING_FROM_PITSTOP:
             if signal is PitStopSignal.D1_TRIGGERED:
                 await self._ctx.set_speed(TRAIN, 0)
                 await self._ctx.set_switch(HUB, PITSTOP_SWITCH, "straight")
-                await self._ctx.set_speed(TRAIN, CRUISE_SPEED)
+                await self._ctx.set_speed(TRAIN, self._resume_speed)
                 self.state = PitStopState.NORMAL
 
         elif self.state is PitStopState.NORMAL:

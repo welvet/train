@@ -53,10 +53,22 @@ def cmd_boards(args, cfg):
 
 
 def find_sketch():
+    sketches = []
     for entry in sorted(os.listdir(ROOT)):
         ino = os.path.join(ROOT, entry, f"{entry}.ino")
         if os.path.isfile(ino):
-            return os.path.join(ROOT, entry)
+            sketches.append(os.path.join(ROOT, entry))
+
+    if len(sketches) == 1:
+        return sketches[0]
+    if len(sketches) > 1:
+        names = ", ".join(os.path.basename(sketch) for sketch in sketches)
+        print(
+            f"Multiple sketches found ({names}). Pass --sketch explicitly.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     print("No sketch found. Pass --sketch or create one.", file=sys.stderr)
     sys.exit(1)
 
