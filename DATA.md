@@ -110,10 +110,10 @@ set `ftp.ca_file` to a local CA bundle for a private certificate authority.
 Plain FTP is an explicitly trusted-LAN mode because it does not encrypt
 credentials or release contents.
 
-The target fields are an exact deployment contract. Builds fail unless the
-build machine has the same operating system, architecture, Python
-implementation, and Python major/minor version as the server. Runtime
-dependencies are pinned with hashes in a target-keyed file under
+The target fields are the server's exact deployment contract. The backend is a
+pure Python wheel, so `server-push` can build on a newer macOS host while pip
+selects binary dependencies for the configured server platform, Python, and
+ABI. Runtime dependencies are pinned with hashes in a target-keyed file under
 `backend/requirements/`. `tools/data init` leaves the target empty because it
 is an installation choice; copy these values from the server's Python runtime.
 

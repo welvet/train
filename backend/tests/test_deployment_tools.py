@@ -73,8 +73,11 @@ def test_bundle_contains_wheel_and_runtime_data_only(
     workspace.mkdir()
     _write_workspace(workspace)
 
+    commands: list[list[str]] = []
+
     def fake_build(command: list[str], *, check: bool) -> None:
         assert check is True
+        commands.append(command)
         option = "--wheel-dir" if "wheel" in command else "--dest"
         wheel_dir = Path(command[command.index(option) + 1])
         name = (
@@ -107,6 +110,13 @@ def test_bundle_contains_wheel_and_runtime_data_only(
         manifest = json.load(archive.extractfile("manifest.json"))
     assert set(manifest["files"]) == names - {"manifest.json"}
     assert manifest["runtime"] == target.as_dict()
+    download = next(command for command in commands if "download" in command)
+    assert download[download.index("--platform") + 1] == target.platform.replace(
+        "-", "_"
+    ).replace(".", "_")
+    assert download[download.index("--python-version") + 1] == target.python
+    assert download[download.index("--implementation") + 1] == "cp"
+    assert download[download.index("--abi") + 1] == "cp314"
 
 
 class FakeFtp:
@@ -185,22 +195,27 @@ def test_publish_updates_release_pointer_last(tmp_path: Path) -> None:
     assert json.loads(pointer) == {"release": digest, "attempt": attempt}
 
 
-def test_bundle_rejects_a_different_runtime(tmp_path: Path) -> None:
-    workspace = tmp_path / "data"
-    workspace.mkdir()
-    _write_workspace(workspace)
+def test_pip_target_args_support_a_different_macos_version() -> None:
     actual = _runtime_target()
-    wrong = RuntimeTarget(
+    server = RuntimeTarget(
         actual.system,
-        "wrong-machine",
+        actual.machine,
         actual.implementation,
         actual.python,
-        actual.platform,
+        "macosx-13.0-arm64",
         actual.soabi,
     )
 
-    with pytest.raises(RuntimeError, match="does not match deployment target"):
-        build_bundle(workspace, tmp_path / "backend.tar.gz", wrong)
+    assert _deployment._pip_target_args(server) == [
+        "--platform",
+        "macosx_13_0_arm64",
+        "--python-version",
+        "3.14",
+        "--implementation",
+        "cp",
+        "--abi",
+        "cp314",
+    ]
 
 
 def test_failed_ftp_connection_is_closed() -> None:

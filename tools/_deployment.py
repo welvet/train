@@ -123,12 +123,6 @@ def load_deployment(root: Path | None = None) -> DeploymentConfig:
 
 def build_bundle(workspace: Path, destination: Path, target: RuntimeTarget) -> str:
     validate_workspace(workspace)
-    actual = _local_runtime()
-    if actual != target:
-        raise RuntimeError(
-            "Build runtime does not match deployment target: "
-            f"build={actual.as_dict()} target={target.as_dict()}"
-        )
     with tempfile.TemporaryDirectory(prefix="train-release-build-") as directory:
         build_dir = Path(directory)
         wheel_dir = build_dir / "wheels"
@@ -162,6 +156,7 @@ def build_bundle(workspace: Path, destination: Path, target: RuntimeTarget) -> s
                 "download",
                 "--require-hashes",
                 "--only-binary=:all:",
+                *_pip_target_args(target),
                 "--dest",
                 str(wheel_dir),
                 "--requirement",
@@ -170,8 +165,13 @@ def build_bundle(workspace: Path, destination: Path, target: RuntimeTarget) -> s
             check=True,
         )
         wheels = sorted(wheel_dir.glob("*.whl"))
-        if not wheels or not any(path.name.startswith("train-") for path in wheels):
+        backend_wheels = [path for path in wheels if path.name.startswith("train-")]
+        if not backend_wheels:
             raise RuntimeError("Backend wheel build did not produce the train package")
+        if any(
+            not path.name.endswith("-py3-none-any.whl") for path in backend_wheels
+        ):
+            raise RuntimeError("Cross-target deployment requires a pure Python backend wheel")
         for wheel in wheels:
             _normalize_wheel(wheel)
 
@@ -378,6 +378,27 @@ def _requirements_lock(target: RuntimeTarget) -> Path:
     if not path.is_file():
         raise RuntimeError(f"No dependency lock exists for deployment target: {key}")
     return path
+
+
+def _pip_target_args(target: RuntimeTarget) -> list[str]:
+    if target.implementation != "cpython":
+        raise RuntimeError(
+            f"Unsupported deployment Python implementation: {target.implementation}"
+        )
+    abi = re.fullmatch(r"cpython-(\d+)-.+", target.soabi)
+    if abi is None:
+        raise RuntimeError(f"Unsupported deployment SOABI: {target.soabi}")
+    pip_platform = target.platform.replace("-", "_").replace(".", "_")
+    return [
+        "--platform",
+        pip_platform,
+        "--python-version",
+        target.python,
+        "--implementation",
+        "cp",
+        "--abi",
+        f"cp{abi.group(1)}",
+    ]
 
 
 def _ensure_remote_dir(ftp: ftplib.FTP, path: str) -> None:
