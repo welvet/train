@@ -474,3 +474,8 @@ async def test_clean_shutdown(bus: EventBus) -> None:
     await mod.stop()
     await asyncio.sleep(0.05)
     assert len(mod._clients) == 0
+    assert mod._server is None
+    assert await asyncio.wait_for(reader.read(), timeout=2.0) == b""
+
+    writer.close()
+    await writer.wait_closed()
