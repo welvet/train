@@ -19,6 +19,7 @@ class ConfigError(ValueError):
 @dataclass(frozen=True, slots=True)
 class TrainConfig:
     train_id: str
+    lego_hub_id: str
     ble_address: str
     tag_id: str
 
@@ -75,6 +76,7 @@ class RuntimeConfig:
     def arduino_hubs(self) -> dict[str, dict[str, Any]]:
         return {
             device.hub_id: {
+                "device_id": device.device_id,
                 "switches": {
                     switch.switch_id: {
                         "straight": switch.straight,
@@ -117,6 +119,7 @@ def load_runtime_config(data_dir: Path | None = None) -> RuntimeConfig:
 
     trains: list[TrainConfig] = []
     train_ids: set[str] = set()
+    lego_hub_ids: set[str] = set()
     ble_addresses: set[str] = set()
     tag_ids: set[str] = set()
     for index, value in enumerate(raw_trains):
@@ -124,16 +127,21 @@ def load_runtime_config(data_dir: Path | None = None) -> RuntimeConfig:
         if not isinstance(value, dict):
             raise ConfigError(f"{source} must be an object")
         train_id = _string(value, "id", source)
+        raw_lego_hub_id = value.get("lego_hub_id", train_id)
+        if not isinstance(raw_lego_hub_id, str) or not raw_lego_hub_id.strip():
+            raise ConfigError(f"{source}.lego_hub_id must be a non-empty string")
+        lego_hub_id = raw_lego_hub_id.strip()
         ble_address = _string(value, "ble_address", source)
         raw_tag_id = value.get("tag_id", "")
         if not isinstance(raw_tag_id, str):
             raise ConfigError(f"{source}.tag_id must be a string")
         tag_id = raw_tag_id.strip().upper()
         _unique(train_id, train_ids, f"{source}.id")
+        _unique(lego_hub_id, lego_hub_ids, f"{source}.lego_hub_id")
         _unique(ble_address, ble_addresses, f"{source}.ble_address")
         if tag_id:
             _unique(tag_id, tag_ids, f"{source}.tag_id")
-        trains.append(TrainConfig(train_id, ble_address, tag_id))
+        trains.append(TrainConfig(train_id, lego_hub_id, ble_address, tag_id))
 
     raw_devices = _mapping(arduinos_data, "devices", "arduinos.json")
     if not raw_devices:
@@ -182,7 +190,10 @@ def validate_arduino_upload_config(data_dir: Path | None = None) -> None:
     load_runtime_config(root)
     devices = _mapping(_read_json(root / "arduinos.json"), "devices", "arduinos.json")
     for device_id, device in devices.items():
-        assert isinstance(device, dict)
+        if not isinstance(device, dict):
+            raise ConfigError(
+                f"arduinos.json: devices.{device_id} must be an object"
+            )
         source = f"arduinos.json: devices.{device_id}"
         for key in ("port", "fqbn", "backend_host"):
             _string(device, key, source)
@@ -194,8 +205,9 @@ def validate_arduino_upload_config(data_dir: Path | None = None) -> None:
         _validate_component_pins(device, "switches", "pin", source, pins)
         _validate_component_pins(device, "readers", "ss_pin", source, pins)
         for index, reader in enumerate(_list(device, "readers", source)):
-            assert isinstance(reader, dict)
             reader_source = f"{source}.readers[{index}]"
+            if not isinstance(reader, dict):
+                raise ConfigError(f"{reader_source} must be an object")
             _bounded_int(reader, "read_timeout_ms", reader_source, maximum=0xFFFF)
             _bounded_int(
                 reader, "removal_delay_ms", reader_source, maximum=0xFFFFFFFF
@@ -311,8 +323,9 @@ def _validate_component_pins(
     pins: set[int],
 ) -> None:
     for index, component in enumerate(_list(device, collection, source)):
-        assert isinstance(component, dict)
         item_source = f"{source}.{collection}[{index}]"
+        if not isinstance(component, dict):
+            raise ConfigError(f"{item_source} must be an object")
         pin = component.get(pin_key)
         if not isinstance(pin, int) or isinstance(pin, bool) or not 0 <= pin <= 255:
             raise ConfigError(f"{item_source}.{pin_key} must be a pin in 0..255")

@@ -11,6 +11,7 @@ from train.domain import (
     SetSwitchPosition,
     SetTrainSpeed,
     SwitchPositionChanged,
+    SystemState,
     SystemStarted,
     TagDetected,
     TrainConnected,
@@ -21,7 +22,12 @@ from train.modules.automation import AutomationContext, AutomationModule
 
 @pytest.fixture
 def bus() -> EventBus:
-    return EventBus()
+    return EventBus(SystemState.from_topology(
+        train_hubs={"t1": "t1"},
+        arduino_hubs={
+            "hub": {"switches": {"S1": {}}, "detectors": ()}
+        },
+    ))
 
 
 @pytest.fixture
@@ -103,11 +109,12 @@ async def test_set_speed_raises_when_change_fails(
         await ctx.set_speed("t1", 50)
 
 
-async def test_set_speed_serializes_commands_for_same_train(
+async def test_set_speed_serializes_commands_across_contexts(
     bus: EventBus,
     ctx: AutomationContext,
 ) -> None:
     commands: list[int] = []
+    other_context = AutomationContext(bus)
 
     async def acknowledge(event: SetTrainSpeed) -> None:
         commands.append(event.speed)
@@ -122,7 +129,7 @@ async def test_set_speed_serializes_commands_for_same_train(
     bus.subscribe(SetTrainSpeed, acknowledge)
     first, second = await asyncio.gather(
         ctx.set_speed("t1", 10),
-        ctx.set_speed("t1", 20),
+        other_context.set_speed("t1", 20),
     )
 
     assert commands == [10, 20]
@@ -265,6 +272,19 @@ async def test_wait_for_with_filter(bus: EventBus, ctx: AutomationContext) -> No
 async def test_wait_for_timeout(bus: EventBus, ctx: AutomationContext) -> None:
     with pytest.raises(asyncio.TimeoutError):
         await ctx.wait_for(TrainConnected, timeout=0.05)
+
+
+async def test_context_state_is_an_isolated_shared_snapshot(
+    bus: EventBus, ctx: AutomationContext
+) -> None:
+    await bus.publish(TrainSpeedChanged(
+        train_name="express", speed=30, success=True
+    ))
+
+    snapshot = ctx.state
+    snapshot.trains["express"].speed = 90
+
+    assert bus.state.trains["express"].speed == 30
 
 
 async def test_wait_for_propagates_filter_failure(

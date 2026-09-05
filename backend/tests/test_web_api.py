@@ -4,20 +4,17 @@ import asyncio
 from pathlib import Path
 
 import pytest
-from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
+import train.modules.web_api.transport as web_transport
 from train.core.event_bus import EventBus
 from train.domain import (
-    HubConnected,
+    AutomationHalt,
     SetSwitchPosition,
-    SwitchPositionChanged,
-    TagDetected,
-    TagRemoved,
     SetTrainSpeed,
-    TrainConnected,
+    SwitchPositionChanged,
+    SystemState,
     TrainSpeedChanged,
-    TrainStatus,
 )
 from train.modules.web_api import WebApiModule
 from train.modules.web_api.static_files import StaticFileResolver
@@ -25,37 +22,24 @@ from train.modules.web_api.static_files import StaticFileResolver
 
 @pytest.fixture
 def bus() -> EventBus:
-    return EventBus()
+    return EventBus(SystemState.from_topology(
+        train_hubs={"express": "express_hub"},
+        arduino_hubs={
+            "yard": {"switches": {"S1": {}}, "detectors": ()}
+        },
+    ))
 
 
 @pytest.fixture
 async def client(bus: EventBus) -> TestClient:
-    mod = WebApiModule(bus, host="127.0.0.1", port=0)
-    assert mod._app is None
-    await mod.start()
-    assert mod._app is not None
-    tc = TestClient(TestServer(mod._app))
-    await tc.start_server()
-    yield tc  # type: ignore[misc]
-    await tc.close()
-    await mod.stop()
-
-
-async def test_set_speed_success(bus: EventBus, client: TestClient) -> None:
-    async def fake_ble(event: SetTrainSpeed) -> None:
-        await bus.publish(TrainSpeedChanged(
-            train_name=event.train_name, speed=event.speed, success=True,
-            request_id=event.request_id,
-        ))
-
-    bus.subscribe(SetTrainSpeed, fake_ble)
-
-    resp = await client.post("/trains/arctic_express/speed", json={"speed": 50})
-    assert resp.status == 200
-    body = await resp.json()
-    assert body["train_name"] == "arctic_express"
-    assert body["speed"] == 50
-    assert body["success"] is True
+    module = WebApiModule(bus, host="127.0.0.1", port=0)
+    await module.start()
+    assert module._app is not None
+    test_client = TestClient(TestServer(module._app))
+    await test_client.start_server()
+    yield test_client  # type: ignore[misc]
+    await test_client.close()
+    await module.stop()
 
 
 async def test_health_reports_release(
@@ -69,6 +53,255 @@ async def test_health_reports_release(
     assert await response.json() == {"status": "ok", "release": "release-id"}
 
 
+async def test_health_reports_failed_readiness(bus: EventBus) -> None:
+    module = WebApiModule(
+        bus,
+        host="127.0.0.1",
+        port=0,
+        readiness_check=lambda: False,
+    )
+    await module.start()
+    assert module._app is not None
+    client = TestClient(TestServer(module._app))
+    await client.start_server()
+    try:
+        response = await client.get("/health")
+        assert response.status == 503
+        assert (await response.json())["status"] == "error"
+    finally:
+        await client.close()
+        await module.stop()
+
+
+async def test_state_returns_complete_domain_snapshot(
+    bus: EventBus, client: TestClient
+) -> None:
+    await bus.publish(TrainSpeedChanged(
+        train_name="express", speed=45, success=True
+    ))
+
+    response = await client.get("/api/state")
+
+    assert response.status == 200
+    envelope = await response.json()
+    assert envelope["version"] == 1
+    body = envelope["state"]
+    assert body["revision"] == 1
+    assert body["trains"]["express"] == {
+        "train_id": "express",
+        "lego_hub_id": "express_hub",
+        "speed": 45,
+    }
+    assert body["lego_hubs"]["express_hub"] == {
+        "hub_id": "express_hub",
+        "train_id": "express",
+        "connected": False,
+        "battery_pct": 0,
+        "voltage": 0.0,
+    }
+
+
+async def test_event_endpoint_decodes_and_publishes_command(
+    bus: EventBus, client: TestClient
+) -> None:
+    received: list[SetTrainSpeed] = []
+
+    async def handle(event: SetTrainSpeed) -> None:
+        received.append(event)
+        await bus.publish(TrainSpeedChanged(
+            train_name=event.train_name,
+            speed=event.speed,
+            success=True,
+            request_id=event.request_id,
+        ))
+
+    bus.subscribe(SetTrainSpeed, handle)
+
+    response = await client.post("/api/events", json={
+        "type": "set_train_speed",
+        "data": {"train_id": "express", "speed": 60},
+    })
+
+    assert response.status == 200
+    body = await response.json()
+    assert body["completed"] is True
+    assert body["command"]["type"] == "set_train_speed"
+    assert body["command"]["data"]["request_id"] == received[0].request_id
+    assert bus.state.trains["express"].speed == 60
+
+
+async def test_event_endpoint_updates_shared_automation_state(
+    bus: EventBus, client: TestClient
+) -> None:
+    received: list[AutomationHalt] = []
+
+    async def handle(event: AutomationHalt) -> None:
+        received.append(event)
+
+    bus.subscribe(AutomationHalt, handle)
+
+    response = await client.post("/api/events", json={"type": "automation_halt"})
+
+    assert response.status == 200
+    assert len(received) == 1
+    assert bus.state.automation.halted is True
+
+
+async def test_event_endpoint_dispatches_switch_command(
+    bus: EventBus, client: TestClient
+) -> None:
+    received: list[SetSwitchPosition] = []
+
+    async def handle(event: SetSwitchPosition) -> None:
+        received.append(event)
+        await bus.publish(SwitchPositionChanged(
+            hub_name=event.hub_name,
+            switch_name=event.switch_name,
+            angle=90,
+            ok=True,
+            request_id=event.request_id,
+        ))
+
+    bus.subscribe(SetSwitchPosition, handle)
+
+    response = await client.post("/api/events", json={
+        "type": "set_switch_position",
+        "data": {"hub_id": "yard", "switch_id": "S1", "target": 90},
+    })
+
+    assert response.status == 200
+    assert len(received) == 1
+    assert received[0].request_id == (
+        await response.json()
+    )["command"]["data"]["request_id"]
+    assert bus.state.arduino_hubs["yard"].switches["S1"].angle == 90
+
+
+async def test_event_endpoint_rejects_internal_event(client: TestClient) -> None:
+    response = await client.post("/api/events", json={
+        "type": "train_connected",
+        "data": {"train_id": "express"},
+    })
+
+    assert response.status == 400
+
+
+async def test_event_endpoint_rejects_malformed_json(client: TestClient) -> None:
+    response = await client.post(
+        "/api/events",
+        data="{",
+        headers={"Content-Type": "application/json"},
+    )
+
+    assert response.status == 400
+    assert await response.json() == {"error": "body must be valid JSON"}
+
+
+async def test_event_endpoint_reports_command_failure(
+    bus: EventBus, client: TestClient
+) -> None:
+    async def reject(event: SetTrainSpeed) -> None:
+        await bus.publish(TrainSpeedChanged(
+            train_name=event.train_name,
+            speed=event.speed,
+            success=False,
+            request_id=event.request_id,
+        ))
+
+    bus.subscribe(SetTrainSpeed, reject)
+
+    response = await client.post("/api/events", json={
+        "type": "set_train_speed",
+        "data": {"train_id": "express", "speed": 60},
+    })
+
+    assert response.status == 409
+    assert (await response.json())["error"] == "SetTrainSpeed failed"
+
+
+async def test_event_endpoint_reports_unknown_train(
+    client: TestClient,
+) -> None:
+    response = await client.post("/api/events", json={
+        "type": "set_train_speed",
+        "data": {"train_id": "missing", "speed": 60},
+    })
+
+    assert response.status == 404
+    assert await response.json() == {"error": "unknown train: missing"}
+
+
+@pytest.mark.parametrize(
+    ("hub_id", "switch_id", "error"),
+    [
+        ("missing", "S1", "unknown Arduino hub: missing"),
+        ("yard", "missing", "unknown switch: yard/missing"),
+    ],
+)
+async def test_event_endpoint_reports_unknown_switch_resource(
+    client: TestClient,
+    hub_id: str,
+    switch_id: str,
+    error: str,
+) -> None:
+    response = await client.post("/api/events", json={
+        "type": "set_switch_position",
+        "data": {"hub_id": hub_id, "switch_id": switch_id, "target": 90},
+    })
+
+    assert response.status == 404
+    assert await response.json() == {"error": error}
+
+
+async def test_event_endpoint_has_bounded_command_timeout(
+    bus: EventBus,
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cancelled = False
+
+    async def hang(event: SetTrainSpeed) -> None:
+        nonlocal cancelled
+        try:
+            await asyncio.sleep(10)
+        finally:
+            cancelled = True
+
+    bus.subscribe(SetTrainSpeed, hang)
+    monkeypatch.setattr(web_transport, "COMMAND_TIMEOUT", 0.01)
+
+    response = await client.post("/api/events", json={
+        "type": "set_train_speed",
+        "data": {"train_id": "express", "speed": 60},
+    })
+
+    assert response.status == 504
+    assert cancelled is True
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "status"),
+    [
+        ("GET", "/trains/express", 404),
+        ("POST", "/trains/express/speed", 405),
+        ("GET", "/hubs/yard", 404),
+        ("POST", "/hubs/yard/switches/S1/position", 405),
+        ("POST", "/halt", 405),
+        ("POST", "/resume", 405),
+        ("POST", "/stop", 405),
+        ("GET", "/logs", 404),
+    ],
+)
+async def test_old_api_operations_are_unavailable(
+    client: TestClient,
+    method: str,
+    path: str,
+    status: int,
+) -> None:
+    response = await client.request(method, path)
+    assert response.status == status
+
+
 async def test_serves_static_frontend_and_assets(
     bus: EventBus,
     tmp_path: Path,
@@ -78,10 +311,12 @@ async def test_serves_static_frontend_and_assets(
     asset.parent.mkdir(parents=True)
     (static_root / "index.html").write_text("<h1>Train</h1>")
     asset.write_text("console.log('train')")
-    mod = WebApiModule(bus, host="127.0.0.1", port=0, static_root=static_root)
-    await mod.start()
-    assert mod._app is not None
-    client = TestClient(TestServer(mod._app))
+    module = WebApiModule(
+        bus, host="127.0.0.1", port=0, static_root=static_root
+    )
+    await module.start()
+    assert module._app is not None
+    client = TestClient(TestServer(module._app))
     await client.start_server()
     try:
         response = await client.get("/")
@@ -93,7 +328,7 @@ async def test_serves_static_frontend_and_assets(
         assert await response.text() == "console.log('train')"
     finally:
         await client.close()
-        await mod.stop()
+        await module.stop()
 
 
 async def test_static_frontend_supports_exported_routes_and_404_page(
@@ -104,10 +339,12 @@ async def test_static_frontend_supports_exported_routes_and_404_page(
     static_root.mkdir()
     (static_root / "control.html").write_text("control")
     (static_root / "404.html").write_text("missing")
-    mod = WebApiModule(bus, host="127.0.0.1", port=0, static_root=static_root)
-    await mod.start()
-    assert mod._app is not None
-    client = TestClient(TestServer(mod._app))
+    module = WebApiModule(
+        bus, host="127.0.0.1", port=0, static_root=static_root
+    )
+    await module.start()
+    assert module._app is not None
+    client = TestClient(TestServer(module._app))
     await client.start_server()
     try:
         response = await client.get("/control")
@@ -119,7 +356,7 @@ async def test_static_frontend_supports_exported_routes_and_404_page(
         assert await response.text() == "missing"
     finally:
         await client.close()
-        await mod.stop()
+        await module.stop()
 
 
 def test_static_frontend_rejects_unsafe_paths(tmp_path: Path) -> None:
@@ -131,205 +368,3 @@ def test_static_frontend_rejects_unsafe_paths(tmp_path: Path) -> None:
 
     assert resolver._resolve("../secret.txt") is None
     assert resolver._resolve("\0") is None
-
-
-async def test_health_reports_failed_readiness(bus: EventBus) -> None:
-    mod = WebApiModule(bus, host="127.0.0.1", port=0, readiness_check=lambda: False)
-    await mod.start()
-    assert mod._app is not None
-    client = TestClient(TestServer(mod._app))
-    await client.start_server()
-    try:
-        response = await client.get("/health")
-        assert response.status == 503
-        assert (await response.json())["status"] == "error"
-    finally:
-        await client.close()
-        await mod.stop()
-
-
-async def test_set_speed_failure(bus: EventBus, client: TestClient) -> None:
-    async def fake_ble(event: SetTrainSpeed) -> None:
-        await bus.publish(TrainSpeedChanged(
-            train_name=event.train_name, speed=event.speed, success=False,
-            request_id=event.request_id,
-        ))
-
-    bus.subscribe(SetTrainSpeed, fake_ble)
-
-    resp = await client.post("/trains/arctic_express/speed", json={"speed": 50})
-    assert resp.status == 200
-    body = await resp.json()
-    assert body["success"] is False
-
-
-async def test_set_speed_timeout(bus: EventBus, client: TestClient) -> None:
-    resp = await client.post("/trains/arctic_express/speed", json={"speed": 50})
-    assert resp.status == 504
-
-
-async def test_missing_speed_field(bus: EventBus, client: TestClient) -> None:
-    resp = await client.post("/trains/arctic_express/speed", json={})
-    assert resp.status == 400
-
-
-async def test_invalid_speed_value(bus: EventBus, client: TestClient) -> None:
-    resp = await client.post("/trains/arctic_express/speed", json={"speed": "fast"})
-    assert resp.status == 400
-
-
-async def test_invalid_speed_json_preserves_error_contract(
-    bus: EventBus,
-    client: TestClient,
-) -> None:
-    resp = await client.post(
-        "/trains/arctic_express/speed",
-        data="{",
-        headers={"Content-Type": "application/json"},
-    )
-
-    assert resp.status == 400
-    assert await resp.json() == {"error": 'body must be {"speed": <int>}'}
-
-
-async def test_speed_out_of_range(bus: EventBus, client: TestClient) -> None:
-    resp = await client.post("/trains/arctic_express/speed", json={"speed": 200})
-    assert resp.status == 400
-
-
-async def test_get_train_unknown(bus: EventBus, client: TestClient) -> None:
-    resp = await client.get("/trains/nope")
-    assert resp.status == 404
-
-
-async def test_get_train_info(bus: EventBus, client: TestClient) -> None:
-    await bus.publish(TrainConnected(train_name="arctic_express", ble_address="AA:BB"))
-    await bus.publish(TrainSpeedChanged(train_name="arctic_express", speed=75, success=True))
-    await bus.publish(TrainStatus(train_name="arctic_express", battery_pct=46, voltage=6.4))
-
-    resp = await client.get("/trains/arctic_express")
-    assert resp.status == 200
-    body = await resp.json()
-    assert body["train_name"] == "arctic_express"
-    assert body["connected"] is True
-    assert body["speed"] == 75
-    assert body["battery_pct"] == 46
-    assert body["voltage"] == 6.4
-
-
-# --- Hub endpoints ---
-
-
-async def test_get_hub_unknown(bus: EventBus, client: TestClient) -> None:
-    resp = await client.get("/hubs/nope")
-    assert resp.status == 404
-
-
-async def test_get_hub_info(bus: EventBus, client: TestClient) -> None:
-    await bus.publish(HubConnected(hub_name="A_HUB_1", switches=("S1", "S2"), detectors=("D1", "D2")))
-    await bus.publish(SwitchPositionChanged(hub_name="A_HUB_1", switch_name="S1", angle=100, ok=True))
-    await bus.publish(TagDetected(
-        hub_name="A_HUB_1", detector_name="D1", train_id="arctic_express"
-    ))
-
-    resp = await client.get("/hubs/A_HUB_1")
-    assert resp.status == 200
-    body = await resp.json()
-    assert body["hub_name"] == "A_HUB_1"
-    assert body["connected"] is True
-    assert len(body["switches"]) == 2
-    assert body["switches"][0] == {"name": "S1", "angle": 100}
-    assert body["switches"][1] == {"name": "S2", "angle": 0}
-    assert body["detectors"][0] == {
-        "name": "D1",
-        "triggered": True,
-        "train_id": "arctic_express",
-    }
-    assert body["detectors"][1] == {
-        "name": "D2",
-        "triggered": False,
-        "train_id": None,
-    }
-
-    await bus.publish(TagRemoved(
-        hub_name="A_HUB_1", detector_name="D1", train_id="arctic_express"
-    ))
-    resp = await client.get("/hubs/A_HUB_1")
-    body = await resp.json()
-    assert body["detectors"][0] == {
-        "name": "D1",
-        "triggered": False,
-        "train_id": None,
-    }
-
-
-async def test_get_hub_ignores_stale_train_removal(
-    bus: EventBus,
-    client: TestClient,
-) -> None:
-    await bus.publish(HubConnected(
-        hub_name="A_HUB_1",
-        switches=(),
-        detectors=("D1",),
-    ))
-    await bus.publish(TagDetected(
-        hub_name="A_HUB_1",
-        detector_name="D1",
-        train_id="arctic_express",
-    ))
-    await bus.publish(TagDetected(
-        hub_name="A_HUB_1",
-        detector_name="D1",
-        train_id="cargo_train",
-    ))
-    await bus.publish(TagRemoved(
-        hub_name="A_HUB_1",
-        detector_name="D1",
-        train_id="arctic_express",
-    ))
-
-    response = await client.get("/hubs/A_HUB_1")
-
-    assert response.status == 200
-    assert (await response.json())["detectors"] == [
-        {
-            "name": "D1",
-            "triggered": True,
-            "train_id": "cargo_train",
-        }
-    ]
-
-
-async def test_set_switch_position_success(bus: EventBus, client: TestClient) -> None:
-    async def fake_hub(event: SetSwitchPosition) -> None:
-        angle = event.target if isinstance(event.target, int) else 58
-        await bus.publish(SwitchPositionChanged(
-            hub_name=event.hub_name, switch_name=event.switch_name,
-            angle=angle, ok=True, request_id=event.request_id,
-        ))
-
-    bus.subscribe(SetSwitchPosition, fake_hub)
-
-    resp = await client.post("/hubs/A_HUB_1/switches/S1/position", json={"angle": 100})
-    assert resp.status == 200
-    body = await resp.json()
-    assert body["hub_name"] == "A_HUB_1"
-    assert body["switch_name"] == "S1"
-    assert body["angle"] == 100
-    assert body["ok"] is True
-
-    resp = await client.post(
-        "/hubs/A_HUB_1/switches/S1/position", json={"position": "straight"}
-    )
-    assert resp.status == 200
-    assert (await resp.json())["angle"] == 58
-
-
-async def test_set_switch_position_timeout(bus: EventBus, client: TestClient) -> None:
-    resp = await client.post("/hubs/A_HUB_1/switches/S1/position", json={"angle": 100})
-    assert resp.status == 504
-
-
-async def test_set_switch_position_missing_angle(bus: EventBus, client: TestClient) -> None:
-    resp = await client.post("/hubs/A_HUB_1/switches/S1/position", json={})
-    assert resp.status == 400

@@ -2,16 +2,12 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
 
 from aiohttp import web
 
 from train.core.event_bus import EventBus
 from train.core.module import Module
-from train.modules.web_api.controller import WebApiController
 from train.modules.web_api.transport import WebApiServer
-
-RESPONSE_TIMEOUT = 2.0
 
 
 class WebApiModule(Module):
@@ -21,20 +17,14 @@ class WebApiModule(Module):
         *,
         host: str = "0.0.0.0",
         port: int = 8080,
-        shutdown_callback: Callable[[], Any] | None = None,
         readiness_check: Callable[[], bool] | None = None,
         static_root: Path | None = None,
     ) -> None:
         super().__init__(bus)
-        self._controller = WebApiController(
-            bus,
-            response_timeout=RESPONSE_TIMEOUT,
-        )
         self._transport = WebApiServer(
-            self._controller,
+            bus,
             host=host,
             port=port,
-            shutdown_callback=shutdown_callback,
             readiness_check=readiness_check or (lambda: True),
             static_root=static_root,
         )
@@ -44,15 +34,7 @@ class WebApiModule(Module):
         return self._transport.application
 
     async def start(self) -> None:
-        self._controller.start()
-        try:
-            await self._transport.start()
-        except Exception:
-            self._controller.stop()
-            raise
+        await self._transport.start()
 
     async def stop(self) -> None:
-        try:
-            await self._transport.stop()
-        finally:
-            self._controller.stop()
+        await self._transport.stop()

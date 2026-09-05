@@ -63,9 +63,14 @@ def test_load_runtime_config_from_explicit_workspace(tmp_path: Path) -> None:
 
     assert config.backend.api_url == "http://host:8080"
     assert config.train_map == {"AA:BB": "train_1", "CC:DD": "train_2"}
+    assert [train.lego_hub_id for train in config.trains] == [
+        "train_1",
+        "train_2",
+    ]
     assert config.train_tag_map == {"04:AB": "train_1"}
     assert [device.hub_id for device in config.arduinos] == ["hub_1", "hub_2"]
     assert config.arduino_hubs["hub_1"] == {
+        "device_id": "arduino_1",
         "switches": {"S1": {"straight": 58, "diverge": 100}},
         "detectors": ("D1",),
     }
@@ -84,6 +89,28 @@ def test_duplicate_train_identity_is_rejected(tmp_path: Path, field: str) -> Non
 
 def test_missing_workspace_points_to_initializer(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match="tools/data init"):
+        load_runtime_config(tmp_path)
+
+
+def test_explicit_lego_hub_id_is_loaded(tmp_path: Path) -> None:
+    _write_config(tmp_path)
+    trains = json.loads((tmp_path / "trains.json").read_text())
+    trains["trains"][0]["lego_hub_id"] = "hub_red"
+    (tmp_path / "trains.json").write_text(json.dumps(trains))
+
+    config = load_runtime_config(tmp_path)
+
+    assert config.trains[0].lego_hub_id == "hub_red"
+
+
+def test_duplicate_lego_hub_identity_is_rejected(tmp_path: Path) -> None:
+    _write_config(tmp_path)
+    trains = json.loads((tmp_path / "trains.json").read_text())
+    trains["trains"][0]["lego_hub_id"] = "shared_hub"
+    trains["trains"][1]["lego_hub_id"] = "shared_hub"
+    (tmp_path / "trains.json").write_text(json.dumps(trains))
+
+    with pytest.raises(ConfigError, match="duplicate value"):
         load_runtime_config(tmp_path)
 
 

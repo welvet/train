@@ -85,7 +85,8 @@ The backend is a Python 3.11+ asyncio application using `bleak` and `aiohttp`.
 - `train/modules/lego_ble.py` manages configured LEGO hubs.
 - `train/modules/arduino_hub.py` reconciles Arduino snapshots and tag events.
 - `train/modules/automation.py` provides the public `AutomationContext` DSL.
-- `train/modules/web_api.py` exposes train, hub, automation, and log endpoints.
+- `train/domain/state.py` is the canonical state reduced from domain events.
+- `train/modules/web_api/` exposes that state and the public event vocabulary.
 
 Local automation imports `AutomationContext` from `train.automation` and event
 classes from `train.domain`, registers event handlers in synchronous
@@ -105,7 +106,6 @@ pytest tests -q
 ## Operator tools
 
 ```sh
-tools/train --help
 tools/scan-ble
 tools/server-push
 ```
