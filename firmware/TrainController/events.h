@@ -8,6 +8,8 @@
 
 namespace train {
 
+constexpr size_t REQUEST_ID_SIZE = 33;
+
 enum class EventType : uint8_t {
   WifiConnected,
   WifiDisconnected,
@@ -66,29 +68,44 @@ struct MoveSwitchRequestedEvent final : Event {
       const char* switchId,
       bool hasAngle,
       int angle,
-      const char* position)
+      const char* position,
+      const char* requestId = "")
       : Event(EventType::MoveSwitchRequested),
         switchId(switchId),
         hasAngle(hasAngle),
         angle(angle),
-        position(position) {}
+        position(position) {
+    if (requestId != nullptr) {
+      strncpy(this->requestId, requestId, sizeof(this->requestId) - 1);
+    }
+  }
 
   const char* switchId;
   bool hasAngle;
   int angle;
   const char* position;
+  char requestId[REQUEST_ID_SIZE] = {0};
 };
 
 struct SwitchMovedEvent final : Event {
-  SwitchMovedEvent(int switchIndex, int angle, bool ok)
+  SwitchMovedEvent(
+      int switchIndex,
+      int angle,
+      bool ok,
+      const char* requestId = "")
       : Event(EventType::SwitchMoved),
         switchIndex(switchIndex),
         angle(angle),
-        ok(ok) {}
+        ok(ok) {
+    if (requestId != nullptr) {
+      strncpy(this->requestId, requestId, sizeof(this->requestId) - 1);
+    }
+  }
 
   int switchIndex;
   int angle;
   bool ok;
+  char requestId[REQUEST_ID_SIZE] = {0};
 };
 
 struct TagChangedEvent final : Event {

@@ -91,13 +91,15 @@ async def test_speed_command_success(bus: EventBus) -> None:
     await mod.start()
     await asyncio.sleep(0.1)
 
-    await bus.publish(SetTrainSpeed(train_name="thomas", speed=75))
+    command = SetTrainSpeed(train_name="thomas", speed=75)
+    await bus.publish(command)
 
     changed = [e for e in events if isinstance(e, TrainSpeedChanged)]
     assert len(changed) == 1
     assert changed[0].train_name == "thomas"
     assert changed[0].speed == 75
     assert changed[0].success is True
+    assert changed[0].request_id == command.request_id
 
     await mod.stop()
 
@@ -127,11 +129,13 @@ async def test_speed_command_disconnected_train(bus: EventBus) -> None:
     mod = LegoBleModule(bus, train_map={})
     await mod.start()
 
-    await bus.publish(SetTrainSpeed(train_name="unknown", speed=50))
+    command = SetTrainSpeed(train_name="unknown", speed=50)
+    await bus.publish(command)
 
     changed = [e for e in events if isinstance(e, TrainSpeedChanged)]
     assert len(changed) == 1
     assert changed[0].success is False
+    assert changed[0].request_id == command.request_id
 
     await mod.stop()
 
@@ -147,11 +151,13 @@ async def test_write_failure(mock_client_cls: type, bus: EventBus) -> None:
     await asyncio.sleep(0.1)
 
     fake._should_fail_write = True
-    await bus.publish(SetTrainSpeed(train_name="thomas", speed=50))
+    command = SetTrainSpeed(train_name="thomas", speed=50)
+    await bus.publish(command)
 
     changed = [e for e in events if isinstance(e, TrainSpeedChanged)]
     assert len(changed) == 1
     assert changed[0].success is False
+    assert changed[0].request_id == command.request_id
 
     await mod.stop()
 

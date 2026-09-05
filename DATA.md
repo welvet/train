@@ -141,7 +141,8 @@ async def run(ctx):
 `configure` registers handlers before hardware modules start, so startup events
 cannot be missed. The script may import `AutomationContext` from
 `train.automation` and event classes from `train.domain`. It is loaded only when
-the backend starts.
+the backend starts. See [Writing automations](docs/automations.md) for the full
+public API, event reference, lifecycle, and safe concurrency patterns.
 
 ## Commands
 

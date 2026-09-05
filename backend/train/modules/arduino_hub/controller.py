@@ -30,7 +30,12 @@ class HubClient(Protocol):
 
     def bind(self, hub_name: str) -> None: ...
 
-    async def move_switch(self, switch_name: str, angle: int) -> None: ...
+    async def move_switch(
+        self,
+        switch_name: str,
+        angle: int,
+        request_id: str,
+    ) -> None: ...
 
     def close(self) -> None: ...
 
@@ -102,7 +107,11 @@ class ArduinoHubController:
             await self._publish_switch_result(event, requested_angle or 0, ok=False)
             return
         try:
-            await client.move_switch(event.switch_name, requested_angle)
+            await client.move_switch(
+                event.switch_name,
+                requested_angle,
+                event.request_id,
+            )
         except Exception:
             self._log.error("Failed to send command to %s", event.hub_name, exc_info=True)
             await self._publish_switch_result(event, requested_angle, ok=False)
@@ -190,6 +199,7 @@ class ArduinoHubController:
             switch_name=message.switch_name,
             angle=message.angle,
             ok=message.ok,
+            request_id=message.request_id,
         ))
 
     def _matches_config(self, hello: Hello) -> bool:
@@ -274,6 +284,7 @@ class ArduinoHubController:
             switch_name=event.switch_name,
             angle=angle,
             ok=ok,
+            request_id=event.request_id,
         ))
 
 

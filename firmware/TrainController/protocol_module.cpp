@@ -52,6 +52,7 @@ void ProtocolModule::handleLine(const char* line) {
         document["angle"].is<int>(),
         document["angle"] | 0,
         document["position"],
+        document["request_id"],
     };
     bus_.publish(request);
   } else if (strcmp(command, "ping") == 0) {
@@ -92,6 +93,7 @@ void ProtocolModule::sendSwitchAcknowledgement(const SwitchMovedEvent& moved) {
   document["switch"] = SWITCHES[moved.switchIndex].id;
   document["angle"] = moved.angle;
   document["ok"] = moved.ok;
+  document["request_id"] = moved.requestId;
   sendJson(document);
 }
 

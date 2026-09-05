@@ -377,18 +377,32 @@ async def test_move_command_and_ack(bus: EventBus, hub) -> None:
     events = _collect_events(bus)
     reader, writer = await _connect_hub(port)
 
-    await bus.publish(SetSwitchPosition(hub_name="A_HUB_1", switch_name="S1", target=100))
+    command = SetSwitchPosition(
+        hub_name="A_HUB_1",
+        switch_name="S1",
+        target=100,
+    )
+    await bus.publish(command)
     cmd = await _read_line(reader)
     assert cmd["cmd"] == "move"
     assert cmd["switch"] == "S1"
     assert cmd["angle"] == 100
+    assert cmd["request_id"]
 
-    await _send_line(writer, {"event": "move_ack", "hub": "A_HUB_1", "switch": "S1", "angle": 100, "ok": True})
+    await _send_line(writer, {
+        "event": "move_ack",
+        "hub": "A_HUB_1",
+        "switch": "S1",
+        "angle": 100,
+        "ok": True,
+        "request_id": cmd["request_id"],
+    })
     await asyncio.sleep(0.05)
 
     acks = [e for e in events if isinstance(e, SwitchPositionChanged)]
     assert len(acks) == 1
     assert acks[0].ok is True
+    assert acks[0].request_id == cmd["request_id"]
 
     writer.close()
     await writer.wait_closed()
@@ -398,12 +412,18 @@ async def test_move_disconnected_hub(bus: EventBus, hub) -> None:
     mod, port = hub
     events = _collect_events(bus)
 
-    await bus.publish(SetSwitchPosition(hub_name="A_HUB_1", switch_name="S1", target=100))
+    command = SetSwitchPosition(
+        hub_name="A_HUB_1",
+        switch_name="S1",
+        target=100,
+    )
+    await bus.publish(command)
     await asyncio.sleep(0.05)
 
     acks = [e for e in events if isinstance(e, SwitchPositionChanged)]
     assert len(acks) == 1
     assert acks[0].ok is False
+    assert acks[0].request_id == command.request_id
 
 
 async def test_disconnect_publishes_event(bus: EventBus, hub) -> None:

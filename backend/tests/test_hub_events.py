@@ -14,15 +14,23 @@ def test_set_switch_position_fields() -> None:
     assert e.hub_name == "A_HUB_1"
     assert e.switch_name == "S1"
     assert e.target == 100
+    assert e.request_id
     assert e.timestamp > 0
 
 
 def test_switch_position_changed_fields() -> None:
-    e = SwitchPositionChanged(hub_name="A_HUB_1", switch_name="S1", angle=100, ok=True)
+    e = SwitchPositionChanged(
+        hub_name="A_HUB_1",
+        switch_name="S1",
+        angle=100,
+        ok=True,
+        request_id="request-1",
+    )
     assert e.hub_name == "A_HUB_1"
     assert e.switch_name == "S1"
     assert e.angle == 100
     assert e.ok is True
+    assert e.request_id == "request-1"
 
 
 def test_hub_connected_fields() -> None:

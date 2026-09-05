@@ -91,6 +91,7 @@ struct MoveCollector {
     bool hasAngle;
     int angle;
     std::string position;
+    std::string requestId;
   };
   std::vector<Value> values;
 
@@ -102,6 +103,7 @@ struct MoveCollector {
         move.hasAngle,
         move.angle,
         move.position == nullptr ? "" : move.position,
+        move.requestId,
     });
   }
 };
@@ -111,13 +113,19 @@ struct SwitchCollector {
     int index;
     int angle;
     bool ok;
+    std::string requestId;
   };
   std::vector<Value> values;
 
   static void receive(void* context, const Event& event) {
     auto& collector = *static_cast<SwitchCollector*>(context);
     const auto& moved = static_cast<const SwitchMovedEvent&>(event);
-    collector.values.push_back({moved.switchIndex, moved.angle, moved.ok});
+    collector.values.push_back({
+        moved.switchIndex,
+        moved.angle,
+        moved.ok,
+        moved.requestId,
+    });
   }
 };
 
@@ -252,7 +260,8 @@ TEST(protocolParsesMovesAndIgnoresMalformedInput) {
   CHECK(moves.values.empty());
 
   bus.publish(InboundLineEvent(
-      "{\"cmd\":\"move\",\"switch\":\"S1\",\"angle\":180}"));
+      "{\"cmd\":\"move\",\"switch\":\"S1\",\"angle\":180,"
+      "\"request_id\":\"request-1\"}"));
   bus.publish(InboundLineEvent(
       "{\"cmd\":\"move\",\"switch\":\"S2\",\"position\":\"diverge\"}"));
 
@@ -260,6 +269,7 @@ TEST(protocolParsesMovesAndIgnoresMalformedInput) {
   CHECK(moves.values[0].switchId == "S1");
   CHECK(moves.values[0].hasAngle);
   CHECK(moves.values[0].angle == 180);
+  CHECK(moves.values[0].requestId == "request-1");
   CHECK(moves.values[1].switchId == "S2");
   CHECK(!moves.values[1].hasAngle);
   CHECK(moves.values[1].position == "diverge");
@@ -278,7 +288,7 @@ TEST(protocolSerializesPongSwitchAndTagEvents) {
       JsonCollector::receive));
 
   bus.publish(InboundLineEvent("{\"cmd\":\"ping\"}"));
-  bus.publish(SwitchMovedEvent(1, 110, true));
+  bus.publish(SwitchMovedEvent(1, 110, true, "request-2"));
   const uint8_t uid[] = {0x04, 0x00, 0xAB, 0xCD};
   bus.publish(TagChangedEvent(0, false, uid, sizeof(uid)));
 
@@ -292,9 +302,26 @@ TEST(protocolSerializesPongSwitchAndTagEvents) {
   CHECK(moved["switch"] == "S2");
   CHECK(moved["angle"] == 110);
   CHECK(moved["ok"] == true);
+  CHECK(moved["request_id"] == "request-2");
   CHECK(tag["event"] == "tag_removed");
   CHECK(tag["detector"] == "D1");
   CHECK(tag["tag_id"] == "04:00:AB:CD");
+}
+
+TEST(requestIdsAreCopiedIntoFixedEventStorage) {
+  const std::string exact(train::REQUEST_ID_SIZE - 1, 'a');
+  const std::string oversized(train::REQUEST_ID_SIZE + 10, 'b');
+
+  const MoveSwitchRequestedEvent requested{
+      "S1", true, 90, nullptr, exact.c_str()};
+  const SwitchMovedEvent moved{0, 90, true, oversized.c_str()};
+  const SwitchMovedEvent legacy{0, 90, true};
+
+  CHECK(std::string(requested.requestId) == exact);
+  CHECK(
+      std::string(moved.requestId) ==
+      oversized.substr(0, train::REQUEST_ID_SIZE - 1));
+  CHECK(std::string(legacy.requestId).empty());
 }
 
 TEST(switchModuleResolvesPositionsAndDetachesAfterSettleTime) {
@@ -311,11 +338,13 @@ TEST(switchModuleResolvesPositionsAndDetachesAfterSettleTime) {
       SwitchCollector::receive));
 
   fake_arduino::now = 100;
-  bus.publish(MoveSwitchRequestedEvent("S1", false, 0, "diverge"));
+  bus.publish(MoveSwitchRequestedEvent(
+      "S1", false, 0, "diverge", "request-3"));
   CHECK(moved.values.size() == 1);
   CHECK(moved.values[0].index == 0);
   CHECK(moved.values[0].angle == 105);
   CHECK(moved.values[0].ok);
+  CHECK(moved.values[0].requestId == "request-3");
   CHECK(fake_servo::pins[9].attached);
   CHECK(fake_servo::pins[9].angle == 105);
 
