@@ -17,6 +17,7 @@ import {
   type StateEnvelope,
   TrainApiClient,
 } from "@/src/api/train-api-client";
+import type { AutomationDocument } from "@/src/components/automation/types";
 import { toSystemModel } from "@/src/model/system-mapper";
 import type { ConnectionState, SystemModel } from "@/src/model/system";
 
@@ -30,6 +31,7 @@ export interface SystemActions {
     target: "straight" | "diverge",
   ): Promise<void>;
   setAutomationHalted(halted: boolean): Promise<void>;
+  replaceAutomation(document: AutomationDocument): Promise<AutomationDocument>;
   refresh(): Promise<void>;
 }
 
@@ -95,6 +97,13 @@ export function SystemProvider({ children }: { readonly children: ReactNode }) {
       await queryClient.invalidateQueries({ queryKey: STATE_QUERY_KEY });
     },
   });
+  const automationMutation = useMutation({
+    mutationFn: (document: AutomationDocument) =>
+      apiClient.replaceAutomation(document),
+    onSettled: async () => {
+      await queryClient.invalidateQueries({ queryKey: STATE_QUERY_KEY });
+    },
+  });
 
   const publish = useCallback(
     async (resource: string, event: PublicEvent) => {
@@ -138,11 +147,31 @@ export function SystemProvider({ children }: { readonly children: ReactNode }) {
         publish("automation", {
           type: halted ? "automation_halt" : "automation_resume",
         }),
+      replaceAutomation: async (document) => {
+        setCommandError(null);
+        setPendingResources((current) =>
+          new Set(current).add("automation-document"),
+        );
+        try {
+          return await automationMutation.mutateAsync(document);
+        } catch (error) {
+          setCommandError(
+            error instanceof Error ? error.message : "Could not save automation",
+          );
+          throw error;
+        } finally {
+          setPendingResources((current) => {
+            const next = new Set(current);
+            next.delete("automation-document");
+            return next;
+          });
+        }
+      },
       refresh: async () => {
         await stateQuery.refetch();
       },
     }),
-    [publish, stateQuery],
+    [automationMutation, publish, stateQuery],
   );
 
   const model = useMemo(

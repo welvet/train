@@ -16,6 +16,7 @@ export function SetTrainSpeedEditor({
       min={-100}
       max={100}
       step={5}
+      allowDecimal={false}
       value={node.speed}
       onChange={(speed) =>
         onChange({ ...node, speed: typeof speed === "number" ? speed : 0 })

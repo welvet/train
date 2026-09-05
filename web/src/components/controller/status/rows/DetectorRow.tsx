@@ -11,12 +11,14 @@ export function DetectorRow({
   hubId,
   topology,
   automationDocument,
+  automationSaving,
   onAutomationDocumentChange,
 }: {
   readonly detector: DetectorModel;
   readonly hubId: string;
   readonly topology: AutomationTopology;
   readonly automationDocument: AutomationDocument;
+  readonly automationSaving: boolean;
   readonly onAutomationDocumentChange: (document: AutomationDocument) => void;
 }) {
   return (
@@ -53,6 +55,7 @@ export function DetectorRow({
         detectorId={detector.id}
         topology={topology}
         document={automationDocument}
+        disabled={automationSaving}
         onDocumentChange={onAutomationDocumentChange}
       />
     </DeviceRow>

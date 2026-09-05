@@ -6,11 +6,15 @@ import type {
   SwitchPosition,
 } from "./types";
 
+const MAX_RULES = 1_000;
+const MAX_NODES_PER_RULE = 1_000;
+const MAX_TREE_DEPTH = 64;
+
 export function serializeAutomation(document: AutomationDocument): string {
   return JSON.stringify(validateAutomation(document), null, 2);
 }
 
-export function validateAutomation(document: AutomationDocument): AutomationDocument {
+export function validateAutomation(document: unknown): AutomationDocument {
   return parseAutomation(JSON.stringify(document));
 }
 
@@ -29,6 +33,9 @@ export function parseAutomation(source: string): AutomationDocument {
   }
   if (!Array.isArray(value.rules)) {
     throw new Error("Automation document rules must be an array.");
+  }
+  if (value.rules.length > MAX_RULES) {
+    throw new Error(`Automation document may contain at most ${MAX_RULES} rules.`);
   }
 
   const rules = value.rules.map(parseRule);
@@ -67,7 +74,8 @@ function parseRule(input: unknown, index: number): AutomationRule {
   if (root.type !== "train_detected") {
     throw new Error(`${label} root must have type train_detected.`);
   }
-  const children = childrenOf(root.children, `${label} root`);
+  const nodeCount = { value: 0 };
+  const children = childrenOf(root.children, `${label} root`, nodeCount, 1);
   if (children.length === 0) throw new Error(`${label} root needs at least one step.`);
   return {
     id,
@@ -82,21 +90,34 @@ function parseRule(input: unknown, index: number): AutomationRule {
   };
 }
 
-function parseNode(input: unknown, path: string): AutomationNode {
+function parseNode(
+  input: unknown,
+  path: string,
+  nodeCount: { value: number },
+  depth: number,
+): AutomationNode {
+  if (depth > MAX_TREE_DEPTH) {
+    throw new Error(`${path} tree depth must not exceed ${MAX_TREE_DEPTH}.`);
+  }
+  nodeCount.value += 1;
+  if (nodeCount.value > MAX_NODES_PER_RULE) {
+    throw new Error(`Rule may contain at most ${MAX_NODES_PER_RULE} nodes.`);
+  }
   const value = object(input, path);
   switch (value.type) {
     case "set_train_speed": {
       exactKeys(value, ["type", "speed", "children"], path);
       emptyChildren(value.children, path);
+      const speed = value.speed;
       if (
-        typeof value.speed !== "number" ||
-        !Number.isFinite(value.speed) ||
-        value.speed < -100 ||
-        value.speed > 100
+        typeof speed !== "number" ||
+        !Number.isInteger(speed) ||
+        speed < -100 ||
+        speed > 100
       ) {
-        throw new Error(`${path} speed must be a number from -100 to 100.`);
+        throw new Error(`${path} speed must be an integer from -100 to 100.`);
       }
-      return { type: "set_train_speed", speed: value.speed, children: [] };
+      return { type: "set_train_speed", speed, children: [] };
     }
     case "set_switch": {
       exactKeys(value, ["type", "hub_id", "switch_id", "position", "children"], path);
@@ -122,7 +143,7 @@ function parseNode(input: unknown, path: string): AutomationNode {
       ) {
         throw new Error(`${path} seconds must be a finite number from 0 to 3600.`);
       }
-      const children = childrenOf(value.children, path);
+      const children = childrenOf(value.children, path, nodeCount, depth + 1);
       if (children.length === 0) throw new Error(`${path} needs at least one child step.`);
       return { type: "wait", seconds: value.seconds, children };
     }
@@ -134,7 +155,7 @@ function parseNode(input: unknown, path: string): AutomationNode {
       if (value.mode !== "once" && value.mode !== "repeat") {
         throw new Error(`${path} mode must be once or repeat.`);
       }
-      const children = childrenOf(value.children, path);
+      const children = childrenOf(value.children, path, nodeCount, depth + 1);
       if (children.length === 0) throw new Error(`${path} needs at least one child step.`);
       return {
         type: "on_count",
@@ -148,9 +169,16 @@ function parseNode(input: unknown, path: string): AutomationNode {
   }
 }
 
-function childrenOf(input: unknown, path: string): AutomationNode[] {
+function childrenOf(
+  input: unknown,
+  path: string,
+  nodeCount: { value: number },
+  depth: number,
+): AutomationNode[] {
   if (!Array.isArray(input)) throw new Error(`${path} children must be an array.`);
-  return input.map((child, index) => parseNode(child, `${path} child ${index + 1}`));
+  return input.map((child, index) =>
+    parseNode(child, `${path} child ${index + 1}`, nodeCount, depth),
+  );
 }
 
 function emptyChildren(input: unknown, path: string) {
@@ -170,7 +198,7 @@ function nonEmptyString(input: unknown, label: string): string {
   if (typeof input !== "string" || input.trim() === "") {
     throw new Error(`${label} must be a non-empty string.`);
   }
-  return input;
+  return input.trim();
 }
 
 function exactKeys(value: Record<string, unknown>, expected: string[], label: string) {

@@ -1,4 +1,8 @@
-import { ApiRequestError, TrainApiClient } from "./train-api-client";
+import {
+  ApiRequestError,
+  type StateEnvelope,
+  TrainApiClient,
+} from "./train-api-client";
 
 describe("TrainApiClient", () => {
   afterEach(() => {
@@ -23,6 +27,25 @@ describe("TrainApiClient", () => {
     );
   });
 
+  it("rejects malformed automation in a state envelope", async () => {
+    const envelope = stateEnvelope();
+    envelope.automation.document = {};
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify(envelope), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+
+    await expect(new TrainApiClient().getState()).rejects.toMatchObject({
+      message: "The backend returned an unsupported automation format",
+      status: 0,
+    });
+  });
+
   it("marks a timed out command as having an unknown outcome", async () => {
     vi.stubGlobal(
       "fetch",
@@ -44,6 +67,80 @@ describe("TrainApiClient", () => {
       outcomeUnknown: true,
       status: 504,
     } satisfies Partial<ApiRequestError>);
+  });
+
+  it("includes backend validation paths in request errors", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            error: "train has no tag_id: express",
+            path: "$.rules[0].root.train_id",
+          }),
+          {
+            status: 400,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+      ),
+    );
+
+    await expect(
+      new TrainApiClient().replaceAutomation({ version: 1, rules: [] }),
+    ).rejects.toMatchObject({
+      message: "$.rules[0].root.train_id: train has no tag_id: express",
+      status: 400,
+    });
+  });
+
+  it("replaces the complete automation document", async () => {
+    const document = {
+      version: 1 as const,
+      rules: [],
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          automation: { document, paused: false, statuses: [] },
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(new TrainApiClient().replaceAutomation(document)).resolves.toEqual(
+      document,
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/automation",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify(document),
+      }),
+    );
+  });
+
+  it("rejects an unsupported automation update response", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ automation: { document: {} } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+
+    await expect(
+      new TrainApiClient().replaceAutomation({ version: 1, rules: [] }),
+    ).rejects.toMatchObject({
+      message: "The backend returned an unsupported automation format",
+      status: 0,
+    });
   });
 
   it("applies complete state snapshots from the live stream", () => {
@@ -157,7 +254,7 @@ class FakeEventSource {
   }
 }
 
-function stateEnvelope() {
+function stateEnvelope(): StateEnvelope {
   return {
     version: 3 as const,
     snapshot_at: 2,

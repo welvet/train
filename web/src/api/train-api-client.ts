@@ -1,4 +1,6 @@
 import type { components } from "./generated/schema";
+import { validateAutomation } from "@/src/components/automation/automation-json";
+import type { AutomationDocument } from "@/src/components/automation/types";
 
 export type StateEnvelope = components["schemas"]["StateEnvelope"];
 export type PublicEvent = components["schemas"]["PublicEvent"];
@@ -38,6 +40,14 @@ export class TrainApiClient {
     if (!isStateEnvelope(body)) {
       throw new ApiRequestError("The backend returned an unsupported state format", 0);
     }
+    try {
+      validateAutomation(body.automation.document);
+    } catch {
+      throw new ApiRequestError(
+        "The backend returned an unsupported automation format",
+        0,
+      );
+    }
     return body;
   }
 
@@ -54,6 +64,42 @@ export class TrainApiClient {
       throw await this.errorFrom(response);
     }
     return (await response.json()) as CommandResponse;
+  }
+
+  async replaceAutomation(
+    document: AutomationDocument,
+  ): Promise<AutomationDocument> {
+    const response = await fetch(this.url("/api/automation"), {
+      method: "PUT",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(document),
+    });
+    if (!response.ok) {
+      throw await this.errorFrom(response);
+    }
+
+    const body: unknown = await response.json();
+    if (
+      !isRecord(body) ||
+      !isRecord(body.automation) ||
+      !isRecord(body.automation.document)
+    ) {
+      throw new ApiRequestError(
+        "The backend returned an unsupported automation format",
+        0,
+      );
+    }
+    try {
+      return validateAutomation(body.automation.document);
+    } catch {
+      throw new ApiRequestError(
+        "The backend returned an unsupported automation format",
+        0,
+      );
+    }
   }
 
   subscribeToState(
@@ -110,6 +156,11 @@ export class TrainApiClient {
           if (!isStateEnvelope(body)) {
             throw new Error("The backend streamed an unsupported state format");
           }
+          try {
+            validateAutomation(body.automation.document);
+          } catch {
+            throw new Error("The backend streamed an unsupported automation format");
+          }
           reconnectDelay = INITIAL_STREAM_RECONNECT_DELAY_MS;
           onState(body);
         } catch (error) {
@@ -150,9 +201,12 @@ export class TrainApiClient {
   private async errorFrom(response: Response): Promise<ApiRequestError> {
     let message = `Backend request failed (${response.status})`;
     try {
-      const body = (await response.json()) as { error?: unknown };
+      const body = (await response.json()) as { error?: unknown; path?: unknown };
       if (typeof body.error === "string") {
-        message = body.error;
+        message =
+          typeof body.path === "string"
+            ? `${body.path}: ${body.error}`
+            : body.error;
       }
     } catch {
       // Keep the status-based fallback when the body is not JSON.

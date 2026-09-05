@@ -1,3 +1,5 @@
+import type { AutomationDocument } from "@/src/components/automation/types";
+
 export type ConnectionState = "loading" | "online" | "stale" | "offline";
 
 export interface LegoHubModel {
@@ -39,6 +41,7 @@ export interface SystemModel {
   readonly updatedAt: number;
   readonly running: boolean;
   readonly automationHalted: boolean;
+  readonly automationDocument: AutomationDocument;
   readonly trains: readonly TrainModel[];
   readonly arduinoHubs: readonly ArduinoHubModel[];
 }
