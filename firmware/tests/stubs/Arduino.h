@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <string>
+#include <sstream>
 #include <utility>
 #include <vector>
 
@@ -26,11 +27,13 @@ struct PinWrite {
 inline unsigned long now = 0;
 inline std::vector<std::pair<uint8_t, uint8_t>> pinModes;
 inline std::vector<PinWrite> pinWrites;
+inline std::string serialOutput;
 
 inline void reset() {
   now = 0;
   pinModes.clear();
   pinWrites.clear();
+  serialOutput.clear();
 }
 
 }  // namespace fake_arduino
@@ -50,10 +53,17 @@ class HardwareSerial {
   void begin(unsigned long) {}
 
   template <typename Value>
-  void print(const Value&) {}
+  void print(const Value& value) {
+    std::ostringstream output;
+    output << value;
+    fake_arduino::serialOutput += output.str();
+  }
 
   template <typename Value>
-  void println(const Value&) {}
+  void println(const Value& value) {
+    print(value);
+    fake_arduino::serialOutput += '\n';
+  }
 };
 
 inline HardwareSerial Serial;

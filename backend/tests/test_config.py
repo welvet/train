@@ -217,6 +217,16 @@ def test_reader_timeout_must_fit_uint16(tmp_path: Path) -> None:
         validate_arduino_upload_config(tmp_path)
 
 
+def test_event_logger_flag_must_be_boolean(tmp_path: Path) -> None:
+    _write_config(tmp_path)
+    devices = json.loads((tmp_path / "arduinos.json").read_text())
+    devices["devices"]["arduino_1"]["event_logger_enabled"] = "yes"
+    (tmp_path / "arduinos.json").write_text(json.dumps(devices))
+
+    with pytest.raises(ConfigError, match="event_logger_enabled"):
+        validate_arduino_upload_config(tmp_path)
+
+
 def test_upload_only_fields_do_not_block_backend_config(tmp_path: Path) -> None:
     _write_config(tmp_path)
     devices = json.loads((tmp_path / "arduinos.json").read_text())

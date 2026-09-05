@@ -11,6 +11,14 @@ constexpr EventMask eventMask(EventType type) {
   return static_cast<EventMask>(1) << static_cast<uint8_t>(type);
 }
 
+constexpr EventMask allEventsMask() {
+  return eventMask(EventType::Count) - 1;
+}
+
+static_assert(
+    static_cast<uint8_t>(EventType::Count) < sizeof(EventMask) * 8,
+    "EventMask needs one bit for every event type");
+
 class EventBus {
  public:
   using Handler = void (*)(void* context, const Event& event);

@@ -1,9 +1,10 @@
 #include "event_bus.h"
+#include "event_led_module.h"
+#include "event_logger_module.h"
 #include "model.h"
 #include "module.h"
 #include "protocol_module.h"
 #include "reader_module.h"
-#include "status_led_module.h"
 #include "switch_module.h"
 #include "transport_module.h"
 #include "wifi_module.h"
@@ -11,19 +12,21 @@
 train::EventBus bus;
 train::ControllerModel model;
 
+train::EventLoggerModule eventLogger(bus);
+train::EventLedModule eventLed(bus);
 train::TransportModule transport(bus, model);
 train::ProtocolModule protocol(bus, model);
 train::SwitchModule switches(bus, model);
 train::ReaderModule readers(bus, model);
-train::StatusLedModule statusLed(model);
 train::WifiModule wifi(bus, model);
 
 train::Module* modules[] = {
+    &eventLogger,
+    &eventLed,
     &transport,
     &protocol,
     &switches,
     &readers,
-    &statusLed,
     &wifi,
 };
 constexpr size_t moduleCount = sizeof(modules) / sizeof(modules[0]);

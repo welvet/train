@@ -12,9 +12,10 @@
 #include <vector>
 
 #include "event_bus.h"
+#include "event_led_module.h"
+#include "event_logger_module.h"
 #include "protocol_module.h"
 #include "reader_module.h"
-#include "status_led_module.h"
 #include "switch_module.h"
 #include "transport_module.h"
 #include "wifi_module.h"
@@ -588,25 +589,78 @@ TEST(wifiModulePublishesTransitionsAndRetries) {
   CHECK(changes.values.back() == EventType::WifiDisconnected);
 }
 
-TEST(statusLedIsSolidWhenConnectedAndBlinksWhenDisconnected) {
+TEST(eventLoggerPrintsEveryEventWhenEnabled) {
   resetFakes();
-  ControllerModel model;
-  train::StatusLedModule led(model);
+  EventBus bus;
+  train::EventLoggerModule logger(bus, true);
+
+  CHECK(logger.setup());
+  bus.publish(WifiConnectedEvent());
+  bus.publish(WifiDisconnectedEvent());
+  bus.publish(BackendConnectedEvent());
+  bus.publish(BackendDisconnectedEvent());
+  bus.publish(InboundLineEvent("line"));
+  JsonDocument document;
+  bus.publish(OutboundDocumentEvent(document));
+  bus.publish(MoveSwitchRequestedEvent("S1", true, 90, nullptr));
+  bus.publish(SwitchMovedEvent(0, 90, true));
+  const uint8_t uid[] = {0x04};
+  bus.publish(TagChangedEvent(0, true, uid, sizeof(uid)));
+
+  CHECK(fake_arduino::serialOutput ==
+        "event: wifi_connected\n"
+        "event: wifi_disconnected\n"
+        "event: backend_connected\n"
+        "event: backend_disconnected\n"
+        "event: inbound_line\n"
+        "event: outbound_document\n"
+        "event: move_switch_requested\n"
+        "event: switch_moved\n"
+        "event: tag_changed\n");
+}
+
+TEST(eventLoggerDoesNothingWhenDisabled) {
+  resetFakes();
+  EventBus bus;
+  train::EventLoggerModule logger(bus, false);
+
+  CHECK(logger.setup());
+  bus.publish(WifiConnectedEvent());
+
+  CHECK(fake_arduino::serialOutput.empty());
+}
+
+TEST(eventLedBlipsOnEveryEvent) {
+  resetFakes();
+  EventBus bus;
+  train::EventLedModule led(bus);
 
   CHECK(led.setup());
   CHECK(fake_arduino::pinModes.size() == 1);
   CHECK(fake_arduino::pinModes[0] == std::make_pair(LED_BUILTIN, OUTPUT));
+  CHECK(fake_arduino::pinWrites.back().value == HIGH);
 
-  model.backendConnected = true;
-  fake_arduino::now = 151;
-  led.trigger();
+  fake_arduino::now = 100;
+  bus.publish(WifiConnectedEvent());
   CHECK(fake_arduino::pinWrites.back().value == LOW);
 
-  model.backendConnected = false;
-  fake_arduino::now = 0;
+  fake_arduino::now = 149;
   led.trigger();
   CHECK(fake_arduino::pinWrites.back().value == LOW);
   fake_arduino::now = 150;
+  led.trigger();
+  CHECK(fake_arduino::pinWrites.back().value == HIGH);
+
+  fake_arduino::now = 200;
+  bus.publish(BackendConnectedEvent());
+  CHECK(fake_arduino::pinWrites.back().value == LOW);
+  fake_arduino::now = 225;
+  const uint8_t secondUid[] = {0x05};
+  bus.publish(TagChangedEvent(0, true, secondUid, sizeof(secondUid)));
+  fake_arduino::now = 274;
+  led.trigger();
+  CHECK(fake_arduino::pinWrites.back().value == LOW);
+  fake_arduino::now = 275;
   led.trigger();
   CHECK(fake_arduino::pinWrites.back().value == HIGH);
 }
