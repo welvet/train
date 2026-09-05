@@ -1,11 +1,26 @@
 import { Badge, Group, Paper, Stack, Text } from "@mantine/core";
+import { useState } from "react";
 
+import type { AutomationDocument, AutomationTopology } from "@/src/components/automation/types";
 import type { SystemModel } from "@/src/model/system";
 import { ArduinoHubRow } from "./rows/ArduinoHubRow";
 import { TrainRow } from "./rows/TrainRow";
 import { StatusGroup } from "./StatusGroup";
 
 export function StatusAggregation({ system }: { readonly system: SystemModel }) {
+  const [automationDocument, setAutomationDocument] = useState<AutomationDocument>({
+    version: 1,
+    rules: [],
+  });
+  const topology: AutomationTopology = {
+    trainIds: system.trains.map((train) => train.id),
+    switches: system.arduinoHubs.flatMap((hub) =>
+      hub.switches.map((railwaySwitch) => ({ hubId: hub.id, switchId: railwaySwitch.id })),
+    ),
+    detectors: system.arduinoHubs.flatMap((hub) =>
+      hub.detectors.map((detector) => ({ hubId: hub.id, detectorId: detector.id })),
+    ),
+  };
   return (
     <Stack gap="lg">
       <Paper withBorder radius="md" p="md">
@@ -43,7 +58,13 @@ export function StatusAggregation({ system }: { readonly system: SystemModel }) 
         isEmpty={system.arduinoHubs.length === 0}
       >
         {system.arduinoHubs.map((hub) => (
-          <ArduinoHubRow key={hub.id} hub={hub} />
+          <ArduinoHubRow
+            key={hub.id}
+            hub={hub}
+            topology={topology}
+            automationDocument={automationDocument}
+            onAutomationDocumentChange={setAutomationDocument}
+          />
         ))}
       </StatusGroup>
     </Stack>

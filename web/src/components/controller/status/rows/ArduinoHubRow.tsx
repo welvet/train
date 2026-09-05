@@ -1,6 +1,7 @@
 import Robot from "@fluentui-emoji/react/flat/robot";
 import { Text } from "@mantine/core";
 
+import type { AutomationDocument, AutomationTopology } from "@/src/components/automation/types";
 import type { ArduinoHubModel } from "@/src/model/system";
 import { DeviceRow } from "../DeviceRow";
 import { StatusBadge } from "../StatusBadge";
@@ -8,7 +9,17 @@ import { StatusGroup } from "../StatusGroup";
 import { DetectorRow } from "./DetectorRow";
 import { SwitchRow } from "./SwitchRow";
 
-export function ArduinoHubRow({ hub }: { readonly hub: ArduinoHubModel }) {
+export function ArduinoHubRow({
+  hub,
+  topology,
+  automationDocument,
+  onAutomationDocumentChange,
+}: {
+  readonly hub: ArduinoHubModel;
+  readonly topology: AutomationTopology;
+  readonly automationDocument: AutomationDocument;
+  readonly onAutomationDocumentChange: (document: AutomationDocument) => void;
+}) {
   return (
     <DeviceRow
       icon={<Robot width={36} aria-hidden />}
@@ -42,7 +53,14 @@ export function ArduinoHubRow({ hub }: { readonly hub: ArduinoHubModel }) {
         nested
       >
         {hub.detectors.map((detector) => (
-          <DetectorRow key={detector.id} detector={detector} />
+          <DetectorRow
+            key={detector.id}
+            detector={detector}
+            hubId={hub.id}
+            topology={topology}
+            automationDocument={automationDocument}
+            onAutomationDocumentChange={onAutomationDocumentChange}
+          />
         ))}
       </StatusGroup>
     </DeviceRow>
