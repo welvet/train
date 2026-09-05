@@ -133,10 +133,15 @@ def test_bundle_contains_wheel_and_runtime_data_only(
             "data/trains.json",
             "data/arduinos.json",
             "data/automations.json",
+            "data/automation.py",
         }
         manifest = json.load(archive.extractfile("manifest.json"))
     assert set(manifest["files"]) == names - {"manifest.json"}
     assert manifest["runtime"] == target.as_dict()
+    with tarfile.open(bundle, "r:gz") as archive:
+        legacy_automation = archive.extractfile("data/automation.py")
+        assert legacy_automation is not None
+        assert legacy_automation.read() == b""
     assert commands[:2] == [["npm", "ci"], ["npm", "run", "build"]]
     with tarfile.open(bundle, "r:gz") as archive:
         backend_wheel = archive.extractfile("wheels/train-0.1.0-py3-none-any.whl")

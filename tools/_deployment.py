@@ -32,6 +32,7 @@ RUNTIME_DATA_FILES = (
     "arduinos.json",
     "automations.json",
 )
+LEGACY_AUTOMATION_FILE = "automation.py"
 WEB_BUILD_INPUTS = (
     "app",
     "public",
@@ -216,9 +217,14 @@ def build_bundle(workspace: Path, destination: Path, target: RuntimeTarget) -> s
         for wheel in wheels:
             _normalize_wheel(wheel)
 
+        # Supervisors from before the JSON migration require this path but do
+        # not execute it when starting a current backend release.
+        legacy_automation = build_dir / LEGACY_AUTOMATION_FILE
+        legacy_automation.write_bytes(b"")
         payloads = {
             **{f"wheels/{path.name}": path for path in wheels},
             **{f"data/{name}": workspace / name for name in RUNTIME_DATA_FILES},
+            f"data/{LEGACY_AUTOMATION_FILE}": legacy_automation,
         }
         manifest = {
             "format": 1,
