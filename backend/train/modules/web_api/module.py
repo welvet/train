@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from aiohttp import web
@@ -22,6 +23,7 @@ class WebApiModule(Module):
         port: int = 8080,
         shutdown_callback: Callable[[], Any] | None = None,
         readiness_check: Callable[[], bool] | None = None,
+        static_root: Path | None = None,
     ) -> None:
         super().__init__(bus)
         self._controller = WebApiController(
@@ -34,6 +36,7 @@ class WebApiModule(Module):
             port=port,
             shutdown_callback=shutdown_callback,
             readiness_check=readiness_check or (lambda: True),
+            static_root=static_root,
         )
 
     @property

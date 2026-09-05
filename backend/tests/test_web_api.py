@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 import pytest
 from aiohttp import web
@@ -19,6 +20,7 @@ from train.domain import (
     TrainStatus,
 )
 from train.modules.web_api import WebApiModule
+from train.modules.web_api.static_files import StaticFileResolver
 
 
 @pytest.fixture
@@ -65,6 +67,70 @@ async def test_health_reports_release(
 
     assert response.status == 200
     assert await response.json() == {"status": "ok", "release": "release-id"}
+
+
+async def test_serves_static_frontend_and_assets(
+    bus: EventBus,
+    tmp_path: Path,
+) -> None:
+    static_root = tmp_path / "static"
+    asset = static_root / "_next" / "static" / "app.js"
+    asset.parent.mkdir(parents=True)
+    (static_root / "index.html").write_text("<h1>Train</h1>")
+    asset.write_text("console.log('train')")
+    mod = WebApiModule(bus, host="127.0.0.1", port=0, static_root=static_root)
+    await mod.start()
+    assert mod._app is not None
+    client = TestClient(TestServer(mod._app))
+    await client.start_server()
+    try:
+        response = await client.get("/")
+        assert response.status == 200
+        assert await response.text() == "<h1>Train</h1>"
+
+        response = await client.get("/_next/static/app.js")
+        assert response.status == 200
+        assert await response.text() == "console.log('train')"
+    finally:
+        await client.close()
+        await mod.stop()
+
+
+async def test_static_frontend_supports_exported_routes_and_404_page(
+    bus: EventBus,
+    tmp_path: Path,
+) -> None:
+    static_root = tmp_path / "static"
+    static_root.mkdir()
+    (static_root / "control.html").write_text("control")
+    (static_root / "404.html").write_text("missing")
+    mod = WebApiModule(bus, host="127.0.0.1", port=0, static_root=static_root)
+    await mod.start()
+    assert mod._app is not None
+    client = TestClient(TestServer(mod._app))
+    await client.start_server()
+    try:
+        response = await client.get("/control")
+        assert response.status == 200
+        assert await response.text() == "control"
+
+        response = await client.get("/unknown")
+        assert response.status == 404
+        assert await response.text() == "missing"
+    finally:
+        await client.close()
+        await mod.stop()
+
+
+def test_static_frontend_rejects_unsafe_paths(tmp_path: Path) -> None:
+    static_root = tmp_path / "static"
+    static_root.mkdir()
+    outside = tmp_path / "secret.txt"
+    outside.write_text("secret")
+    resolver = StaticFileResolver(static_root)
+
+    assert resolver._resolve("../secret.txt") is None
+    assert resolver._resolve("\0") is None
 
 
 async def test_health_reports_failed_readiness(bus: EventBus) -> None:

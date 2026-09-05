@@ -32,6 +32,15 @@ RUNTIME_DATA_FILES = (
     "arduinos.json",
     "automation.py",
 )
+WEB_BUILD_INPUTS = (
+    "app",
+    "public",
+    "eslint.config.mjs",
+    "next.config.ts",
+    "package-lock.json",
+    "package.json",
+    "tsconfig.json",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,6 +134,33 @@ def build_bundle(workspace: Path, destination: Path, target: RuntimeTarget) -> s
     validate_workspace(workspace)
     with tempfile.TemporaryDirectory(prefix="train-release-build-") as directory:
         build_dir = Path(directory)
+        web_source = build_dir / "web-source"
+        web_source.mkdir()
+        for name in WEB_BUILD_INPUTS:
+            source = REPO_ROOT / "web" / name
+            destination_path = web_source / name
+            if source.is_dir():
+                shutil.copytree(source, destination_path)
+            elif source.is_file():
+                shutil.copy2(source, destination_path)
+        build_environment = {
+            name: value
+            for name, value in os.environ.items()
+            if not name.startswith("NEXT_PUBLIC_")
+        }
+        subprocess.run(
+            ["npm", "ci"], cwd=web_source, env=build_environment, check=True
+        )
+        subprocess.run(
+            ["npm", "run", "build"],
+            cwd=web_source,
+            env=build_environment,
+            check=True,
+        )
+        web_output = web_source / "out"
+        if not (web_output / "index.html").is_file():
+            raise RuntimeError("Frontend build did not produce web/out/index.html")
+
         wheel_dir = build_dir / "wheels"
         wheel_dir.mkdir()
         source_dir = build_dir / "backend-source"
@@ -134,6 +170,10 @@ def build_bundle(workspace: Path, destination: Path, target: RuntimeTarget) -> s
             ignore=shutil.ignore_patterns(
                 ".venv", "build", ".pytest_cache", "*.egg-info", "__pycache__", "tests"
             ),
+        )
+        shutil.copytree(
+            web_output,
+            source_dir / "train" / "modules" / "web_api" / "static",
         )
         subprocess.run(
             [

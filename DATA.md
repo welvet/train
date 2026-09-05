@@ -160,8 +160,9 @@ train and one Arduino device, then run `tools/data validate`.
 
 ## Server deployment
 
-`tools/server-push` builds the backend and all Python dependencies into a wheel
-bundle with only the runtime data files. Wi-Fi and FTP secrets are never
+`tools/server-push` builds the static frontend first, packages it with the
+backend and all Python dependencies into a wheel bundle, and adds only the
+runtime data files. Wi-Fi and FTP secrets are never
 included. The release is uploaded under its SHA-256 name, and `release.json`
 with a unique publication attempt is updated last to trigger activation. The
 command returns only after both the FTP activation marker and the backend's
