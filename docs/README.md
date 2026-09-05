@@ -1,6 +1,9 @@
 # Documentation
 
-- [Writing automations](automations.md) explains the stable Python API, event
+- [Configurable automation design](configurable-automations.md) proposes the
+  versioned JSON rule and action-tree format intended to replace programmable
+  `automation.py`.
+- [Writing automations](automations.md) explains the current Python API, event
   lifecycle, command behavior, and safe patterns for `automation.py`.
 - [Web API](web-api.md) documents the shared state snapshot and public command
   event transport.
