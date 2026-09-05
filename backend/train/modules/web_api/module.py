@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from aiohttp import web
@@ -18,6 +18,10 @@ class WebApiModule(Module):
         host: str = "0.0.0.0",
         port: int = 8080,
         readiness_check: Callable[[], bool] | None = None,
+        automation_snapshot: Callable[[], dict[str, object]] | None = None,
+        automation_update: Callable[[str], Awaitable[dict[str, object]]] | None = None,
+        automation_subscribe: Callable[[Callable[[], None]], None] | None = None,
+        automation_unsubscribe: Callable[[Callable[[], None]], None] | None = None,
         static_root: Path | None = None,
     ) -> None:
         super().__init__(bus)
@@ -26,6 +30,10 @@ class WebApiModule(Module):
             host=host,
             port=port,
             readiness_check=readiness_check or (lambda: True),
+            automation_snapshot=automation_snapshot,
+            automation_update=automation_update,
+            automation_subscribe=automation_subscribe,
+            automation_unsubscribe=automation_unsubscribe,
             static_root=static_root,
         )
 

@@ -50,6 +50,7 @@ def init_workspace(root: Path) -> None:
         },
     }
     secrets = {"devices": {}, "deployment": {"ftp_password": ""}}
+    automations = {"version": 1, "rules": []}
 
     for name, value in (
         ("backend.json", backend),
@@ -57,19 +58,10 @@ def init_workspace(root: Path) -> None:
         ("arduinos.json", arduinos),
         ("deployment.json", deployment),
         ("secrets.json", secrets),
+        ("automations.json", automations),
     ):
         if write_json(root / name, value):
             created.append(name)
-
-    automation_path = root / "automation.py"
-    if not automation_path.exists():
-        automation_path.write_text(
-            "def configure(ctx):\n"
-            "    pass\n\n\n"
-            "async def run(ctx):\n"
-            "    await ctx.forever()\n"
-        )
-        created.append("automation.py")
 
     secrets_file = root / "secrets.json"
     if secrets_file.exists():

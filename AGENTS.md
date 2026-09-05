@@ -80,17 +80,15 @@ never contains train identity.
 
 The backend is a Python 3.11+ asyncio application using `bleak` and `aiohttp`.
 
-- `train/config.py` validates local backend and train configuration and loads
-  the programmable `data/automation.py` entry point.
+- `train/config.py` validates local backend and train configuration.
 - `train/modules/lego_ble.py` manages configured LEGO hubs.
 - `train/modules/arduino_hub.py` reconciles Arduino snapshots and tag events.
-- `train/modules/automation.py` provides the public `AutomationContext` DSL.
+- `train/modules/automation.py` connects the configurable JSON automation tree.
 - `train/domain/state.py` is the canonical state reduced from domain events.
 - `train/modules/web_api/` exposes that state and the public event vocabulary.
 
-Local automation imports `AutomationContext` from `train.automation` and event
-classes from `train.domain`, registers event handlers in synchronous
-`configure(ctx)`, and performs long-running work in `async run(ctx)`.
+Local automation is stored in `data/automations.json`, validated against the
+configured topology, and can be replaced through the web API.
 
 Run locally:
 

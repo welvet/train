@@ -74,26 +74,38 @@ def arduino_secrets(device_id: str, root: Path | None = None) -> dict[str, str]:
 def validate_workspace(root: Path | None = None) -> None:
     workspace = root or data_dir()
     runtime = _validate_runtime_config(workspace)
-    devices_data = read_json("arduinos.json", workspace)
-    devices = _object(devices_data, "devices", "arduinos.json")
     for device in runtime.arduinos:
-        assert device.device_id in devices
         arduino_secrets(device.device_id, workspace)
 
-    automation = workspace / "automation.py"
-    if not automation.is_file():
-        raise WorkspaceError(f"Missing {automation}")
-    validate_automation(workspace)
+    validate_automation(workspace, runtime)
 
 
-def validate_automation(root: Path) -> None:
+def validate_automation(root: Path, runtime=None) -> None:
     if str(BACKEND_ROOT) not in sys.path:
         sys.path.insert(0, str(BACKEND_ROOT))
-    from train.config import ConfigError, load_automation
+    from automation_tree import AutomationParseError
+    from train.config import load_runtime_config
+    from train.domain import SystemState
+    from train.modules.automation import create_automation_parser, load_automation_file
 
     try:
-        load_automation(root)
-    except ConfigError as exc:
+        resolved_runtime = runtime or load_runtime_config(root)
+        parser, _ = create_automation_parser()
+        load_automation_file(
+            root / "automations.json",
+            parser=parser,
+            state=SystemState.from_topology(
+                train_hubs={
+                    train.train_id: train.lego_hub_id
+                    for train in resolved_runtime.trains
+                },
+                arduino_hubs=resolved_runtime.arduino_hubs,
+            ),
+            tagged_trains={
+                train.train_id for train in resolved_runtime.trains if train.tag_id
+            },
+        )
+    except (AutomationParseError, ValueError) as exc:
         raise WorkspaceError(str(exc)) from exc
 
 

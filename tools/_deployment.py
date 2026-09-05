@@ -30,7 +30,7 @@ RUNTIME_DATA_FILES = (
     "backend.json",
     "trains.json",
     "arduinos.json",
-    "automation.py",
+    "automations.json",
 )
 WEB_BUILD_INPUTS = (
     "app",

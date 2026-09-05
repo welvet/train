@@ -44,8 +44,8 @@ def _write_workspace(root: Path) -> None:
             }
         }
     }))
-    (root / "automation.py").write_text(
-        "def configure(ctx):\n    pass\n\nasync def run(ctx):\n    await ctx.forever()\n"
+    (root / "automations.json").write_text(
+        json.dumps({"version": 1, "rules": []})
     )
     (root / "deployment.json").write_text(json.dumps({
         "ftp": {
@@ -132,7 +132,7 @@ def test_bundle_contains_wheel_and_runtime_data_only(
             "data/backend.json",
             "data/trains.json",
             "data/arduinos.json",
-            "data/automation.py",
+            "data/automations.json",
         }
         manifest = json.load(archive.extractfile("manifest.json"))
     assert set(manifest["files"]) == names - {"manifest.json"}

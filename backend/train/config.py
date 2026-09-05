@@ -1,16 +1,12 @@
 from __future__ import annotations
 
-import importlib.util
-import inspect
 import json
 import os
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from train.modules.arduino_hub.timing import MAX_READER_READ_TIMEOUT_MS
-from train.modules.automation import ConfigureFn, ScriptFn
 
 
 class ConfigError(ValueError):
@@ -47,12 +43,6 @@ class ArduinoDeviceConfig:
     hub_id: str
     switches: tuple[ArduinoSwitchConfig, ...]
     readers: tuple[str, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class AutomationProgram:
-    configure: ConfigureFn
-    run: ScriptFn
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,6 +86,13 @@ def default_data_dir() -> Path:
     if configured:
         return Path(configured).expanduser().resolve()
     return Path(__file__).resolve().parents[2] / "data"
+
+
+def default_automation_path() -> Path:
+    configured = os.environ.get("TRAIN_AUTOMATIONS_PATH")
+    if configured:
+        return Path(configured).expanduser().resolve()
+    return default_data_dir() / "automations.json"
 
 
 def load_runtime_config(data_dir: Path | None = None) -> RuntimeConfig:
@@ -225,35 +222,6 @@ def validate_arduino_upload_config(data_dir: Path | None = None) -> None:
             )
 
 
-def load_automation(data_dir: Path | None = None) -> AutomationProgram:
-    root = data_dir or default_data_dir()
-    path = root / "automation.py"
-    if not path.is_file():
-        raise ConfigError(
-            f"Missing {path}. Create the workspace with 'tools/data init'."
-        )
-    module_name = "train_workspace_automation"
-    spec = importlib.util.spec_from_file_location(module_name, path)
-    if spec is None or spec.loader is None:
-        raise ConfigError(f"Cannot load automation script from {path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    try:
-        spec.loader.exec_module(module)
-    except Exception as exc:
-        sys.modules.pop(module_name, None)
-        raise ConfigError(f"Cannot load {path}: {exc}") from exc
-    configure = getattr(module, "configure", None)
-    script = getattr(module, "run", None)
-    if not callable(configure) or inspect.iscoroutinefunction(configure):
-        raise ConfigError(f"{path} must export synchronous def configure(ctx)")
-    if not inspect.iscoroutinefunction(script):
-        raise ConfigError(f"{path} must export async def run(ctx)")
-    _validate_context_signature(configure, path, "configure")
-    _validate_context_signature(script, path, "run")
-    return AutomationProgram(configure=configure, run=script)
-
-
 def _read_json(path: Path) -> dict[str, Any]:
     try:
         value = json.loads(path.read_text())
@@ -351,10 +319,3 @@ def _unique(value: str, seen: set[str], source: str) -> None:
     if value in seen:
         raise ConfigError(f"{source}: duplicate value '{value}'")
     seen.add(value)
-
-
-def _validate_context_signature(function: Any, path: Path, name: str) -> None:
-    try:
-        inspect.signature(function).bind(object())
-    except TypeError as exc:
-        raise ConfigError(f"{path}: {name} must accept one context argument") from exc

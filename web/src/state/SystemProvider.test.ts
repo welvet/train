@@ -24,8 +24,13 @@ it("uses the revision to order snapshots with the same timestamp", () => {
 
 function stateEnvelope(revision: number, snapshotAt: number): StateEnvelope {
   return {
-    version: 2,
+    version: 3,
     snapshot_at: snapshotAt,
+    automation: {
+      document: { version: 1, rules: [] },
+      paused: false,
+      statuses: [],
+    },
     state: {
       revision,
       updated_at: snapshotAt,

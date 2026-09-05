@@ -137,32 +137,27 @@ ABI. Runtime dependencies are pinned with hashes in a target-keyed file under
 `backend/requirements/`. `tools/data init` leaves the target empty because it
 is an installation choice; copy these values from the server's Python runtime.
 
-### `automation.py`
+### `automations.json`
 
-Exports a synchronous registration phase and an asynchronous runtime entry
-point:
+Stores the versioned configurable automation tree:
 
-```python
-from train.domain import TagDetected
-
-
-async def on_train_detected(event):
-    print(f"Train arrived: {event.train_id}")
-
-
-def configure(ctx):
-    ctx.on(TagDetected, on_train_detected)
-
-
-async def run(ctx):
-    await ctx.forever()
+```json
+{
+  "version": 1,
+  "rules": []
+}
 ```
 
-`configure` registers handlers before hardware modules start, so startup events
-cannot be missed. The script may import `AutomationContext` from
-`train.automation` and event classes from `train.domain`. It is loaded only when
-the backend starts. See [Writing automations](docs/automations.md) for the full
-public API, event reference, lifecycle, and safe concurrency patterns.
+The backend validates node structure and all train, hub, detector, and switch
+references at startup. The complete document is returned in `GET /api/state`
+and can be replaced with `PUT /api/automation`. See
+[Configurable automations](docs/configurable-automations.md) for the format and
+runtime semantics.
+
+On the deployment server, the supervisor seeds this file once into the
+persistent `<server-root>/data/` directory. API edits therefore survive backend
+restarts and later content-addressed releases; immutable release data is never
+modified.
 
 ## Commands
 

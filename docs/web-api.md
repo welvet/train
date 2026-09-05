@@ -8,12 +8,25 @@ switch-specific routing.
 ## Read system state
 
 `GET /api/state` returns the current `SystemState` in a versioned JSON envelope.
-Version 2 has the shape
-`{"version": 2, "snapshot_at": 123.4, "state": {...}}`. `snapshot_at` records
+Version 3 has the shape
+`{"version": 3, "snapshot_at": 123.4, "state": {...}, "automation": {...}}`.
+`snapshot_at` records
 when the backend created the response so clients can reject older snapshots.
 Configured trains, Arduino hubs, switches, and detectors are present before their
 hardware connects. Runtime events update the same state read by automation and
 the API.
+
+`automation.document` contains the complete JSON stored in
+`data/automations.json`. `automation.statuses` reports each rule's current
+runtime state and last failure, and `automation.paused` reports the global halt
+state. `PUT /api/automation` accepts a complete replacement document. The
+backend validates the whole tree and its topology references before atomically
+persisting and applying it. Invalid updates leave the previous automation
+running. Every valid replacement cancels and awaits all current automation work
+and resets occurrence counters before the new tree becomes active.
+
+Server deployments persist the editable document outside immutable release
+directories, so updates survive supervisor restarts and later releases.
 
 The top-level `revision` increases whenever an event changes state. `updated_at`
 is the timestamp of that event. A response includes:
@@ -62,7 +75,7 @@ queued command from one already sent to hardware, inspect current state before
 retrying. Commands targeting the same train or switch are serialized across
 both automation and HTTP callers.
 
-Version 2 does not accept client idempotency keys. A timeout covers queueing,
+Version 3 does not accept client idempotency keys. A timeout covers queueing,
 publication, and acknowledgement, and means the physical outcome may be unknown.
 Inspect state before deciding whether to issue another command.
 

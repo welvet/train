@@ -8,6 +8,7 @@ import pytest
 from aiohttp import ClientResponse
 from aiohttp.test_utils import TestClient, TestServer
 
+from automation_tree import AutomationParseError
 import train.modules.web_api.transport as web_transport
 from train.core.event_bus import EventBus
 from train.domain import (
@@ -87,8 +88,13 @@ async def test_state_returns_complete_domain_snapshot(
 
     assert response.status == 200
     envelope = await response.json()
-    assert envelope["version"] == 2
+    assert envelope["version"] == 3
     assert envelope["snapshot_at"] > 0
+    assert envelope["automation"] == {
+        "document": {"version": 1, "rules": []},
+        "paused": False,
+        "statuses": [],
+    }
     body = envelope["state"]
     assert body["revision"] == 1
     assert body["trains"]["express"] == {
@@ -117,6 +123,7 @@ async def test_openapi_exposes_state_and_public_event_contract(
         "/api/state",
         "/api/state/stream",
         "/api/events",
+        "/api/automation",
     }
 
 
@@ -133,7 +140,7 @@ async def test_state_stream_sends_initial_and_changed_full_snapshots(
         await bus.publish(SystemStarted())
 
         changed = await _read_state_event(response)
-        assert changed["version"] == 2
+        assert changed["version"] == 3
         assert changed["snapshot_at"] >= initial["snapshot_at"]
         assert changed["state"]["revision"] == 1
         assert changed["state"]["running"] is True
@@ -180,6 +187,79 @@ async def _read_state_event(response: ClientResponse) -> dict[str, object]:
         data = await response.content.readline()
         assert await response.content.readline() == b"\n"
     return json.loads(data.removeprefix(b"data: "))
+
+
+async def test_automation_update_returns_and_streams_replacement(
+    bus: EventBus,
+) -> None:
+    current = {
+        "document": {"version": 1, "rules": []},
+        "paused": False,
+        "statuses": [],
+    }
+    listeners: set[object] = set()
+
+    async def update(text: str) -> dict[str, object]:
+        current["document"] = json.loads(text)
+        for listener in tuple(listeners):
+            listener()
+        return current
+
+    module = WebApiModule(
+        bus,
+        host="127.0.0.1",
+        port=0,
+        automation_snapshot=lambda: current,
+        automation_update=update,
+        automation_subscribe=listeners.add,
+        automation_unsubscribe=listeners.discard,
+    )
+    await module.start()
+    assert module._app is not None
+    client = TestClient(TestServer(module._app))
+    await client.start_server()
+    stream = await client.get("/api/state/stream")
+    try:
+        await _read_state_event(stream)
+        replacement = {"version": 1, "rules": []}
+        response = await client.put("/api/automation", json=replacement)
+
+        assert response.status == 200
+        assert (await response.json())["automation"]["document"] == replacement
+        changed = await _read_state_event(stream)
+        assert changed["automation"]["document"] == replacement
+    finally:
+        stream.close()
+        await client.close()
+        await module.stop()
+
+
+async def test_automation_update_returns_structured_validation_error(
+    bus: EventBus,
+) -> None:
+    async def reject(text: str) -> dict[str, object]:
+        raise AutomationParseError("$.rules", "must be an array")
+
+    module = WebApiModule(
+        bus,
+        host="127.0.0.1",
+        port=0,
+        automation_update=reject,
+    )
+    await module.start()
+    assert module._app is not None
+    client = TestClient(TestServer(module._app))
+    await client.start_server()
+    try:
+        response = await client.put("/api/automation", data="{}")
+        assert response.status == 400
+        assert await response.json() == {
+            "error": "must be an array",
+            "path": "$.rules",
+        }
+    finally:
+        await client.close()
+        await module.stop()
 
 
 async def test_event_endpoint_decodes_and_publishes_command(

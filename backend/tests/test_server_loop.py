@@ -95,3 +95,36 @@ def test_remove_tree_does_not_follow_directory_symlinks(tmp_path: Path) -> None:
 
     assert not link.exists()
     assert protected.read_text() == "keep"
+
+
+def test_automation_seed_is_persistent_across_releases(tmp_path: Path) -> None:
+    server_loop = _load_tool("server-loop")
+    first = tmp_path / "first.json"
+    second = tmp_path / "second.json"
+    destination = tmp_path / "data" / "automations.json"
+    first.write_text('{"version": 1, "rules": []}')
+    second.write_text('{"version": 1, "rules": [{"id": "new"}]}')
+
+    server_loop.ServerLoop._seed_automations(first, destination)
+    server_loop.ServerLoop._seed_automations(second, destination)
+
+    assert destination.read_text() == first.read_text()
+
+
+def test_failed_automation_seed_does_not_leave_partial_destination(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    server_loop = _load_tool("server-loop")
+    source = tmp_path / "source.json"
+    destination = tmp_path / "data" / "automations.json"
+    source.write_text('{"version": 1, "rules": []}')
+
+    def fail_read(path: Path) -> bytes:
+        raise OSError("read failed")
+
+    monkeypatch.setattr(Path, "read_bytes", fail_read)
+
+    with pytest.raises(OSError, match="read failed"):
+        server_loop.ServerLoop._seed_automations(source, destination)
+
+    assert not destination.exists()

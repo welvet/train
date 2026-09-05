@@ -8,7 +8,7 @@ from typing import Any, get_args, get_origin, get_type_hints
 from train.domain.state import SystemState
 from train.domain.vocabulary import PUBLIC_EVENTS
 
-STATE_API_VERSION = 2
+STATE_API_VERSION = 3
 
 
 def openapi_document() -> dict[str, object]:
@@ -19,8 +19,35 @@ def openapi_document() -> dict[str, object]:
             "version": {"type": "integer", "const": STATE_API_VERSION},
             "snapshot_at": {"type": "number"},
             "state": {"$ref": "#/components/schemas/SystemState"},
+            "automation": {"$ref": "#/components/schemas/AutomationSnapshot"},
         },
-        "required": ["version", "snapshot_at", "state"],
+        "required": ["version", "snapshot_at", "state", "automation"],
+        "additionalProperties": False,
+    }
+    schemas["AutomationDocument"] = {
+        "type": "object",
+        "description": "Versioned configurable automation tree document",
+        "additionalProperties": True,
+    }
+    schemas["AutomationSnapshot"] = {
+        "type": "object",
+        "properties": {
+            "document": {"$ref": "#/components/schemas/AutomationDocument"},
+            "paused": {"type": "boolean"},
+            "statuses": {
+                "type": "array",
+                "items": {"type": "object", "additionalProperties": True},
+            },
+        },
+        "required": ["document", "paused", "statuses"],
+        "additionalProperties": False,
+    }
+    schemas["AutomationUpdateResponse"] = {
+        "type": "object",
+        "properties": {
+            "automation": {"$ref": "#/components/schemas/AutomationSnapshot"}
+        },
+        "required": ["automation"],
         "additionalProperties": False,
     }
 
@@ -129,6 +156,36 @@ def openapi_document() -> dict[str, object]:
                         "404": _error_response("Unknown resource"),
                         "409": _error_response("Hardware rejected the command"),
                         "504": _error_response("Command outcome is unknown"),
+                    },
+                }
+            },
+            "/api/automation": {
+                "put": {
+                    "operationId": "replaceAutomation",
+                    "requestBody": {
+                        "required": True,
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/AutomationDocument"
+                                }
+                            }
+                        },
+                    },
+                    "responses": {
+                        "200": {
+                            "description": "Automation replaced",
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "$ref": "#/components/schemas/AutomationUpdateResponse"
+                                    }
+                                }
+                            },
+                        },
+                        "400": _error_response("Invalid automation document"),
+                        "500": _error_response("Automation persistence failed"),
+                        "503": _error_response("Automation runtime unavailable"),
                     },
                 }
             },

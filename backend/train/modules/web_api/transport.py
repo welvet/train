@@ -4,11 +4,13 @@ import asyncio
 import json
 import os
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import asdict
 from pathlib import Path
 
 from aiohttp import web
+
+from automation_tree import AutomationParseError
 
 from train.core.event_bus import CommandFailed, CommandResourceNotFound, EventBus
 from train.domain import (
@@ -33,12 +35,20 @@ class WebApiServer:
         host: str,
         port: int,
         readiness_check: Callable[[], bool],
+        automation_snapshot: Callable[[], dict[str, object]] | None = None,
+        automation_update: Callable[[str], Awaitable[dict[str, object]]] | None = None,
+        automation_subscribe: Callable[[Callable[[], None]], None] | None = None,
+        automation_unsubscribe: Callable[[Callable[[], None]], None] | None = None,
         static_root: Path | None = None,
     ) -> None:
         self._bus = bus
         self._host = host
         self._port = port
         self._readiness_check = readiness_check
+        self._automation_snapshot = automation_snapshot or _empty_automation_snapshot
+        self._automation_update = automation_update
+        self._automation_subscribe = automation_subscribe
+        self._automation_unsubscribe = automation_unsubscribe
         self._static_files = StaticFileResolver(
             static_root if static_root is not None else PACKAGED_STATIC_ROOT
         )
@@ -47,6 +57,8 @@ class WebApiServer:
         self._state_changed = asyncio.Condition()
         self._closing = asyncio.Event()
         self._subscribed = False
+        self._automation_change_subscribed = False
+        self._automation_revision = 0
 
     @property
     def application(self) -> web.Application | None:
@@ -59,6 +71,7 @@ class WebApiServer:
         app.router.add_get("/api/state", self._handle_state)
         app.router.add_get("/api/state/stream", self._handle_state_stream)
         app.router.add_post("/api/events", self._handle_event)
+        app.router.add_put("/api/automation", self._handle_automation_update)
         app.router.add_get("/{path:.*}", self._static_files.handle)
         self._app = app
         self._runner = web.AppRunner(app)
@@ -67,12 +80,21 @@ class WebApiServer:
             await self._runner.setup()
             self._bus.subscribe(Event, self._on_event)
             self._subscribed = True
+            if self._automation_subscribe is not None:
+                self._automation_subscribe(self._on_automation_changed)
+                self._automation_change_subscribed = True
             site = web.TCPSite(self._runner, self._host, self._port)
             await site.start()
         except Exception:
             if self._subscribed:
                 self._bus.unsubscribe(Event, self._on_event)
                 self._subscribed = False
+            if (
+                self._automation_change_subscribed
+                and self._automation_unsubscribe is not None
+            ):
+                self._automation_unsubscribe(self._on_automation_changed)
+                self._automation_change_subscribed = False
             await self._runner.cleanup()
             self._runner = None
             self._app = None
@@ -85,6 +107,12 @@ class WebApiServer:
         if self._subscribed:
             self._bus.unsubscribe(Event, self._on_event)
             self._subscribed = False
+        if (
+            self._automation_change_subscribed
+            and self._automation_unsubscribe is not None
+        ):
+            self._automation_unsubscribe(self._on_automation_changed)
+            self._automation_change_subscribed = False
         if self._runner is not None:
             await self._runner.cleanup()
             self._runner = None
@@ -112,25 +140,29 @@ class WebApiServer:
             }
         )
         await response.prepare(request)
-        revision = -1
+        revision = (-1, -1)
 
         try:
             while not self._closing.is_set():
                 state = self._bus.state
-                if state.revision != revision:
+                current_revision = (state.revision, self._automation_revision)
+                if current_revision != revision:
                     envelope = self._state_envelope(state)
                     payload = json.dumps(envelope, separators=(",", ":"))
                     await response.write(
                         f"event: state\ndata: {payload}\n\n".encode()
                     )
-                    revision = state.revision
+                    revision = current_revision
 
                 async with self._state_changed:
                     try:
                         await asyncio.wait_for(
                             self._state_changed.wait_for(
                                 lambda: self._closing.is_set()
-                                or self._bus.state.revision != revision
+                                or (
+                                    self._bus.state.revision,
+                                    self._automation_revision,
+                                ) != revision
                             ),
                             timeout=STREAM_KEEPALIVE_INTERVAL,
                         )
@@ -147,6 +179,14 @@ class WebApiServer:
         async with self._state_changed:
             self._state_changed.notify_all()
 
+    def _on_automation_changed(self) -> None:
+        self._automation_revision += 1
+        asyncio.create_task(self._notify_state_changed())
+
+    async def _notify_state_changed(self) -> None:
+        async with self._state_changed:
+            self._state_changed.notify_all()
+
     def _state_envelope(
         self, state: SystemState | None = None
     ) -> dict[str, object]:
@@ -154,6 +194,7 @@ class WebApiServer:
             "version": STATE_API_VERSION,
             "snapshot_at": time.time(),
             "state": asdict(state if state is not None else self._bus.state),
+            "automation": self._automation_snapshot(),
         }
 
     async def _handle_openapi(self, request: web.Request) -> web.Response:
@@ -191,3 +232,36 @@ class WebApiServer:
         return web.json_response(
             {"command": encode_public_event(event), "completed": True}
         )
+
+    async def _handle_automation_update(self, request: web.Request) -> web.Response:
+        if self._automation_update is None:
+            return web.json_response(
+                {"error": "automation updates are unavailable"}, status=503
+            )
+        try:
+            automation = await self._automation_update(await request.text())
+        except AutomationParseError as exc:
+            return web.json_response(
+                {"error": exc.message, "path": exc.path}, status=400
+            )
+        except (UnicodeDecodeError, ValueError):
+            return web.json_response({"error": "body must be valid JSON"}, status=400)
+        except OSError:
+            return web.json_response(
+                {"error": "could not persist automation"}, status=500
+            )
+        except RuntimeError as exc:
+            return web.json_response({"error": str(exc)}, status=503)
+
+        if self._automation_subscribe is None:
+            self._automation_revision += 1
+            await self._notify_state_changed()
+        return web.json_response({"automation": automation})
+
+
+def _empty_automation_snapshot() -> dict[str, object]:
+    return {
+        "document": {"version": 1, "rules": []},
+        "paused": False,
+        "statuses": [],
+    }
