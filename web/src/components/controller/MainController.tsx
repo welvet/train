@@ -6,7 +6,14 @@ import { StatusAggregation } from "./status/StatusAggregation";
 import { useSystem } from "@/src/state/SystemProvider";
 
 export function MainController() {
-  const { actions, commandError, connection, error, model } = useSystem();
+  const {
+    actions,
+    commandError,
+    connection,
+    error,
+    liveUpdateError,
+    model,
+  } = useSystem();
 
   if (!model && connection === "loading") {
     return (
@@ -44,6 +51,11 @@ export function MainController() {
       {connection === "stale" && (
         <Alert color="yellow" title="Showing the last known state">
           {error ?? "The latest refresh failed. The app will keep trying."}
+        </Alert>
+      )}
+      {connection === "online" && liveUpdateError && (
+        <Alert color="yellow" title="Live updates reconnecting">
+          {liveUpdateError}. Controls remain available using periodic refresh.
         </Alert>
       )}
       {commandError && (

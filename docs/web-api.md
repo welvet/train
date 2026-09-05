@@ -8,9 +8,12 @@ switch-specific routing.
 ## Read system state
 
 `GET /api/state` returns the current `SystemState` in a versioned JSON envelope.
-Version 1 has the shape `{"version": 1, "state": {...}}`. Configured trains,
-Arduino hubs, switches, and detectors are present before their hardware connects.
-Runtime events update the same state read by automation and the API.
+Version 1 has the shape
+`{"version": 1, "snapshot_at": 123.4, "state": {...}}`. `snapshot_at` records
+when the backend created the response so clients can reject older snapshots.
+Configured trains, Arduino hubs, switches, and detectors are present before their
+hardware connects. Runtime events update the same state read by automation and
+the API.
 
 The top-level `revision` increases whenever an event changes state. `updated_at`
 is the timestamp of that event. A response includes:
@@ -22,6 +25,11 @@ is the timestamp of that event. A response includes:
 
 Hardware addresses, tag UIDs, pins, and workspace credentials are not part of
 the domain state and are never returned.
+
+`GET /api/state/stream` sends the same complete envelope as a server-sent event
+immediately after connection and whenever the state revision changes. Clients
+can replace their local snapshot directly; the web client reconnects and
+refreshes the snapshot automatically if the stream is interrupted.
 
 ## Publish a command event
 
