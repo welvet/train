@@ -1,5 +1,5 @@
-from train.core.events import Event
-from train.core.events.train import (
+from train.domain import (
+    Event,
     SetTrainSpeed,
     TrainConnected,
     TrainDisconnected,

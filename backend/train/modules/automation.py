@@ -6,11 +6,15 @@ from contextlib import suppress
 from typing import Any, Callable, Coroutine, TypeVar
 
 from train.core.event_bus import EventBus
-from train.core.events.base import Event
-from train.core.events.hub import SetSwitchPosition, SwitchPositionChanged
-from train.core.events.system import AutomationHalt, AutomationResume
-from train.core.events.train import SetTrainSpeed
 from train.core.module import Module
+from train.domain import (
+    AutomationHalt,
+    AutomationResume,
+    Event,
+    SetSwitchPosition,
+    SetTrainSpeed,
+    SwitchPositionChanged,
+)
 
 E = TypeVar("E", bound=Event)
 ScriptFn = Callable[["AutomationContext"], Coroutine[Any, Any, None]]

@@ -4,10 +4,16 @@ import asyncio
 
 import pytest
 
+import train.automation as automation_api
 from train.core.event_bus import EventBus
-from train.core.events.hub import SetSwitchPosition, SwitchPositionChanged, TagDetected
-from train.core.events.system import SystemStarted
-from train.core.events.train import SetTrainSpeed, TrainConnected
+from train.domain import (
+    SetSwitchPosition,
+    SetTrainSpeed,
+    SwitchPositionChanged,
+    SystemStarted,
+    TagDetected,
+    TrainConnected,
+)
 from train.modules.automation import AutomationContext, AutomationModule
 
 
@@ -19,6 +25,12 @@ def bus() -> EventBus:
 @pytest.fixture
 def ctx(bus: EventBus) -> AutomationContext:
     return AutomationContext(bus)
+
+
+def test_public_automation_api_only_exports_context() -> None:
+    assert automation_api.AutomationContext is AutomationContext
+    assert automation_api.__all__ == ["AutomationContext"]
+    assert not hasattr(automation_api, "TagDetected")
 
 
 def _auto_ack_switches(bus: EventBus) -> None:

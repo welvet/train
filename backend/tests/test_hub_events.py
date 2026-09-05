@@ -1,5 +1,5 @@
-from train.core.events import Event
-from train.core.events.hub import (
+from train.domain import (
+    Event,
     HubConnected,
     HubDisconnected,
     SetSwitchPosition,

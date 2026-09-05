@@ -7,14 +7,12 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from train.core.event_bus import EventBus
-from train.core.events.hub import (
+from train.domain import (
     HubConnected,
     SetSwitchPosition,
     SwitchPositionChanged,
     TagDetected,
     TagRemoved,
-)
-from train.core.events.train import (
     SetTrainSpeed,
     TrainConnected,
     TrainSpeedChanged,

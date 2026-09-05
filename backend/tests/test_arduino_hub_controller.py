@@ -1,7 +1,5 @@
 from train.core.event_bus import EventBus
-from train.core.events import Event
-from train.core.events.hub import HubConnected, TagDetected
-from train.domain.train_tags import TrainTagRegistry
+from train.domain import Event, HubConnected, TagDetected, TrainTagRegistry
 from train.modules.arduino_hub.controller import ArduinoHubController
 from train.modules.arduino_hub.protocol import DetectedTag, Hello, TagChanged
 

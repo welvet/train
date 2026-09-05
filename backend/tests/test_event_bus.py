@@ -2,7 +2,7 @@ import pytest
 from dataclasses import dataclass
 
 from train.core.event_bus import EventBus
-from train.core.events.base import Event
+from train.domain import Event
 
 
 @dataclass(frozen=True, slots=True)

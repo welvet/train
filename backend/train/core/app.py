@@ -6,8 +6,8 @@ import signal
 from typing import Any, TypeVar
 
 from train.core.event_bus import EventBus
-from train.core.events import SystemShutdown, SystemStarted
 from train.core.module import Module
+from train.domain import SystemShutdown, SystemStarted
 
 M = TypeVar("M", bound=Module)
 

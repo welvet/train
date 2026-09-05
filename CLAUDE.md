@@ -67,9 +67,9 @@ Python 3.11+ asyncio application with `bleak` and `aiohttp`.
 - `train/modules/automation.py` provides the public `AutomationContext` DSL.
 - `train/modules/web_api.py` exposes train, hub, automation, and log endpoints.
 
-Local automation imports its API from `train.automation`, registers event
-handlers in synchronous `configure(ctx)`, and performs long-running work in
-`async run(ctx)`.
+Local automation imports `AutomationContext` from `train.automation` and event
+classes from `train.domain`, registers event handlers in synchronous
+`configure(ctx)`, and performs long-running work in `async run(ctx)`.
 
 Run locally:
 
