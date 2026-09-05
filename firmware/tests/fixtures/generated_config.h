@@ -11,6 +11,7 @@ constexpr char WIFI_PASSWORD[] = "test-password";
 constexpr unsigned long SERIAL_BAUDRATE = 115200;
 constexpr unsigned long SERVO_SETTLE_MS = 500;
 constexpr unsigned long RECONNECT_MS = 2000;
+constexpr bool EVENT_LOGGER_ENABLED = false;
 
 constexpr int SWITCH_COUNT = 2;
 constexpr int SWITCH_STORAGE_SIZE = 2;

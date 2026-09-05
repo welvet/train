@@ -39,6 +39,8 @@ def generate_config(device: dict[str, Any], secrets: dict[str, str]) -> str:
         f"constexpr unsigned long SERIAL_BAUDRATE = {device['baudrate']};",
         f"constexpr unsigned long SERVO_SETTLE_MS = {device['servo_settle_ms']};",
         f"constexpr unsigned long RECONNECT_MS = {device['reconnect_ms']};",
+        "constexpr bool EVENT_LOGGER_ENABLED = "
+        f"{str(device.get('event_logger_enabled', False)).lower()};",
         f"constexpr int SWITCH_COUNT = {len(switches)};",
         f"constexpr int SWITCH_STORAGE_SIZE = {max(1, len(switches))};",
         "const SwitchConfig SWITCHES[SWITCH_STORAGE_SIZE] = {",

@@ -45,6 +45,7 @@ def test_generated_firmware_config_supports_multiple_devices() -> None:
         "baudrate": 115200,
         "servo_settle_ms": 500,
         "reconnect_ms": 2000,
+        "event_logger_enabled": True,
         "switches": [
             {"id": "S1", "pin": 9, "straight": 58, "diverge": 100},
             {"id": "S2", "pin": 10, "straight": 60, "diverge": 110},
@@ -61,5 +62,26 @@ def test_generated_firmware_config_supports_multiple_devices() -> None:
 
     assert "constexpr int SWITCH_COUNT = 2;" in result
     assert "constexpr int READER_COUNT = 2;" in result
+    assert "constexpr bool EVENT_LOGGER_ENABLED = true;" in result
     assert '{"D1", 4, 250, 750}' in result
     assert '{"D2", 5, 200, 800}' in result
+
+
+def test_generated_firmware_config_disables_event_logger_by_default() -> None:
+    arduino_tool = _load_tool("arduino")
+    device = {
+        "hub_id": "hub_1",
+        "backend_host": "host",
+        "backend_port": 9000,
+        "baudrate": 115200,
+        "servo_settle_ms": 500,
+        "reconnect_ms": 2000,
+        "switches": [],
+        "readers": [],
+    }
+
+    result = arduino_tool.generate_config(
+        device, {"wifi_ssid": "wifi", "wifi_password": "secret"}
+    )
+
+    assert "constexpr bool EVENT_LOGGER_ENABLED = false;" in result

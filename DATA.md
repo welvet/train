@@ -68,6 +68,7 @@ switches and multiple PN532 readers sharing the hardware SPI bus:
       "backend_port": 9000,
       "servo_settle_ms": 500,
       "reconnect_ms": 2000,
+      "event_logger_enabled": true,
       "switches": [
         {"id": "S1", "pin": 9, "straight": 58, "diverge": 100}
       ],
@@ -78,6 +79,9 @@ switches and multiple PN532 readers sharing the hardware SPI bus:
   }
 }
 ```
+
+`event_logger_enabled` is optional and defaults to `false`. When enabled, the
+firmware prints one line for every internal event to the Arduino serial output.
 
 ### `secrets.json`
 

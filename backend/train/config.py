@@ -201,6 +201,11 @@ def validate_arduino_upload_config(data_dir: Path | None = None) -> None:
         _port(device, "backend_port", source)
         for key in ("servo_settle_ms", "reconnect_ms"):
             _bounded_int(device, key, source, maximum=0xFFFFFFFF)
+        logger_enabled = device.get("event_logger_enabled", False)
+        if not isinstance(logger_enabled, bool):
+            raise ConfigError(
+                f"{source}.event_logger_enabled must be a boolean"
+            )
         pins: set[int] = set()
         _validate_component_pins(device, "switches", "pin", source, pins)
         _validate_component_pins(device, "readers", "ss_pin", source, pins)
