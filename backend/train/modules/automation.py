@@ -7,7 +7,7 @@ import math
 from contextlib import suppress
 from typing import Any, Callable, Coroutine, TypeVar
 
-from train.core.event_bus import EventBus
+from train.core.event_bus import CommandFailed, CommandResourceNotFound, EventBus
 from train.core.module import Module
 from train.domain import (
     AutomationHalt,
@@ -16,6 +16,7 @@ from train.domain import (
     SetSwitchPosition,
     SetTrainSpeed,
     SwitchPositionChanged,
+    SystemState,
     TrainSpeedChanged,
 )
 
@@ -32,13 +33,17 @@ class AutomationContext:
         self._bus = bus
         self._tasks: set[asyncio.Task[Any]] = set()
         self._subscriptions: list[tuple[type[Event], Any]] = []
-        self._command_locks: dict[tuple[str, ...], asyncio.Lock] = {}
         self._log = logging.getLogger("train.automation")
         self._closing = False
-        self.halted = False
 
-    def _command_lock(self, *resource: str) -> asyncio.Lock:
-        return self._command_locks.setdefault(resource, asyncio.Lock())
+    @property
+    def state(self) -> SystemState:
+        """Return an isolated snapshot of the current railway state."""
+        return self._bus.state
+
+    @property
+    def halted(self) -> bool:
+        return self._bus.state.automation.halted
 
     @staticmethod
     def _is_finite_number(value: object) -> bool:
@@ -82,31 +87,14 @@ class AutomationContext:
         ):
             raise ValueError("train speed must be an integer in -100..100")
 
-        async with self._command_lock("train", train):
-            command = SetTrainSpeed(train_name=train, speed=speed)
-            future: asyncio.Future[TrainSpeedChanged] = (
-                asyncio.get_running_loop().create_future()
-            )
-
-            async def _on_ack(event: TrainSpeedChanged) -> None:
-                if event.request_id == command.request_id and not future.done():
-                    future.set_result(event)
-
-            async def _dispatch() -> TrainSpeedChanged:
-                await self._bus.publish(command)
-                return await future
-
-            self._bus.subscribe(TrainSpeedChanged, _on_ack)
-            try:
-                result = await asyncio.wait_for(
-                    _dispatch(),
-                    timeout=COMMAND_TIMEOUT,
-                )
-                if not result.success:
-                    raise RuntimeError(f"train speed change failed: {train}")
-                return result
-            finally:
-                self._bus.unsubscribe(TrainSpeedChanged, _on_ack)
+        command = SetTrainSpeed(train_name=train, speed=speed)
+        try:
+            result = await self._bus.dispatch(command, timeout=COMMAND_TIMEOUT)
+        except (CommandFailed, CommandResourceNotFound) as exc:
+            raise RuntimeError(f"train speed change failed: {train}") from exc
+        if not isinstance(result, TrainSpeedChanged):
+            raise RuntimeError("train speed command returned an invalid response")
+        return result
 
     async def set_switch(
         self,
@@ -122,35 +110,18 @@ class AutomationContext:
             raise ValueError(
                 "switch position must be straight, diverge, or an angle in 0..180"
             )
-        async with self._command_lock("switch", hub, switch):
-            command = SetSwitchPosition(
-                hub_name=hub,
-                switch_name=switch,
-                target=position,
-            )
-            future: asyncio.Future[SwitchPositionChanged] = (
-                asyncio.get_running_loop().create_future()
-            )
-
-            async def _on_ack(event: SwitchPositionChanged) -> None:
-                if event.request_id == command.request_id and not future.done():
-                    future.set_result(event)
-
-            async def _dispatch() -> SwitchPositionChanged:
-                await self._bus.publish(command)
-                return await future
-
-            self._bus.subscribe(SwitchPositionChanged, _on_ack)
-            try:
-                result = await asyncio.wait_for(
-                    _dispatch(),
-                    timeout=COMMAND_TIMEOUT,
-                )
-                if not result.ok:
-                    raise RuntimeError(f"switch move failed: {hub}/{switch}")
-                return result
-            finally:
-                self._bus.unsubscribe(SwitchPositionChanged, _on_ack)
+        command = SetSwitchPosition(
+            hub_name=hub,
+            switch_name=switch,
+            target=position,
+        )
+        try:
+            result = await self._bus.dispatch(command, timeout=COMMAND_TIMEOUT)
+        except (CommandFailed, CommandResourceNotFound) as exc:
+            raise RuntimeError(f"switch move failed: {hub}/{switch}") from exc
+        if not isinstance(result, SwitchPositionChanged):
+            raise RuntimeError("switch command returned an invalid response")
+        return result
 
     async def wait_for(
         self,
@@ -308,11 +279,9 @@ class AutomationModule(Module):
 
     async def _on_halt(self, event: AutomationHalt) -> None:
         self._log.info("Automation halted")
-        self.halted = True
 
     async def _on_resume(self, event: AutomationResume) -> None:
         self._log.info("Automation resumed")
-        self.halted = False
 
     async def _run_script(self) -> None:
         try:
@@ -334,12 +303,7 @@ class AutomationModule(Module):
 
     @property
     def halted(self) -> bool:
-        return self._ctx.halted if self._ctx else False
-
-    @halted.setter
-    def halted(self, value: bool) -> None:
-        if self._ctx:
-            self._ctx.halted = value
+        return self.bus.state.automation.halted
 
     async def stop(self) -> None:
         with suppress(ValueError):

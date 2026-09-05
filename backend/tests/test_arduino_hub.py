@@ -12,6 +12,7 @@ from train.domain import (
     HubDisconnected,
     SetSwitchPosition,
     SwitchPositionChanged,
+    SystemState,
     TagDetected,
     TagRemoved,
 )
@@ -64,7 +65,7 @@ async def _read_line(reader: asyncio.StreamReader) -> dict:
 
 @pytest.fixture
 def bus() -> EventBus:
-    return EventBus()
+    return EventBus(SystemState.from_topology(arduino_hubs=HUB_CONFIG))
 
 
 @pytest.fixture
@@ -290,6 +291,37 @@ async def test_unknown_tags_are_ignored(bus: EventBus, hub) -> None:
     await writer.wait_closed()
 
 
+async def test_events_from_unavailable_detector_are_ignored(
+    bus: EventBus, hub
+) -> None:
+    mod, port = hub
+    events = _collect_events(bus)
+    reader, writer = await asyncio.open_connection("127.0.0.1", port)
+    await _send_line(writer, {
+        "event": "hello",
+        "hub": "A_HUB_1",
+        "switches": ["S1", "S2"],
+        "detectors": ["D1"],
+        "detected_tags": [],
+    })
+    await asyncio.sleep(0.05)
+    events.clear()
+
+    await _send_line(writer, {
+        "event": "tag_detected",
+        "hub": "A_HUB_1",
+        "detector": "D2",
+        "tag_id": "04:A1:B2:C3",
+    })
+    await asyncio.sleep(0.05)
+
+    assert not [event for event in events if isinstance(event, TagDetected)]
+    assert mod.get_hub_info("A_HUB_1")["detectors"]["D2"]["triggered"] is False
+
+    writer.close()
+    await writer.wait_closed()
+
+
 async def test_live_tag_events_are_idempotent_and_reconcile_replacement(
     bus: EventBus, hub
 ) -> None:
@@ -365,6 +397,59 @@ async def test_duplicate_hub_connection_takes_over_without_disconnect_event(
     assert command["angle"] == 100
     assert not [event for event in events if isinstance(event, HubDisconnected)]
     assert len([event for event in events if isinstance(event, TagDetected)]) == 1
+
+    writer1.close()
+    await writer1.wait_closed()
+    writer2.close()
+    await writer2.wait_closed()
+
+
+async def test_duplicate_hub_registration_is_serialized(
+    bus: EventBus, hub
+) -> None:
+    mod, port = hub
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+    registrations = 0
+
+    async def delay_first_registration(event: HubConnected) -> None:
+        nonlocal registrations
+        registrations += 1
+        if registrations == 1:
+            first_started.set()
+            await release_first.wait()
+
+    bus.subscribe(HubConnected, delay_first_registration)
+    reader1, writer1 = await asyncio.open_connection("127.0.0.1", port)
+    await _send_line(writer1, {
+        "event": "hello",
+        "hub": "A_HUB_1",
+        "switches": ["S1", "S2"],
+        "detectors": ["D1", "D2"],
+        "detected_tags": [
+            {"detector": "D1", "tag_id": "04:A1:B2:C3"}
+        ],
+    })
+    await asyncio.wait_for(first_started.wait(), timeout=2.0)
+
+    reader2, writer2 = await asyncio.open_connection("127.0.0.1", port)
+    await _send_line(writer2, {
+        "event": "hello",
+        "hub": "A_HUB_1",
+        "switches": ["S1", "S2"],
+        "detectors": ["D1", "D2"],
+        "detected_tags": [
+            {"detector": "D1", "tag_id": "04:11:22:33"}
+        ],
+    })
+    await asyncio.sleep(0.05)
+
+    assert registrations == 1
+    release_first.set()
+    await asyncio.sleep(0.1)
+
+    assert registrations == 2
+    assert mod.get_hub_info("A_HUB_1")["detectors"]["D1"]["train_id"] == "cargo_train"
 
     writer1.close()
     await writer1.wait_closed()

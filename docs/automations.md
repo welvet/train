@@ -59,9 +59,10 @@ backend shuts down.
 ## Context API
 
 All command methods are asynchronous. Await them so failures reach the caller.
-Commands targeting the same train or switch are serialized within one
-automation context. Every command also carries an end-to-end correlation ID,
-so commands from the HTTP API cannot consume an automation acknowledgement.
+Commands targeting the same train or switch are serialized across all
+automation contexts and HTTP callers. Every command also carries an end-to-end
+correlation ID, so concurrent commands cannot consume one another's
+acknowledgement.
 If a command times out, its physical outcome is unknown because the hardware
 write may already have happened; inspect observed state before retrying rather
 than retrying blindly.
@@ -163,7 +164,7 @@ usual body of `run` when all behavior is registered through `ctx.on`.
 
 ### `ctx.halted`
 
-Reports whether `/halt` or `tools/train halt` has halted registered automation
+Reports whether an `automation_halt` event has halted registered automation
 callbacks. While halted, new `ctx.on` callbacks are skipped; they are not queued
 for resume. Halt does not stop a moving train, cancel a callback already in
 progress, or pause logic running directly in `run` or `ctx.spawn`. Safety logic
@@ -192,9 +193,10 @@ classes from `train.domain` and access their fields directly.
 It is the reconnect snapshot; use it to initialize state that would otherwise
 depend on detection events emitted while the hub was offline.
 
-`SetTrainSpeed` and `SetSwitchPosition` are command events used internally by
-the context helpers. Automation programs should call `set_speed` and
-`set_switch` so they get validation, acknowledgement, and timeout handling.
+`SetTrainSpeed` and `SetSwitchPosition` are command events used by the context
+helpers and the public event transport. Automation programs should call
+`set_speed` and `set_switch` so they get validation, acknowledgement, and
+timeout handling.
 `AutomationHalt`, `AutomationResume`, and `SystemShutdown` are backend control
 events, not supported automation callbacks. Use `ctx.halted` for halt state;
 automation work is cancelled during shutdown rather than given a cleanup-event
@@ -256,9 +258,9 @@ cd backend
 .venv/bin/python -m train
 ```
 
-The backend does not reload `automation.py`; restart it after edits. Follow logs
-with `tools/train logs`, halt callbacks with `tools/train halt`, and resume them
-with `tools/train resume`.
+The backend does not reload `automation.py`; restart it after edits. Submit
+`automation_halt` and `automation_resume` events through `POST /api/events` to
+pause and resume registered callbacks.
 
 Switch command correlation requires the Arduino firmware shipped with the same
 or a newer repository revision. During an upgrade, flash the Arduino before

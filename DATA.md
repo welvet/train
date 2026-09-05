@@ -26,6 +26,10 @@ Defines the backend's HTTP API and Arduino TCP listener:
 }
 ```
 
+The HTTP API can actuate the railway and intentionally has no authentication.
+Bind or expose it only on the trusted local network; never publish it to the
+internet or an untrusted network.
+
 ### `trains.json`
 
 Maps stable train IDs to LEGO BLE addresses and NFC tag UIDs:
@@ -33,10 +37,19 @@ Maps stable train IDs to LEGO BLE addresses and NFC tag UIDs:
 ```json
 {
   "trains": [
-    {"id": "train_1", "ble_address": "AA:BB:CC:DD:EE:FF", "tag_id": "04:A1:B2:C3"}
+    {
+      "id": "train_1",
+      "lego_hub_id": "hub_red",
+      "ble_address": "AA:BB:CC:DD:EE:FF",
+      "tag_id": "04:A1:B2:C3"
+    }
   ]
 }
 ```
+
+`lego_hub_id` is the stable identity of the physical LEGO hub paired with the
+train. It defaults to the train `id` when omitted, so existing workspaces remain
+valid.
 
 ### `arduinos.json`
 
@@ -150,7 +163,6 @@ public API, event reference, lifecycle, and safe concurrency patterns.
 tools/arduino compile arduino_1
 tools/arduino upload arduino_1
 tools/arduino monitor arduino_1
-tools/train --help
 tools/scan-ble
 tools/server-push
 ```

@@ -42,6 +42,7 @@ async def test_module_lifecycle() -> None:
 
     assert mod.stopped
     assert any(isinstance(e, SystemShutdown) for e in mod.events)
+    assert app.bus.state.running is False
 
 
 async def test_stop_order_is_reversed() -> None:
@@ -71,3 +72,50 @@ async def test_stop_order_is_reversed() -> None:
     await task
 
     assert order == ["second", "first"]
+
+
+async def test_cancellation_stops_started_modules() -> None:
+    app = App()
+    mod = app.add_module(RecorderModule)
+    task = asyncio.create_task(app.run())
+    await asyncio.sleep(0.05)
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert mod.stopped
+    assert any(isinstance(event, SystemShutdown) for event in mod.events)
+    assert app.bus.state.running is False
+
+
+async def test_shutdown_continues_after_module_stop_failure() -> None:
+    stopped: list[str] = []
+
+    class First(Module):
+        async def start(self) -> None:
+            pass
+
+        async def stop(self) -> None:
+            stopped.append("first")
+
+    class FailingSecond(Module):
+        async def start(self) -> None:
+            pass
+
+        async def stop(self) -> None:
+            stopped.append("second")
+            raise RuntimeError("stop failed")
+
+    app = App()
+    app.add_module(First)
+    app.add_module(FailingSecond)
+    task = asyncio.create_task(app.run())
+    await asyncio.sleep(0.05)
+    app.request_shutdown()
+
+    with pytest.raises(ExceptionGroup, match="Module shutdown failed"):
+        await task
+
+    assert stopped == ["second", "first"]
+    assert app.bus.state.running is False
