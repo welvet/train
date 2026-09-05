@@ -115,6 +115,10 @@ def encode_move_command(switch_name: str, angle: int, request_id: str) -> bytes:
     ).encode()
 
 
+def encode_ping_command() -> bytes:
+    return b'{"cmd": "ping"}\n'
+
+
 def _string_tuple(value: object) -> tuple[str, ...] | None:
     if (
         not isinstance(value, list)

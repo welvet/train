@@ -79,6 +79,9 @@ switches and multiple PN532 readers sharing the hardware SPI bus:
 }
 ```
 
+`read_timeout_ms` may be at most 1000 ms so NFC polling cannot block heartbeat
+responses long enough for the backend to disconnect a healthy Arduino hub.
+
 ### `secrets.json`
 
 Provides Wi-Fi credentials per Arduino device and the FTP deployment password:
