@@ -9,6 +9,7 @@ ignored `data/` workspace documented in `DATA.md`.
 - `backend/` — event bus, hardware modules, web API, and automation runtime
 - `firmware/TrainController/` — generic UNO R4 WiFi firmware
 - `tools/` — workspace, firmware, control, and FTP deployment commands
+- `web/` — statically exported Next.js and TypeScript UI
 - `data/` — ignored local configuration, secrets, and automation
 - `DATA.md` — workspace schema and operator guide
 
@@ -99,3 +100,17 @@ publishes it with the configured FTP server. `tools/server-loop` is the stable
 server-side supervisor: it verifies releases, atomically switches `current`,
 restarts the backend, and rolls back startup failures. The server does not pull
 or run repository code through Git.
+
+## Web UI
+
+The frontend is intentionally independent from the backend. Build it as static
+files and serve the generated directory with any static host:
+
+```sh
+cd web
+npm ci
+npm run build
+```
+
+The generated site is written to `web/out/`; production does not require a
+Node.js server.
