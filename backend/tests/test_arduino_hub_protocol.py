@@ -9,6 +9,7 @@ from train.modules.arduino_hub.protocol import (
     Pong,
     TagChanged,
     encode_move_command,
+    encode_ping_command,
     parse_message,
 )
 
@@ -108,3 +109,10 @@ def test_encode_move_command() -> None:
         "angle": 100,
         "request_id": "request-1",
     }
+
+
+def test_encode_ping_command() -> None:
+    encoded = encode_ping_command()
+
+    assert encoded.endswith(b"\n")
+    assert json.loads(encoded) == {"cmd": "ping"}

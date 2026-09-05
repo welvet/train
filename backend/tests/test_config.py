@@ -207,14 +207,20 @@ def test_firmware_integer_limits_are_enforced(
         validate_arduino_upload_config(tmp_path)
 
 
-def test_reader_timeout_must_fit_uint16(tmp_path: Path) -> None:
+@pytest.mark.parametrize(("value", "valid"), [(1000, True), (1001, False)])
+def test_reader_timeout_must_stay_below_heartbeat_budget(
+    tmp_path: Path, value: int, valid: bool
+) -> None:
     _write_config(tmp_path)
     devices = json.loads((tmp_path / "arduinos.json").read_text())
-    devices["devices"]["arduino_1"]["readers"][0]["read_timeout_ms"] = 65536
+    devices["devices"]["arduino_1"]["readers"][0]["read_timeout_ms"] = value
     (tmp_path / "arduinos.json").write_text(json.dumps(devices))
 
-    with pytest.raises(ConfigError, match="read_timeout_ms"):
+    if valid:
         validate_arduino_upload_config(tmp_path)
+    else:
+        with pytest.raises(ConfigError, match="read_timeout_ms"):
+            validate_arduino_upload_config(tmp_path)
 
 
 def test_event_logger_flag_must_be_boolean(tmp_path: Path) -> None:

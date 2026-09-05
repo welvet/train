@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from train.modules.arduino_hub.timing import MAX_READER_READ_TIMEOUT_MS
 from train.modules.automation import ConfigureFn, ScriptFn
 
 
@@ -213,7 +214,12 @@ def validate_arduino_upload_config(data_dir: Path | None = None) -> None:
             reader_source = f"{source}.readers[{index}]"
             if not isinstance(reader, dict):
                 raise ConfigError(f"{reader_source} must be an object")
-            _bounded_int(reader, "read_timeout_ms", reader_source, maximum=0xFFFF)
+            _bounded_int(
+                reader,
+                "read_timeout_ms",
+                reader_source,
+                maximum=MAX_READER_READ_TIMEOUT_MS,
+            )
             _bounded_int(
                 reader, "removal_delay_ms", reader_source, maximum=0xFFFFFFFF
             )

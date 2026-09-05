@@ -80,6 +80,9 @@ switches and multiple PN532 readers sharing the hardware SPI bus:
 }
 ```
 
+`read_timeout_ms` may be at most 1000 ms so NFC polling cannot block heartbeat
+responses long enough for the backend to disconnect a healthy Arduino hub.
+
 `event_logger_enabled` is optional and defaults to `false`. When enabled, the
 firmware prints one line for every internal event to the Arduino serial output.
 
