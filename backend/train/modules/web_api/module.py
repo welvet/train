@@ -22,6 +22,8 @@ class WebApiModule(Module):
         automation_update: Callable[[str], Awaitable[dict[str, object]]] | None = None,
         automation_subscribe: Callable[[Callable[[], None]], None] | None = None,
         automation_unsubscribe: Callable[[Callable[[], None]], None] | None = None,
+        configuration_snapshot: Callable[[], dict[str, object]] | None = None,
+        configuration_update: Callable[[str], Awaitable[dict[str, object]]] | None = None,
         static_root: Path | None = None,
     ) -> None:
         super().__init__(bus)
@@ -34,6 +36,8 @@ class WebApiModule(Module):
             automation_update=automation_update,
             automation_subscribe=automation_subscribe,
             automation_unsubscribe=automation_unsubscribe,
+            configuration_snapshot=configuration_snapshot,
+            configuration_update=configuration_update,
             static_root=static_root,
         )
 

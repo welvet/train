@@ -5,6 +5,10 @@ import type { AutomationDocument } from "@/src/components/automation/types";
 export type StateEnvelope = components["schemas"]["StateEnvelope"];
 export type PublicEvent = components["schemas"]["PublicEvent"];
 export type CommandResponse = components["schemas"]["CommandResponse"];
+export type ConfigurationSnapshot = components["schemas"]["ConfigurationSnapshot"];
+export type ConfigurationUpdate = components["schemas"]["ConfigurationUpdate"];
+export type TrainConfiguration = components["schemas"]["TrainConfiguration"];
+export type TrainsConfiguration = components["schemas"]["TrainsConfiguration"];
 
 const INITIAL_STREAM_RECONNECT_DELAY_MS = 2_000;
 const MAX_STREAM_RECONNECT_DELAY_MS = 30_000;
@@ -64,6 +68,49 @@ export class TrainApiClient {
       throw await this.errorFrom(response);
     }
     return (await response.json()) as CommandResponse;
+  }
+
+  async getConfiguration(signal?: AbortSignal): Promise<ConfigurationSnapshot> {
+    const response = await fetch(this.url("/api/configuration"), {
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+      signal,
+    });
+    if (!response.ok) {
+      throw await this.errorFrom(response);
+    }
+    const body: unknown = await response.json();
+    if (!isConfigurationSnapshot(body)) {
+      throw new ApiRequestError(
+        "The backend returned an unsupported configuration format",
+        0,
+      );
+    }
+    return body;
+  }
+
+  async replaceConfiguration(
+    update: ConfigurationUpdate,
+  ): Promise<ConfigurationSnapshot> {
+    const response = await fetch(this.url("/api/configuration"), {
+      method: "PUT",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(update),
+    });
+    if (!response.ok) {
+      throw await this.errorFrom(response);
+    }
+    const body: unknown = await response.json();
+    if (!isConfigurationSnapshot(body)) {
+      throw new ApiRequestError(
+        "The backend returned an unsupported configuration format",
+        0,
+      );
+    }
+    return body;
   }
 
   async replaceAutomation(
@@ -238,6 +285,35 @@ function isStateEnvelope(value: unknown): value is StateEnvelope {
     isRecord(state.trains) &&
     isRecord(state.lego_hubs) &&
     isRecord(state.arduino_hubs)
+  );
+}
+
+function isConfigurationSnapshot(
+  value: unknown,
+): value is ConfigurationSnapshot {
+  if (!isRecord(value) || value.version !== 1 || !isRecord(value.documents)) {
+    return false;
+  }
+  const trains = value.documents.trains;
+  if (
+    !isRecord(trains) ||
+    typeof trains.modified_at !== "number" ||
+    !Number.isFinite(trains.modified_at) ||
+    trains.modified_at <= 0 ||
+    typeof trains.restart_required !== "boolean" ||
+    !isRecord(trains.value) ||
+    !Array.isArray(trains.value.trains) ||
+    trains.value.trains.length === 0
+  ) {
+    return false;
+  }
+  return trains.value.trains.every(
+    (train) =>
+      isRecord(train) &&
+      typeof train.id === "string" &&
+      typeof train.lego_hub_id === "string" &&
+      typeof train.ble_address === "string" &&
+      isStringArray(train.tag_ids),
   );
 }
 

@@ -29,6 +29,7 @@ from automation_tree.functions import (
 )
 from automation_tree.model import Node
 
+from train.config import RuntimeConfig
 from train.core.event_bus import CommandFailed, CommandResourceNotFound, EventBus
 from train.core.module import Module
 from train.domain import (
@@ -124,6 +125,37 @@ class AutomationModule(Module):
 
     def unsubscribe_changes(self, handler: Callable[[], None]) -> None:
         self._change_handlers.discard(handler)
+
+    def validate_runtime_config(self, config: RuntimeConfig) -> None:
+        """Ensure the active automation remains valid after a config edit."""
+        document = self._parser.parse_json(json.dumps(self._document_json))
+        self._validate_document_for_runtime_config(document, config)
+
+    def validate_json_for_runtime_config(
+        self,
+        text: str,
+        config: RuntimeConfig,
+    ) -> None:
+        document = self._parser.parse_json(text)
+        self._validate_document_for_runtime_config(document, config)
+
+    @staticmethod
+    def _validate_document_for_runtime_config(
+        document: AutomationDocument,
+        config: RuntimeConfig,
+    ) -> None:
+        validate_automation_topology(
+            document,
+            state=SystemState.from_topology(
+                train_hubs={
+                    train.train_id: train.lego_hub_id for train in config.trains
+                },
+                arduino_hubs=config.arduino_hubs,
+            ),
+            tagged_trains={
+                train.train_id for train in config.trains if train.tag_ids
+            },
+        )
 
     async def replace_json(self, text: str) -> dict[str, object]:
         """Validate, persist, and activate a complete replacement document."""

@@ -54,6 +54,90 @@ def openapi_document() -> dict[str, object]:
         "required": ["automation"],
         "additionalProperties": False,
     }
+    schemas["TrainConfiguration"] = {
+        "type": "object",
+        "properties": {
+            "id": {"type": "string", "minLength": 1},
+            "lego_hub_id": {"type": "string", "minLength": 1},
+            "ble_address": {"type": "string", "minLength": 1},
+            "tag_ids": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1},
+            },
+        },
+        "required": ["id", "lego_hub_id", "ble_address", "tag_ids"],
+        "additionalProperties": False,
+    }
+    schemas["TrainsConfiguration"] = {
+        "type": "object",
+        "properties": {
+            "trains": {
+                "type": "array",
+                "minItems": 1,
+                "items": {"$ref": "#/components/schemas/TrainConfiguration"},
+            }
+        },
+        "required": ["trains"],
+        "additionalProperties": False,
+    }
+    schemas["TrainsConfigurationDocument"] = {
+        "type": "object",
+        "properties": {
+            "modified_at": {"type": "number", "exclusiveMinimum": 0},
+            "restart_required": {"type": "boolean"},
+            "value": {"$ref": "#/components/schemas/TrainsConfiguration"},
+        },
+        "required": ["modified_at", "restart_required", "value"],
+        "additionalProperties": False,
+    }
+    schemas["ConfigurationSnapshot"] = {
+        "type": "object",
+        "properties": {
+            "version": {"type": "integer", "const": 1},
+            "documents": {
+                "type": "object",
+                "properties": {
+                    "trains": {
+                        "$ref": "#/components/schemas/TrainsConfigurationDocument"
+                    }
+                },
+                "required": ["trains"],
+                "additionalProperties": False,
+            },
+        },
+        "required": ["version", "documents"],
+        "additionalProperties": False,
+    }
+    schemas["TrainsConfigurationUpdate"] = {
+        "type": "object",
+        "properties": {
+            "base_modified_at": {"type": "number", "exclusiveMinimum": 0},
+            "modified_at": {"type": "number", "exclusiveMinimum": 0},
+            "value": {"$ref": "#/components/schemas/TrainsConfiguration"},
+        },
+        "required": ["base_modified_at", "value"],
+        "additionalProperties": False,
+    }
+    schemas["ConfigurationUpdate"] = {
+        "type": "object",
+        "properties": {
+            "version": {"type": "integer", "const": 1},
+            "documents": {
+                "type": "object",
+                "properties": {
+                    "trains": {
+                        "$ref": "#/components/schemas/TrainsConfigurationUpdate"
+                    }
+                },
+                "required": ["trains"],
+                "minProperties": 1,
+                "maxProperties": 1,
+                "additionalProperties": False,
+            },
+        },
+        "required": ["version", "documents"],
+        "additionalProperties": False,
+    }
 
     public_event_refs: list[dict[str, str]] = []
     for spec in PUBLIC_EVENTS:
@@ -192,6 +276,54 @@ def openapi_document() -> dict[str, object]:
                         "503": _error_response("Automation runtime unavailable"),
                     },
                 }
+            },
+            "/api/configuration": {
+                "get": {
+                    "operationId": "getConfiguration",
+                    "responses": {
+                        "200": {
+                            "description": "Editable backend configuration",
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "$ref": "#/components/schemas/ConfigurationSnapshot"
+                                    }
+                                }
+                            },
+                        },
+                        "500": _error_response("Configuration read failed"),
+                        "503": _error_response("Configuration management unavailable"),
+                    },
+                },
+                "put": {
+                    "operationId": "replaceConfiguration",
+                    "requestBody": {
+                        "required": True,
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ConfigurationUpdate"
+                                }
+                            }
+                        },
+                    },
+                    "responses": {
+                        "200": {
+                            "description": "Configuration persisted",
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "$ref": "#/components/schemas/ConfigurationSnapshot"
+                                    }
+                                }
+                            },
+                        },
+                        "400": _error_response("Invalid configuration"),
+                        "409": _error_response("Configuration update is stale"),
+                        "500": _error_response("Configuration persistence failed"),
+                        "503": _error_response("Configuration management unavailable"),
+                    },
+                },
             },
         },
         "components": {"schemas": schemas},

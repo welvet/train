@@ -20,6 +20,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/configuration": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getConfiguration"];
+        put: operations["replaceConfiguration"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/events": {
         parameters: {
             query?: never;
@@ -129,6 +145,20 @@ export interface components {
             /** @constant */
             completed: true;
         };
+        ConfigurationSnapshot: {
+            documents: {
+                trains: components["schemas"]["TrainsConfigurationDocument"];
+            };
+            /** @constant */
+            version: 1;
+        };
+        ConfigurationUpdate: {
+            documents: {
+                trains: components["schemas"]["TrainsConfigurationUpdate"];
+            };
+            /** @constant */
+            version: 1;
+        };
         DetectorState: {
             available: boolean;
             detector_id: string;
@@ -193,10 +223,29 @@ export interface components {
             };
             updated_at: number;
         };
+        TrainConfiguration: {
+            ble_address: string;
+            id: string;
+            lego_hub_id: string;
+            tag_ids: string[];
+        };
         TrainState: {
             lego_hub_id: string;
             speed: number;
             train_id: string;
+        };
+        TrainsConfiguration: {
+            trains: components["schemas"]["TrainConfiguration"][];
+        };
+        TrainsConfigurationDocument: {
+            modified_at: number;
+            restart_required: boolean;
+            value: components["schemas"]["TrainsConfiguration"];
+        };
+        TrainsConfigurationUpdate: {
+            base_modified_at: number;
+            modified_at?: number;
+            value: components["schemas"]["TrainsConfiguration"];
         };
     };
     responses: never;
@@ -248,6 +297,104 @@ export interface operations {
                 };
             };
             /** @description Automation runtime unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+        };
+    };
+    getConfiguration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Editable backend configuration */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigurationSnapshot"];
+                };
+            };
+            /** @description Configuration read failed */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Configuration management unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+        };
+    };
+    replaceConfiguration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigurationUpdate"];
+            };
+        };
+        responses: {
+            /** @description Configuration persisted */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigurationSnapshot"];
+                };
+            };
+            /** @description Invalid configuration */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Configuration update is stale */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Configuration persistence failed */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Configuration management unavailable */
             503: {
                 headers: {
                     [name: string]: unknown;
