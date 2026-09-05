@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
 
 import type { AutomationDocument } from "@/src/components/automation/types";
@@ -32,7 +32,7 @@ it("does not let a local draft overwrite an external automation update", () => {
   fireEvent.click(
     screen.getByRole("button", { name: "Create automation for yard / D1" }),
   );
-  expect(screen.getByText("Unsaved changes")).toBeInTheDocument();
+  expect(screen.getByText("Unsaved")).toBeInTheDocument();
 
   rerender(statusAggregation(externalDocument, onReplaceAutomation));
 
@@ -41,8 +41,64 @@ it("does not let a local draft overwrite an external automation update", () => {
   fireEvent.click(
     screen.getByRole("button", { name: "Reload active automation" }),
   );
-  expect(screen.getByLabelText("Rule name")).toHaveValue("external_rule");
+  expect(screen.getByRole("button", { name: "Run when express arrives" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
   expect(onReplaceAutomation).not.toHaveBeenCalled();
+});
+
+it("removes only invalid dormant rules from the document-level cleanup", async () => {
+  const invalidDormantRule: AutomationDocument["rules"][number] = {
+    id: "missing_switch",
+    enabled: false,
+    root: {
+      type: "train_detected",
+      hub_id: "yard",
+      detector_id: "D1",
+      train_id: "express",
+      children: [
+        {
+          type: "set_switch",
+          hub_id: "yard",
+          switch_id: "gone",
+          position: "straight",
+          children: [],
+        },
+      ],
+    },
+  };
+  const validDormantRule: AutomationDocument["rules"][number] = {
+    id: "valid_stop",
+    enabled: false,
+    root: {
+      type: "train_detected",
+      hub_id: "yard",
+      detector_id: "D1",
+      train_id: "express",
+      children: [{ type: "set_train_speed", speed: 0, children: [] }],
+    },
+  };
+  const onReplaceAutomation = vi.fn(
+    async (document: AutomationDocument) => document,
+  );
+  renderStatus(
+    { version: 1, rules: [validDormantRule, invalidDormantRule] },
+    onReplaceAutomation,
+  );
+
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: "Remove dormant rules that no longer match the railway",
+    }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Save automation" }));
+
+  await waitFor(() => expect(onReplaceAutomation).toHaveBeenCalledTimes(1));
+  expect(onReplaceAutomation).toHaveBeenCalledWith({
+    version: 1,
+    rules: [validDormantRule],
+  });
 });
 
 function renderStatus(

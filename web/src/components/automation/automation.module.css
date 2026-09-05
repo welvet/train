@@ -16,11 +16,64 @@
 }
 
 .ruleCard {
-  background: color-mix(in srgb, var(--mantine-color-default-hover) 45%, transparent);
+  background: color-mix(in srgb, var(--mantine-color-violet-light) 30%, transparent);
 }
 
-.ruleName {
-  flex: 1 1 280px;
+.choiceFieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.titleEmoji,
+.stepEmoji {
+  font-size: 1.75rem;
+  line-height: 1;
+}
+
+.emptyEmoji {
+  font-size: 3.5rem;
+  line-height: 1;
+}
+
+.buttonEmoji {
+  font-size: 1.4rem;
+  line-height: 1;
+}
+
+.pictureButton,
+.choiceButton,
+.trainButton {
+  min-height: 58px;
+}
+
+.pictureButton :global(.mantine-Button-label),
+.choiceButton :global(.mantine-Button-label),
+.trainButton :global(.mantine-Button-label) {
+  display: flex;
+  gap: var(--mantine-spacing-xs);
+  align-items: center;
+}
+
+.trainButton {
+  height: auto;
+  min-height: 64px;
+  text-transform: capitalize;
+}
+
+.flowArrow,
+.thenArrow {
+  margin: calc(var(--mantine-spacing-xs) * -1) 0;
+  font-size: 1.75rem;
+  line-height: 1;
+  text-align: center;
+}
+
+.addRuleButton,
+.removeRuleButton {
+  align-self: center;
+  min-width: 88px;
 }
 
 .nodeList {
@@ -40,9 +93,11 @@
 }
 
 .children {
-  margin-left: var(--mantine-spacing-sm);
+  display: grid;
+  gap: var(--mantine-spacing-sm);
+  margin-left: var(--mantine-spacing-md);
   padding-left: var(--mantine-spacing-md);
-  border-left: 2px solid var(--mantine-color-violet-light-color);
+  border-left: 3px solid var(--mantine-color-violet-light-color);
 }
 
 @media (max-width: 48em) {

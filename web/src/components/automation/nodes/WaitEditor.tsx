@@ -1,11 +1,9 @@
-import { NativeSelect } from "@mantine/core";
+import { Button, SimpleGrid, VisuallyHidden } from "@mantine/core";
 
 import type { WaitNode } from "../types";
+import classes from "../automation.module.css";
 
-const WAIT_OPTIONS = Array.from({ length: 10 }, (_, index) => ({
-  value: String(index + 1),
-  label: `${index + 1} second${index === 0 ? "" : "s"}`,
-}));
+const STANDARD_DELAYS = [1, 2, 5, 10] as const;
 
 export function WaitEditor({
   node,
@@ -14,25 +12,29 @@ export function WaitEditor({
   readonly node: WaitNode;
   readonly onChange: (node: WaitNode) => void;
 }) {
-  const isStandardOption = Number.isInteger(node.seconds) && node.seconds >= 1 && node.seconds <= 10;
-  const options = isStandardOption
-    ? WAIT_OPTIONS
-    : [
-        ...WAIT_OPTIONS,
-        {
-          value: String(node.seconds),
-          label: `${node.seconds} seconds (imported)`,
-        },
-      ];
+  const delays = STANDARD_DELAYS.includes(node.seconds as (typeof STANDARD_DELAYS)[number])
+    ? STANDARD_DELAYS
+    : [...STANDARD_DELAYS, node.seconds];
+
   return (
-    <NativeSelect
-      label="Delay"
-      description="Then run the nested steps"
-      data={options}
-      value={String(node.seconds)}
-      onChange={(event) => {
-        onChange({ ...node, seconds: Number(event.currentTarget.value) });
-      }}
-    />
+    <fieldset className={classes.choiceFieldset}>
+      <VisuallyHidden component="legend">Choose how long to wait</VisuallyHidden>
+      <SimpleGrid cols={{ base: 3, sm: delays.length }} spacing="xs">
+        {delays.map((seconds) => (
+          <Button
+            key={seconds}
+            variant={node.seconds === seconds ? "filled" : "light"}
+            size="lg"
+            className={classes.choiceButton}
+            onClick={() => onChange({ ...node, seconds })}
+            aria-label={`Wait ${seconds} seconds`}
+            aria-pressed={node.seconds === seconds}
+          >
+            <span aria-hidden>⏱️</span>
+            <span>{seconds}s</span>
+          </Button>
+        ))}
+      </SimpleGrid>
+    </fieldset>
   );
 }

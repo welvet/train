@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import type { StateEnvelope } from "@/src/api/train-api-client";
+import type { AutomationDocument } from "@/src/components/automation/types";
 import { AppProviders } from "@/src/components/shell/AppProviders";
 import { MainController } from "./MainController";
 
@@ -35,7 +36,7 @@ it("renders the full device hierarchy from one state request", async () => {
   expect(screen.getByText("D1")).toBeInTheDocument();
   expect(screen.getByText("Unknown tag")).toBeInTheDocument();
   expect(screen.getByText("DE:AD:BE:EF")).toBeInTheDocument();
-  expect(screen.getAllByText("Automation")).toHaveLength(2);
+  expect(screen.getAllByText("Automation")).toHaveLength(3);
   expect(
     screen.getByRole("button", { name: "Create automation for yard / D1" }),
   ).toBeInTheDocument();
@@ -124,10 +125,10 @@ it("loads and saves the backend automation document", async () => {
     </AppProviders>,
   );
 
-  const ruleName = await screen.findByDisplayValue("stop_at_yard");
+  const speedButton = await screen.findByRole("button", { name: "Set train speed to 50%" });
   expect(screen.getByText("Saved")).toBeInTheDocument();
-  fireEvent.change(ruleName, { target: { value: "stop_at_station" } });
-  expect(screen.getByText("Unsaved changes")).toBeInTheDocument();
+  fireEvent.click(speedButton);
+  expect(screen.getByText("Unsaved")).toBeInTheDocument();
 
   fireEvent.click(screen.getByRole("button", { name: "Save automation" }));
   await waitFor(() =>
@@ -135,7 +136,7 @@ it("loads and saves the backend automation document", async () => {
       "/api/automation",
       expect.objectContaining({
         method: "PUT",
-        body: expect.stringContaining('"id":"stop_at_station"'),
+        body: expect.stringContaining('"speed":50'),
       }),
     ),
   );
@@ -180,10 +181,8 @@ it("disables automation editing while a save is in flight", async () => {
   fireEvent.click(
     await screen.findByRole("button", { name: "Create automation for yard / D1" }),
   );
-  const ruleName = screen.getByLabelText("Rule name");
-  fireEvent.change(ruleName, { target: { value: "first_draft" } });
   fireEvent.click(screen.getByRole("button", { name: "Save automation" }));
-  expect(screen.getByLabelText("Rule name")).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Run when express arrives" })).toBeDisabled();
 
   await waitFor(() =>
     expect(fetchMock).toHaveBeenCalledWith(
@@ -205,18 +204,48 @@ it("disables automation editing while a save is in flight", async () => {
     ),
   );
 
-  await waitFor(() => expect(screen.getByLabelText("Rule name")).toBeEnabled());
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Run when express arrives" })).toBeEnabled(),
+  );
   await waitFor(() => expect(screen.getByText("Saved")).toBeInTheDocument());
 
   vi.unstubAllGlobals();
 });
 
-it("does not save an invalid automation draft", async () => {
-  const fetchMock = vi.fn().mockResolvedValue(
-    new Response(JSON.stringify(stateEnvelope()), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    }),
+it("keeps a dormant backend rule off when creating an active rule", async () => {
+  const envelope = stateEnvelope();
+  envelope.automation.document = {
+    version: 1,
+    rules: [
+      {
+        id: "old_rule",
+        enabled: false,
+        root: {
+          type: "train_detected",
+          hub_id: "yard",
+          detector_id: "D1",
+          train_id: "express",
+          children: [{ type: "set_train_speed", speed: 0, children: [] }],
+        },
+      },
+    ],
+  };
+  const fetchMock = vi.fn().mockImplementation(
+    (input: RequestInfo | URL, init?: RequestInit) =>
+      Promise.resolve(
+        new Response(
+          input.toString().endsWith("/api/automation")
+            ? JSON.stringify({
+                automation: {
+                  document: JSON.parse(String(init?.body)),
+                  paused: false,
+                  statuses: [],
+                },
+              })
+            : JSON.stringify(envelope),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
   );
   vi.stubGlobal("fetch", fetchMock);
 
@@ -226,16 +255,21 @@ it("does not save an invalid automation draft", async () => {
     </AppProviders>,
   );
 
-  fireEvent.click(
-    await screen.findByRole("button", { name: "Create automation for yard / D1" }),
+  expect(await screen.findByText("Saved")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Create automation for yard / D1" }));
+  expect(screen.getByText("Unsaved")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Save automation" }));
+  await waitFor(() =>
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/automation",
+      expect.objectContaining({ method: "PUT" }),
+    ),
   );
-  fireEvent.change(screen.getByLabelText("Rule name"), {
-    target: { value: "" },
-  });
-
-  expect(screen.getByRole("button", { name: "Save automation" })).toBeDisabled();
-  expect(screen.getByText("Automation draft cannot be saved")).toBeInTheDocument();
-  expect(fetchMock).toHaveBeenCalledTimes(1);
+  const saveCall = fetchMock.mock.calls.find(([input]) =>
+    input.toString().endsWith("/api/automation"),
+  );
+  const savedDocument = JSON.parse(String(saveCall?.[1]?.body)) as AutomationDocument;
+  expect(savedDocument.rules.map((rule) => rule.enabled)).toEqual([false, true]);
 
   vi.unstubAllGlobals();
 });
