@@ -1,4 +1,5 @@
 import type { StateEnvelope } from "@/src/api/train-api-client";
+import { validateAutomation } from "@/src/components/automation/automation-json";
 
 import type { SystemModel } from "./system";
 
@@ -9,6 +10,7 @@ export function toSystemModel(envelope: StateEnvelope): SystemModel {
     updatedAt: state.updated_at * 1000,
     running: state.running,
     automationHalted: state.automation.halted,
+    automationDocument: validateAutomation(envelope.automation.document),
     trains: Object.values(state.trains)
       .map((train) => {
         const hub = state.lego_hubs[train.lego_hub_id];

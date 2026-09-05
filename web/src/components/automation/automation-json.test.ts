@@ -120,3 +120,76 @@ it("round-trips ordered rules for multiple detectors", () => {
   expect(document.rules.map((rule) => rule.id)).toEqual(["d1_rule", "d2_alternative"]);
   expect(JSON.parse(serializeAutomation(document))).toEqual(document);
 });
+
+it("matches backend scalar and document limits", () => {
+  const rule = {
+    id: "limited_rule",
+    enabled: true,
+    root: {
+      type: "train_detected",
+      hub_id: " yard ",
+      detector_id: " D1 ",
+      train_id: " express ",
+      children: [{ type: "set_train_speed", speed: 0.5, children: [] }],
+    },
+  };
+
+  expect(() =>
+    parseAutomation(JSON.stringify({ version: 1, rules: [rule] })),
+  ).toThrow("speed must be an integer from -100 to 100");
+
+  rule.root.children[0].speed = 0;
+  const parsed = parseAutomation(
+    JSON.stringify({ version: 1, rules: [rule] }),
+  );
+  expect(parsed.rules[0].root).toMatchObject({
+    hub_id: "yard",
+    detector_id: "D1",
+    train_id: "express",
+  });
+
+  const rules = Array.from({ length: 1_001 }, (_, index) => ({
+    ...rule,
+    id: `rule_${index}`,
+    enabled: false,
+  }));
+  expect(() =>
+    parseAutomation(JSON.stringify({ version: 1, rules })),
+  ).toThrow("may contain at most 1000 rules");
+});
+
+it("matches backend node count and tree depth limits", () => {
+  const document = (children: unknown[]) => ({
+    version: 1,
+    rules: [
+      {
+        id: "bounded_tree",
+        enabled: true,
+        root: {
+          type: "train_detected",
+          hub_id: "yard",
+          detector_id: "D1",
+          train_id: "express",
+          children,
+        },
+      },
+    ],
+  });
+
+  const manyNodes = Array.from({ length: 1_001 }, () => ({
+    type: "set_train_speed",
+    speed: 0,
+    children: [],
+  }));
+  expect(() => parseAutomation(JSON.stringify(document(manyNodes)))).toThrow(
+    "Rule may contain at most 1000 nodes",
+  );
+
+  let nested: unknown = { type: "set_train_speed", speed: 0, children: [] };
+  for (let depth = 0; depth < 64; depth += 1) {
+    nested = { type: "wait", seconds: 1, children: [nested] };
+  }
+  expect(() => parseAutomation(JSON.stringify(document([nested])))).toThrow(
+    "tree depth must not exceed 64",
+  );
+});

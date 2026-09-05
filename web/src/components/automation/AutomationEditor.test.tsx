@@ -37,6 +37,9 @@ function renderEditor() {
 it("builds a local automation and generates its JSON", () => {
   renderEditor();
 
+  expect(
+    screen.getByRole("group", { name: "Automation for yard / D1" }),
+  ).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Create automation for yard / D1" }));
   expect(screen.getByLabelText("Rule name")).toHaveValue("yard_d1_express");
   expect(screen.getByText("Set train speed")).toBeInTheDocument();

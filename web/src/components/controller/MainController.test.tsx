@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
+import type { StateEnvelope } from "@/src/api/train-api-client";
 import { AppProviders } from "@/src/components/shell/AppProviders";
 import { MainController } from "./MainController";
 
@@ -71,7 +72,175 @@ it("renders the full device hierarchy from one state request", async () => {
   vi.unstubAllGlobals();
 });
 
-function stateEnvelope() {
+it("loads and saves the backend automation document", async () => {
+  let envelope = stateEnvelope();
+  envelope.automation.document = {
+    version: 1,
+    rules: [
+      {
+        id: "stop_at_yard",
+        enabled: true,
+        root: {
+          type: "train_detected",
+          hub_id: "yard",
+          detector_id: "D1",
+          train_id: "express",
+          children: [{ type: "set_train_speed", speed: 0, children: [] }],
+        },
+      },
+    ],
+  };
+  const fetchMock = vi.fn().mockImplementation(
+    (input: RequestInfo | URL, init?: RequestInit) => {
+      if (input.toString().endsWith("/api/automation")) {
+        const document = JSON.parse(String(init?.body));
+        envelope = {
+          ...envelope,
+          snapshot_at: envelope.snapshot_at + 1,
+          automation: { ...envelope.automation, document },
+        };
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              automation: { document, paused: false, statuses: [] },
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }
+      return Promise.resolve(
+        new Response(JSON.stringify(envelope), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    },
+  );
+  vi.stubGlobal("fetch", fetchMock);
+
+  render(
+    <AppProviders>
+      <MainController />
+    </AppProviders>,
+  );
+
+  const ruleName = await screen.findByDisplayValue("stop_at_yard");
+  expect(screen.getByText("Saved")).toBeInTheDocument();
+  fireEvent.change(ruleName, { target: { value: "stop_at_station" } });
+  expect(screen.getByText("Unsaved changes")).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "Save automation" }));
+  await waitFor(() =>
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/automation",
+      expect.objectContaining({
+        method: "PUT",
+        body: expect.stringContaining('"id":"stop_at_station"'),
+      }),
+    ),
+  );
+  await waitFor(() => expect(screen.getByText("Saved")).toBeInTheDocument());
+
+  vi.unstubAllGlobals();
+});
+
+it("disables automation editing while a save is in flight", async () => {
+  let envelope = stateEnvelope();
+  let resolveSave: ((response: Response) => void) | undefined;
+  const saveResponse = new Promise<Response>((resolve) => {
+    resolveSave = resolve;
+  });
+  const fetchMock = vi.fn().mockImplementation(
+    (input: RequestInfo | URL, init?: RequestInit) => {
+      if (input.toString().endsWith("/api/automation")) {
+        const document = JSON.parse(String(init?.body));
+        envelope = {
+          ...envelope,
+          snapshot_at: envelope.snapshot_at + 1,
+          automation: { ...envelope.automation, document },
+        };
+        return saveResponse;
+      }
+      return Promise.resolve(
+        new Response(JSON.stringify(envelope), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    },
+  );
+  vi.stubGlobal("fetch", fetchMock);
+
+  render(
+    <AppProviders>
+      <MainController />
+    </AppProviders>,
+  );
+
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Create automation for yard / D1" }),
+  );
+  const ruleName = screen.getByLabelText("Rule name");
+  fireEvent.change(ruleName, { target: { value: "first_draft" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save automation" }));
+  expect(screen.getByLabelText("Rule name")).toBeDisabled();
+
+  await waitFor(() =>
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/automation",
+      expect.objectContaining({ method: "PUT" }),
+    ),
+  );
+
+  resolveSave?.(
+    new Response(
+      JSON.stringify({
+        automation: {
+          document: envelope.automation.document,
+          paused: false,
+          statuses: [],
+        },
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    ),
+  );
+
+  await waitFor(() => expect(screen.getByLabelText("Rule name")).toBeEnabled());
+  await waitFor(() => expect(screen.getByText("Saved")).toBeInTheDocument());
+
+  vi.unstubAllGlobals();
+});
+
+it("does not save an invalid automation draft", async () => {
+  const fetchMock = vi.fn().mockResolvedValue(
+    new Response(JSON.stringify(stateEnvelope()), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }),
+  );
+  vi.stubGlobal("fetch", fetchMock);
+
+  render(
+    <AppProviders>
+      <MainController />
+    </AppProviders>,
+  );
+
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Create automation for yard / D1" }),
+  );
+  fireEvent.change(screen.getByLabelText("Rule name"), {
+    target: { value: "" },
+  });
+
+  expect(screen.getByRole("button", { name: "Save automation" })).toBeDisabled();
+  expect(screen.getByText("Automation draft cannot be saved")).toBeInTheDocument();
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+
+  vi.unstubAllGlobals();
+});
+
+function stateEnvelope(): StateEnvelope {
   return {
     version: 3,
     snapshot_at: Date.now() / 1000,

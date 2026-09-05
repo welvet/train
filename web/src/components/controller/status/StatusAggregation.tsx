@@ -1,25 +1,55 @@
-import { Badge, Group, Paper, Stack, Text } from "@mantine/core";
-import { useState } from "react";
+import { Alert, Badge, Button, Group, Paper, Stack, Text } from "@mantine/core";
+import { useMemo, useState } from "react";
 
+import { serializeAutomation } from "@/src/components/automation/automation-json";
+import { validateAutomationTopology } from "@/src/components/automation/automation-validation";
 import type { AutomationDocument, AutomationTopology } from "@/src/components/automation/types";
 import type { SystemModel } from "@/src/model/system";
 import { ArduinoHubRow } from "./rows/ArduinoHubRow";
 import { TrainRow } from "./rows/TrainRow";
 import { StatusGroup } from "./StatusGroup";
 
-export function StatusAggregation({ system }: { readonly system: SystemModel }) {
-  const [automationDocument, setAutomationDocument] = useState<AutomationDocument>({
-    version: 1,
-    rules: [],
-  });
-  const topology: AutomationTopology = {
-    trainIds: system.trains.map((train) => train.id),
-    switches: system.arduinoHubs.flatMap((hub) =>
-      hub.switches.map((railwaySwitch) => ({ hubId: hub.id, switchId: railwaySwitch.id })),
-    ),
-    detectors: system.arduinoHubs.flatMap((hub) =>
-      hub.detectors.map((detector) => ({ hubId: hub.id, detectorId: detector.id })),
-    ),
+export function StatusAggregation({
+  system,
+  automationSaving,
+  onReplaceAutomation,
+}: {
+  readonly system: SystemModel;
+  readonly automationSaving: boolean;
+  readonly onReplaceAutomation: (
+    document: AutomationDocument,
+  ) => Promise<AutomationDocument>;
+}) {
+  const authoritativeJson = useMemo(
+    () => serializeAutomation(system.automationDocument),
+    [system.automationDocument],
+  );
+  const [automationDocument, setAutomationDocument] = useState<AutomationDocument>(
+    system.automationDocument,
+  );
+  const [baseJson, setBaseJson] = useState(authoritativeJson);
+  const draftJson = useMemo(
+    () => JSON.stringify(automationDocument),
+    [automationDocument],
+  );
+  const dirty = draftJson !== compactJson(baseJson);
+  const changedElsewhere = authoritativeJson !== baseJson;
+  const topology = topologyFor(system);
+  const validationError = automationValidationError(
+    automationDocument,
+    topology,
+  );
+
+  const saveAutomation = async () => {
+    const saved = await onReplaceAutomation(automationDocument);
+    const savedJson = serializeAutomation(saved);
+    setAutomationDocument(saved);
+    setBaseJson(savedJson);
+  };
+
+  const reloadAutomation = () => {
+    setAutomationDocument(system.automationDocument);
+    setBaseJson(authoritativeJson);
   };
   return (
     <Stack gap="lg">
@@ -40,6 +70,55 @@ export function StatusAggregation({ system }: { readonly system: SystemModel }) 
             </Badge>
           </Group>
         </Group>
+      </Paper>
+
+      <Paper withBorder radius="md" p="md">
+        <Group justify="space-between" align="center" wrap="wrap">
+          <div>
+            <Group gap="xs">
+              <Text fw={700}>Automation configuration</Text>
+              <Badge
+                color={changedElsewhere ? "orange" : dirty ? "yellow" : "green"}
+                variant="light"
+              >
+                {changedElsewhere
+                  ? "Changed elsewhere"
+                  : dirty
+                    ? "Unsaved changes"
+                    : "Saved"}
+              </Badge>
+            </Group>
+            <Text size="sm" c="dimmed">
+              Edit rules under a detector, then save the complete automation tree.
+            </Text>
+          </div>
+          <Button
+            loading={automationSaving}
+            disabled={!dirty || changedElsewhere || validationError !== null}
+            onClick={() => void saveAutomation().catch(() => undefined)}
+          >
+            Save automation
+          </Button>
+        </Group>
+        {changedElsewhere && (
+          <Alert color="orange" title="Active automation changed" mt="sm">
+            <Stack gap="xs" align="flex-start">
+              <Text size="sm">
+                {dirty
+                  ? "Reload the active tree before editing further so this draft does not overwrite newer changes."
+                  : "Reload to display the latest active automation tree."}
+              </Text>
+              <Button variant="light" color="orange" size="xs" onClick={reloadAutomation}>
+                Reload active automation
+              </Button>
+            </Stack>
+          </Alert>
+        )}
+        {!changedElsewhere && validationError && (
+          <Alert color="red" title="Automation draft cannot be saved" mt="sm">
+            {validationError}
+          </Alert>
+        )}
       </Paper>
 
       <StatusGroup
@@ -63,10 +142,46 @@ export function StatusAggregation({ system }: { readonly system: SystemModel }) 
             hub={hub}
             topology={topology}
             automationDocument={automationDocument}
+            automationSaving={automationSaving}
             onAutomationDocumentChange={setAutomationDocument}
           />
         ))}
       </StatusGroup>
     </Stack>
   );
+}
+
+function compactJson(source: string): string {
+  return JSON.stringify(JSON.parse(source));
+}
+
+function topologyFor(system: SystemModel): AutomationTopology {
+  return {
+    trainIds: system.trains.map((train) => train.id),
+    switches: system.arduinoHubs.flatMap((hub) =>
+      hub.switches.map((railwaySwitch) => ({
+        hubId: hub.id,
+        switchId: railwaySwitch.id,
+      })),
+    ),
+    detectors: system.arduinoHubs.flatMap((hub) =>
+      hub.detectors.map((detector) => ({
+        hubId: hub.id,
+        detectorId: detector.id,
+      })),
+    ),
+  };
+}
+
+function automationValidationError(
+  document: AutomationDocument,
+  topology: AutomationTopology,
+): string | null {
+  try {
+    serializeAutomation(document);
+    validateAutomationTopology(document, topology);
+    return null;
+  } catch (error) {
+    return error instanceof Error ? error.message : "The automation draft is invalid.";
+  }
 }

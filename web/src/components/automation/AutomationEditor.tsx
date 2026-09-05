@@ -13,14 +13,18 @@ import {
   Text,
   Textarea,
   TextInput,
+  VisuallyHidden,
 } from "@mantine/core";
 import { useState } from "react";
 
 import { AutomationNodeList } from "./AutomationNodeEditor";
 import { parseAutomation, serializeAutomation } from "./automation-json";
+import {
+  validateAutomationTopology,
+  visitAutomationNodes,
+} from "./automation-validation";
 import type {
   AutomationDocument,
-  AutomationNode,
   AutomationRule,
   AutomationTopology,
 } from "./types";
@@ -31,6 +35,7 @@ interface AutomationEditorProps {
   readonly detectorId: string;
   readonly topology: AutomationTopology;
   readonly document: AutomationDocument;
+  readonly disabled?: boolean;
   readonly onDocumentChange: (document: AutomationDocument) => void;
 }
 
@@ -39,6 +44,7 @@ export function AutomationEditor({
   detectorId,
   topology,
   document,
+  disabled = false,
   onDocumentChange,
 }: AutomationEditorProps) {
   const [jsonOpen, setJsonOpen] = useState(false);
@@ -127,7 +133,7 @@ export function AutomationEditor({
     }
     try {
       const next = parseAutomation(jsonDraft);
-      validateTopology(next, topology);
+      validateAutomationTopology(next, topology);
       onDocumentChange(next);
       const serialized = serializeAutomation(next);
       setJsonDraft(serialized);
@@ -145,11 +151,15 @@ export function AutomationEditor({
   );
 
   return (
-    <Box mt="md" className={classes.editor}>
+    <fieldset disabled={disabled} className={classes.editorFieldset}>
+      <VisuallyHidden component="legend">
+        Automation for {hubId} / {detectorId}
+      </VisuallyHidden>
+      <Box mt="md" className={classes.editor}>
       <Group justify="space-between" align="center" wrap="wrap" gap="xs">
         <Group gap="xs">
           <Text fw={700} size="sm">Automation</Text>
-          <Badge color="gray" variant="light">Local draft</Badge>
+          <Badge color="gray" variant="light">Editable draft</Badge>
         </Group>
         <Button
           variant="subtle"
@@ -162,7 +172,8 @@ export function AutomationEditor({
         </Button>
       </Group>
       <Text size="xs" c="dimmed" mt={2}>
-        Runs when a configured train is detected here. Backend saving comes later.
+        Runs when a configured train is detected here. Save the complete tree above
+        when the draft is ready.
       </Text>
       {!jsonOpen && serialization.error && (
         <Text size="xs" c="red" mt={2}>{serialization.error}</Text>
@@ -262,7 +273,8 @@ export function AutomationEditor({
           </Button>
         </Stack>
       )}
-    </Box>
+      </Box>
+    </fieldset>
   );
 }
 
@@ -299,6 +311,7 @@ function RuleEditor({
         </Group>
         <NativeSelect
           label="When this train arrives"
+          description="The train must have a configured NFC tag when this tree is saved"
           data={topology.trainIds}
           value={rule.root.train_id}
           onChange={(event) => {
@@ -355,29 +368,11 @@ function uniqueRuleId(document: AutomationDocument, base: string) {
   return `${base}_${suffix}`;
 }
 
-function validateTopology(document: AutomationDocument, topology: AutomationTopology) {
-  const detectors = new Set(topology.detectors.map((item) => `${item.hubId}\u0000${item.detectorId}`));
-  const switches = new Set(topology.switches.map((item) => `${item.hubId}\u0000${item.switchId}`));
-  for (const rule of document.rules) {
-    if (!detectors.has(`${rule.root.hub_id}\u0000${rule.root.detector_id}`)) {
-      throw new Error(`Detector ${rule.root.hub_id} / ${rule.root.detector_id} is not configured.`);
-    }
-    if (!topology.trainIds.includes(rule.root.train_id)) {
-      throw new Error(`Train ${rule.root.train_id} is not configured.`);
-    }
-    visitNodes(rule.root.children, (node) => {
-      if (node.type === "set_switch" && !switches.has(`${node.hub_id}\u0000${node.switch_id}`)) {
-        throw new Error(`Switch ${node.hub_id} / ${node.switch_id} is not configured.`);
-      }
-    });
-  }
-}
-
 function sharedTargetWarnings(document: AutomationDocument) {
   const targets = new Map<string, string[]>();
   for (const rule of document.rules.filter((item) => item.enabled)) {
     const ruleTargets = new Set<string>();
-    visitNodes(rule.root.children, (node) => {
+    visitAutomationNodes(rule.root.children, (node) => {
       if (node.type === "set_train_speed") ruleTargets.add(`Train ${rule.root.train_id}`);
       if (node.type === "set_switch") ruleTargets.add(`Switch ${node.hub_id} / ${node.switch_id}`);
     });
@@ -388,19 +383,12 @@ function sharedTargetWarnings(document: AutomationDocument) {
     .map(([target, ruleIds]) => ({ target, ruleIds }));
 }
 
-function visitNodes(nodes: readonly AutomationNode[], visit: (node: AutomationNode) => void) {
-  for (const node of nodes) {
-    visit(node);
-    if (node.type === "wait" || node.type === "on_count") visitNodes(node.children, visit);
-  }
-}
-
 function trySerialize(
   document: AutomationDocument,
   topology: AutomationTopology,
 ): { json: string | null; error: string | null } {
   try {
-    validateTopology(document, topology);
+    validateAutomationTopology(document, topology);
     return { json: serializeAutomation(document), error: null };
   } catch (error) {
     return {

@@ -13,6 +13,7 @@ export function MainController() {
     error,
     liveUpdateError,
     model,
+    pendingResources,
   } = useSystem();
 
   if (!model && connection === "loading") {
@@ -63,7 +64,11 @@ export function MainController() {
           {commandError}
         </Alert>
       )}
-      <StatusAggregation system={model} />
+      <StatusAggregation
+        system={model}
+        automationSaving={pendingResources.has("automation-document")}
+        onReplaceAutomation={actions.replaceAutomation}
+      />
     </Stack>
   );
 }

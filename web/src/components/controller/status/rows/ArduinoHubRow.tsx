@@ -13,11 +13,13 @@ export function ArduinoHubRow({
   hub,
   topology,
   automationDocument,
+  automationSaving,
   onAutomationDocumentChange,
 }: {
   readonly hub: ArduinoHubModel;
   readonly topology: AutomationTopology;
   readonly automationDocument: AutomationDocument;
+  readonly automationSaving: boolean;
   readonly onAutomationDocumentChange: (document: AutomationDocument) => void;
 }) {
   return (
@@ -59,6 +61,7 @@ export function ArduinoHubRow({
             hubId={hub.id}
             topology={topology}
             automationDocument={automationDocument}
+            automationSaving={automationSaving}
             onAutomationDocumentChange={onAutomationDocumentChange}
           />
         ))}

@@ -59,6 +59,7 @@ it("maps and sorts the backend state into the UI model", () => {
   const model = toSystemModel(envelope);
 
   expect(model.updatedAt).toBe(12_500);
+  expect(model.automationDocument).toEqual({ version: 1, rules: [] });
   expect(model.trains.map((train) => train.id)).toEqual(["alpha", "zed"]);
   expect(model.trains[0].legoHub).toMatchObject({
     id: "hub-a",
