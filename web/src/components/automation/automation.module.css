@@ -1,0 +1,46 @@
+.editor {
+  padding-top: var(--mantine-spacing-sm);
+  border-top: 1px solid var(--mantine-color-default-border);
+}
+
+.emptyState {
+  background: color-mix(in srgb, var(--mantine-color-blue-light) 35%, transparent);
+  border-style: dashed;
+}
+
+.ruleCard {
+  background: color-mix(in srgb, var(--mantine-color-default-hover) 45%, transparent);
+}
+
+.ruleName {
+  flex: 1 1 280px;
+}
+
+.nodeList {
+  display: grid;
+  gap: var(--mantine-spacing-xs);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.nodeItem {
+  min-width: 0;
+}
+
+.nodeCard {
+  background: var(--mantine-color-body);
+}
+
+.children {
+  margin-left: var(--mantine-spacing-sm);
+  padding-left: var(--mantine-spacing-md);
+  border-left: 2px solid var(--mantine-color-violet-light-color);
+}
+
+@media (max-width: 48em) {
+  .children {
+    margin-left: 2px;
+    padding-left: var(--mantine-spacing-sm);
+  }
+}

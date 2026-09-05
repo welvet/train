@@ -1,10 +1,24 @@
 import SatelliteAntenna from "@fluentui-emoji/react/flat/satellite-antenna";
 import { Badge, Text } from "@mantine/core";
 
+import { AutomationEditor } from "@/src/components/automation/AutomationEditor";
+import type { AutomationDocument, AutomationTopology } from "@/src/components/automation/types";
 import type { DetectorModel } from "@/src/model/system";
 import { DeviceRow } from "../DeviceRow";
 
-export function DetectorRow({ detector }: { readonly detector: DetectorModel }) {
+export function DetectorRow({
+  detector,
+  hubId,
+  topology,
+  automationDocument,
+  onAutomationDocumentChange,
+}: {
+  readonly detector: DetectorModel;
+  readonly hubId: string;
+  readonly topology: AutomationTopology;
+  readonly automationDocument: AutomationDocument;
+  readonly onAutomationDocumentChange: (document: AutomationDocument) => void;
+}) {
   return (
     <DeviceRow
       icon={<SatelliteAntenna width={32} aria-hidden />}
@@ -33,6 +47,14 @@ export function DetectorRow({ detector }: { readonly detector: DetectorModel }) 
           )}
         </>
       }
-    />
+    >
+      <AutomationEditor
+        hubId={hubId}
+        detectorId={detector.id}
+        topology={topology}
+        document={automationDocument}
+        onDocumentChange={onAutomationDocumentChange}
+      />
+    </DeviceRow>
   );
 }

@@ -34,6 +34,13 @@ it("renders the full device hierarchy from one state request", async () => {
   expect(screen.getByText("D1")).toBeInTheDocument();
   expect(screen.getByText("Unknown tag")).toBeInTheDocument();
   expect(screen.getByText("DE:AD:BE:EF")).toBeInTheDocument();
+  expect(screen.getAllByText("Automation")).toHaveLength(2);
+  expect(
+    screen.getByRole("button", { name: "Create automation for yard / D1" }),
+  ).toBeInTheDocument();
+  expect(
+    screen.getByRole("button", { name: "Create automation for yard / D2" }),
+  ).toBeInTheDocument();
   for (const speed of [-100, -80, -50, -30, 30, 50, 80, 100]) {
     expect(
       screen.getByRole("button", { name: `Set express speed to ${speed}%` }),
