@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-import io
+import hashlib
 import importlib.machinery
 import importlib.util
-import tarfile
+import io
 import json
 import platform
 import sys
 import sysconfig
+import tarfile
 from pathlib import Path
 from types import ModuleType
 
@@ -80,6 +81,51 @@ def test_runtime_manifest_must_match_server() -> None:
 
     with pytest.raises(server_loop.ReleaseError, match="does not match server"):
         server_loop._verify_runtime(runtime)
+
+
+def test_release_without_automations_uses_compatible_empty_default(
+    tmp_path: Path,
+) -> None:
+    server_loop = _load_tool("server-loop")
+    release = tmp_path / "release"
+    files = {
+        "data/backend.json": b"{}",
+        "data/trains.json": b"{}",
+        "data/arduinos.json": b"{}",
+        "wheels/train-0.1.0-py3-none-any.whl": b"wheel",
+    }
+    for name, contents in files.items():
+        path = release / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(contents)
+    manifest = {
+        "format": 1,
+        "runtime": {
+            "system": platform.system(),
+            "machine": platform.machine(),
+            "implementation": platform.python_implementation().lower(),
+            "python": f"{sys.version_info.major}.{sys.version_info.minor}",
+            "platform": sysconfig.get_platform(),
+            "soabi": str(sysconfig.get_config_var("SOABI")),
+        },
+        "components": {
+            "backend": {"wheelhouse": "wheels", "package": "train"},
+            "data": {"path": "data"},
+        },
+        "files": {
+            name: hashlib.sha256(contents).hexdigest()
+            for name, contents in files.items()
+        },
+    }
+    (release / "manifest.json").write_text(json.dumps(manifest))
+
+    server_loop._verify_manifest(release)
+    destination = tmp_path / "persistent" / "automations.json"
+    server_loop.ServerLoop._seed_automations(
+        release / "data" / "automations.json", destination
+    )
+
+    assert json.loads(destination.read_text()) == {"version": 1, "rules": []}
 
 
 def test_remove_tree_does_not_follow_directory_symlinks(tmp_path: Path) -> None:

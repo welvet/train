@@ -27,8 +27,8 @@ RUNTIME_DATA_FILES = {
     "data/backend.json",
     "data/trains.json",
     "data/arduinos.json",
-    "data/automations.json",
 }
+EMPTY_AUTOMATIONS = b'{"version": 1, "rules": []}\n'
 
 
 class ReleaseError(RuntimeError):
@@ -196,6 +196,10 @@ class ServerLoop:
     @staticmethod
     def _seed_automations(source: Path, destination: Path) -> None:
         destination.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            contents = source.read_bytes()
+        except FileNotFoundError:
+            contents = EMPTY_AUTOMATIONS
         descriptor, name = tempfile.mkstemp(
             dir=destination.parent,
             prefix=f".{destination.name}.",
@@ -204,7 +208,7 @@ class ServerLoop:
         staged = Path(name)
         try:
             with os.fdopen(descriptor, "wb") as output:
-                output.write(source.read_bytes())
+                output.write(contents)
                 output.flush()
                 os.fsync(output.fileno())
             try:
