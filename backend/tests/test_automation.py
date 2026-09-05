@@ -339,7 +339,7 @@ async def test_halt_cancels_work_and_resume_accepts_new_detection(
     ("field", "value", "message"),
     [
         ("train_id", "missing", "unknown train"),
-        ("train_id", "untagged", "has no tag_id"),
+        ("train_id", "untagged", "has no configured tag"),
         ("hub_id", "missing", "unknown Arduino hub"),
         ("detector_id", "missing", "unknown detector"),
     ],

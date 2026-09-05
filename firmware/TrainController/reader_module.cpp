@@ -38,13 +38,6 @@ void ReaderModule::updateReader(int index) {
   if (detected) {
     state.lastSeenAt = now;
     if (!state.tagPresent || !uidMatches(state, uid, uidLength)) {
-      if (state.tagPresent) {
-        const TagChangedEvent removed(
-            index, false, state.uid, state.uidLength);
-        state.tagPresent = false;
-        state.uidLength = 0;
-        bus_.publish(removed);
-      }
       rememberUid(state, uid, uidLength);
       state.tagPresent = true;
       publishChange(index, true);

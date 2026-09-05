@@ -41,7 +41,7 @@ Maps stable train IDs to LEGO BLE addresses and NFC tag UIDs:
       "id": "train_1",
       "lego_hub_id": "hub_red",
       "ble_address": "AA:BB:CC:DD:EE:FF",
-      "tag_id": "04:A1:B2:C3"
+      "tag_ids": ["04:A1:B2:C3", "04:D4:E5:F6"]
     }
   ]
 }
@@ -49,7 +49,15 @@ Maps stable train IDs to LEGO BLE addresses and NFC tag UIDs:
 
 `lego_hub_id` is the stable identity of the physical LEGO hub paired with the
 train. It defaults to the train `id` when omitted, so existing workspaces remain
-valid.
+valid. `tag_ids` lists every NFC tag attached to the same physical train. Tag
+UIDs must be unique across the whole workspace. The legacy singular `tag_id`
+field remains accepted as a single-item list, but a train must not define both
+fields.
+
+Upload firmware built from this version before relying on multiple tags for one
+train. Older firmware remains protocol-compatible, but may report a direct
+change between two tags as a removal followed by a new detection; updated
+firmware lets the backend coalesce both tags into one continuous train presence.
 
 ### `arduinos.json`
 

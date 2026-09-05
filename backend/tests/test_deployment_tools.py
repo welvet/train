@@ -26,7 +26,7 @@ def _write_workspace(root: Path) -> None:
         "arduino_server": {"host": "127.0.0.1", "port": 9000},
     }))
     (root / "trains.json").write_text(json.dumps({
-        "trains": [{"id": "train_1", "ble_address": "AA:BB", "tag_id": ""}]
+        "trains": [{"id": "train_1", "ble_address": "AA:BB", "tag_ids": []}]
     }))
     (root / "arduinos.json").write_text(json.dumps({
         "devices": {

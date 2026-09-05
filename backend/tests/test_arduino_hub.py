@@ -78,6 +78,7 @@ async def hub(bus: EventBus):
         port=0,
         train_tag_map={
             "04:A1:B2:C3": "arctic_express",
+            "04:D4:E5:F6": "arctic_express",
             "04:11:22:33": "cargo_train",
         },
         hub_config=HUB_CONFIG,
@@ -155,7 +156,10 @@ async def test_mismatched_switch_topology_is_rejected(bus: EventBus, hub) -> Non
     await writer.wait_closed()
 
 
-async def test_tag_events_include_train_id(bus: EventBus, hub) -> None:
+@pytest.mark.parametrize("tag_id", ["04:a1:b2:c3", "04:d4:e5:f6"])
+async def test_tag_events_include_train_id(
+    bus: EventBus, hub, tag_id: str
+) -> None:
     mod, port = hub
     events = _collect_events(bus)
     reader, writer = await _connect_hub(port)
@@ -164,13 +168,13 @@ async def test_tag_events_include_train_id(bus: EventBus, hub) -> None:
         "event": "tag_detected",
         "hub": "A_HUB_1",
         "detector": "D1",
-        "tag_id": "04:a1:b2:c3",
+        "tag_id": tag_id,
     })
     await _send_line(writer, {
         "event": "tag_removed",
         "hub": "A_HUB_1",
         "detector": "D1",
-        "tag_id": "04:A1:B2:C3",
+        "tag_id": tag_id,
     })
     await asyncio.sleep(0.05)
 
@@ -181,6 +185,55 @@ async def test_tag_events_include_train_id(bus: EventBus, hub) -> None:
     assert detected[0].train_id == "arctic_express"
     assert len(removed) == 1
     assert removed[0].train_id == "arctic_express"
+
+    writer.close()
+    await writer.wait_closed()
+
+
+async def test_alias_tag_replacement_does_not_repeat_logical_detection(
+    bus: EventBus, hub
+) -> None:
+    mod, port = hub
+    events = _collect_events(bus)
+    reader, writer = await _connect_hub(port)
+
+    await _send_line(writer, {
+        "event": "tag_detected",
+        "hub": "A_HUB_1",
+        "detector": "D1",
+        "tag_id": "04:A1:B2:C3",
+    })
+    await _send_line(writer, {
+        "event": "tag_detected",
+        "hub": "A_HUB_1",
+        "detector": "D1",
+        "tag_id": "04:D4:E5:F6",
+    })
+    await asyncio.sleep(0.05)
+
+    tag_events = [
+        event for event in events if isinstance(event, (TagDetected, TagRemoved))
+    ]
+    assert len(tag_events) == 1
+    assert isinstance(tag_events[0], TagDetected)
+    assert tag_events[0].train_id == "arctic_express"
+    assert mod.get_hub_info("A_HUB_1")["detectors"]["D1"]["train_id"] == (
+        "arctic_express"
+    )
+
+    await _send_line(writer, {
+        "event": "tag_removed",
+        "hub": "A_HUB_1",
+        "detector": "D1",
+        "tag_id": "04:D4:E5:F6",
+    })
+    await asyncio.sleep(0.05)
+
+    removed = [event for event in events if isinstance(event, TagRemoved)]
+    assert len(removed) == 1
+    assert removed[0].train_id == "arctic_express"
+    detector = mod.get_hub_info("A_HUB_1")["detectors"]["D1"]
+    assert detector["triggered"] is False
 
     writer.close()
     await writer.wait_closed()
@@ -209,14 +262,23 @@ async def test_initial_snapshot_publishes_detected_train(bus: EventBus, hub) -> 
     await writer.wait_closed()
 
 
-async def test_same_tag_reconnect_does_not_repeat_tag_events(bus: EventBus, hub) -> None:
+@pytest.mark.parametrize(
+    "replacement_tag_id",
+    ["04:A1:B2:C3", "04:D4:E5:F6"],
+)
+async def test_same_train_reconnect_does_not_repeat_tag_events(
+    bus: EventBus, hub, replacement_tag_id: str
+) -> None:
     mod, port = hub
     events = _collect_events(bus)
     snapshot = [{"detector": "D1", "tag_id": "04:A1:B2:C3"}]
     reader1, writer1 = await _connect_hub(port, detected_tags=snapshot)
     events.clear()
 
-    reader2, writer2 = await _connect_hub(port, detected_tags=snapshot)
+    reader2, writer2 = await _connect_hub(
+        port,
+        detected_tags=[{"detector": "D1", "tag_id": replacement_tag_id}],
+    )
     await asyncio.sleep(0.05)
 
     assert len([event for event in events if isinstance(event, HubConnected)]) == 1

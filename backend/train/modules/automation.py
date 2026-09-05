@@ -296,7 +296,7 @@ def validate_automation_topology(
         if rule.trigger.train_id not in tagged_trains:
             raise AutomationParseError(
                 f"{root_path}.train_id",
-                f"train has no tag_id: {rule.trigger.train_id}",
+                f"train has no configured tag: {rule.trigger.train_id}",
             )
         hub = state.arduino_hubs.get(rule.trigger.hub_id)
         if hub is None:

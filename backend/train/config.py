@@ -18,7 +18,7 @@ class TrainConfig:
     train_id: str
     lego_hub_id: str
     ble_address: str
-    tag_id: str
+    tag_ids: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,9 +58,9 @@ class RuntimeConfig:
     @property
     def train_tag_map(self) -> dict[str, str]:
         return {
-            train.tag_id: train.train_id
+            tag_id: train.train_id
             for train in self.trains
-            if train.tag_id
+            for tag_id in train.tag_ids
         }
 
     @property
@@ -130,16 +130,23 @@ def load_runtime_config(data_dir: Path | None = None) -> RuntimeConfig:
             raise ConfigError(f"{source}.lego_hub_id must be a non-empty string")
         lego_hub_id = raw_lego_hub_id.strip()
         ble_address = _string(value, "ble_address", source)
-        raw_tag_id = value.get("tag_id", "")
-        if not isinstance(raw_tag_id, str):
-            raise ConfigError(f"{source}.tag_id must be a string")
-        tag_id = raw_tag_id.strip().upper()
+        normalized_tag_ids = _train_tag_ids(value, source)
         _unique(train_id, train_ids, f"{source}.id")
         _unique(lego_hub_id, lego_hub_ids, f"{source}.lego_hub_id")
         _unique(ble_address, ble_addresses, f"{source}.ble_address")
-        if tag_id:
-            _unique(tag_id, tag_ids, f"{source}.tag_id")
-        trains.append(TrainConfig(train_id, lego_hub_id, ble_address, tag_id))
+        for tag_index, tag_id in enumerate(normalized_tag_ids):
+            tag_source = (
+                f"{source}.tag_ids[{tag_index}]"
+                if "tag_ids" in value
+                else f"{source}.tag_id"
+            )
+            _unique(tag_id, tag_ids, tag_source)
+        trains.append(TrainConfig(
+            train_id,
+            lego_hub_id,
+            ble_address,
+            normalized_tag_ids,
+        ))
 
     raw_devices = _mapping(arduinos_data, "devices", "arduinos.json")
     if not raw_devices:
@@ -181,6 +188,30 @@ def load_runtime_config(data_dir: Path | None = None) -> RuntimeConfig:
         trains=tuple(trains),
         arduinos=tuple(devices),
     )
+
+
+def _train_tag_ids(value: dict[str, Any], source: str) -> tuple[str, ...]:
+    if "tag_id" in value and "tag_ids" in value:
+        raise ConfigError(f"{source} must not define both tag_id and tag_ids")
+
+    if "tag_ids" in value:
+        raw_tag_ids = value["tag_ids"]
+        if not isinstance(raw_tag_ids, list):
+            raise ConfigError(f"{source}.tag_ids must be a list")
+        normalized: list[str] = []
+        for index, raw_tag_id in enumerate(raw_tag_ids):
+            if not isinstance(raw_tag_id, str) or not raw_tag_id.strip():
+                raise ConfigError(
+                    f"{source}.tag_ids[{index}] must be a non-empty string"
+                )
+            normalized.append(raw_tag_id.strip().upper())
+        return tuple(normalized)
+
+    raw_tag_id = value.get("tag_id", "")
+    if not isinstance(raw_tag_id, str):
+        raise ConfigError(f"{source}.tag_id must be a string")
+    normalized_legacy_tag_id = raw_tag_id.strip().upper()
+    return (normalized_legacy_tag_id,) if normalized_legacy_tag_id else ()
 
 
 def validate_arduino_upload_config(data_dir: Path | None = None) -> None:
