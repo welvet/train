@@ -18,7 +18,7 @@ class TransportModule : public Module {
   void trigger() override;
 
  private:
-  static constexpr size_t kLineBufferSize = 256;
+  static constexpr size_t kLineBufferSize = MAX_CONFIG_FRAME_BYTES;
 
   EventBus& bus_;
   ControllerModel& model_;

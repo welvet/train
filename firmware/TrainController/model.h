@@ -4,6 +4,7 @@
 #include <Arduino.h>
 
 #include "generated_config.h"
+#include "config_types.h"
 
 namespace train {
 
@@ -23,8 +24,12 @@ struct SwitchState {
 struct ControllerModel {
   bool wifiConnected = false;
   bool backendConnected = false;
-  ReaderState readers[READER_STORAGE_SIZE];
-  SwitchState switches[SWITCH_STORAGE_SIZE];
+  RuntimeConfig config;
+  ReaderState readers[MAX_READERS];
+  SwitchState switches[MAX_SWITCHES];
+  bool configurationApplied = false;
+  bool configurationPending = false;
+  bool readersUseSpi = false;
 };
 
 }  // namespace train

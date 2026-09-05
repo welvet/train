@@ -3,11 +3,13 @@ import json
 import pytest
 
 from train.modules.arduino_hub.protocol import (
+    ConfigRequest,
     DetectedTag,
     Hello,
     MoveAcknowledged,
     Pong,
     TagChanged,
+    encode_configuration,
     encode_move_command,
     encode_ping_command,
     parse_message,
@@ -29,6 +31,40 @@ def test_parse_hello_into_typed_message() -> None:
         detectors=("D1",),
         detected_tags=(DetectedTag("D1", "04:AA"),),
     )
+
+
+def test_parse_configuration_request() -> None:
+    assert parse_message(
+        b'{"event":"config_request","schema":1,"device_id":"arduino_1"}'
+    ) == ConfigRequest("arduino_1", 1)
+
+
+def test_encode_runtime_configuration_with_stable_revision() -> None:
+    config = {
+        "servo_settle_ms": 500,
+        "switches": {
+            "S1": {"pin": 9, "straight": 58, "diverge": 100}
+        },
+        "readers": {
+            "D1": {
+                "ss_pin": 4,
+                "read_timeout_ms": 250,
+                "removal_delay_ms": 750,
+            }
+        },
+    }
+    first, revision = encode_configuration("yard", config)
+    second, second_revision = encode_configuration("yard", config)
+
+    assert first == second
+    assert revision == second_revision
+    assert len(revision) == 64
+    payload = json.loads(first)
+    assert payload["cmd"] == "configure"
+    assert payload["hub"] == "yard"
+    assert payload["revision"] == revision
+    assert payload["switches"][0]["pin"] == 9
+    assert payload["readers"][0]["ss_pin"] == 4
 
 
 @pytest.mark.parametrize(

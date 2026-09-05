@@ -23,6 +23,8 @@ const char* EventLoggerModule::eventName(EventType type) {
       return "backend_disconnected";
     case EventType::InboundLine:
       return "inbound_line";
+    case EventType::InboundFrameTooLarge:
+      return "inbound_frame_too_large";
     case EventType::OutboundDocument:
       return "outbound_document";
     case EventType::MoveSwitchRequested:
@@ -31,6 +33,12 @@ const char* EventLoggerModule::eventName(EventType type) {
       return "switch_moved";
     case EventType::TagChanged:
       return "tag_changed";
+    case EventType::ConfigurationChanged:
+      return "configuration_changed";
+    case EventType::HardwareConfigured:
+      return "hardware_configured";
+    case EventType::DisconnectRequested:
+      return "disconnect_requested";
     case EventType::Count:
       return "unknown";
   }

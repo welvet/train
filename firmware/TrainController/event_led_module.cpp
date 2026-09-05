@@ -15,8 +15,17 @@ void EventLedModule::trigger() {
   }
 }
 
-void EventLedModule::receive(void* context, const Event&) {
-  static_cast<EventLedModule*>(context)->blip();
+void EventLedModule::receive(void* context, const Event& event) {
+  static_cast<EventLedModule*>(context)->onEvent(event);
+}
+
+void EventLedModule::onEvent(const Event& event) {
+  if (event.type() == EventType::ConfigurationChanged && model_.readersUseSpi) {
+    digitalWrite(LED_BUILTIN, HIGH);
+    lit_ = false;
+    return;
+  }
+  if (!model_.readersUseSpi) blip();
 }
 
 void EventLedModule::blip() {

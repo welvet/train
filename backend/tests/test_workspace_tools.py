@@ -38,6 +38,7 @@ def test_data_initializer_creates_isolated_workspace_scaffold(
 def test_generated_firmware_config_supports_multiple_devices() -> None:
     arduino_tool = _load_tool("arduino")
     device = {
+        "device_id": "arduino_1",
         "hub_id": "hub_1",
         "backend_host": "host",
         "backend_port": 9000,
@@ -59,16 +60,17 @@ def test_generated_firmware_config_supports_multiple_devices() -> None:
         device, {"wifi_ssid": "wifi", "wifi_password": "secret"}
     )
 
-    assert "constexpr int SWITCH_COUNT = 2;" in result
-    assert "constexpr int READER_COUNT = 2;" in result
+    assert 'constexpr char DEVICE_ID[] = "arduino_1";' in result
     assert "constexpr bool EVENT_LOGGER_ENABLED = true;" in result
-    assert '{"D1", 4, 250, 750}' in result
-    assert '{"D2", 5, 200, 800}' in result
+    assert "SWITCH_COUNT" not in result
+    assert "READER_COUNT" not in result
+    assert "D1" not in result
 
 
 def test_generated_firmware_config_disables_event_logger_by_default() -> None:
     arduino_tool = _load_tool("arduino")
     device = {
+        "device_id": "arduino_1",
         "hub_id": "hub_1",
         "backend_host": "host",
         "backend_port": 9000,

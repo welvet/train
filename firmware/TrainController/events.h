@@ -16,10 +16,14 @@ enum class EventType : uint8_t {
   BackendConnected,
   BackendDisconnected,
   InboundLine,
+  InboundFrameTooLarge,
   OutboundDocument,
   MoveSwitchRequested,
   SwitchMoved,
   TagChanged,
+  ConfigurationChanged,
+  HardwareConfigured,
+  DisconnectRequested,
   Count,
 };
 
@@ -50,11 +54,27 @@ struct BackendDisconnectedEvent final : Event {
   BackendDisconnectedEvent() : Event(EventType::BackendDisconnected) {}
 };
 
+struct ConfigurationChangedEvent final : Event {
+  ConfigurationChangedEvent() : Event(EventType::ConfigurationChanged) {}
+};
+
+struct HardwareConfiguredEvent final : Event {
+  HardwareConfiguredEvent() : Event(EventType::HardwareConfigured) {}
+};
+
+struct DisconnectRequestedEvent final : Event {
+  DisconnectRequestedEvent() : Event(EventType::DisconnectRequested) {}
+};
+
 struct InboundLineEvent final : Event {
   explicit InboundLineEvent(const char* value)
       : Event(EventType::InboundLine), value(value) {}
 
   const char* value;
+};
+
+struct InboundFrameTooLargeEvent final : Event {
+  InboundFrameTooLargeEvent() : Event(EventType::InboundFrameTooLarge) {}
 };
 
 struct OutboundDocumentEvent final : Event {

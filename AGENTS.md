@@ -47,9 +47,10 @@ fails with a guided error when required data is absent or invalid.
 ## Firmware
 
 `firmware/TrainController/TrainController.ino` contains no installation values.
-`tools/arduino` selects a named device from `data/arduinos.json`, validates all
-switch and PN532 reader IDs and pins, generates `generated_config.h` in a
-temporary sketch, then calls Arduino CLI.
+`tools/arduino` selects a named device from `data/arduinos.json`, validates its
+bootstrap and runtime hardware configuration, generates bootstrap-only
+`generated_config.h` in a temporary sketch, then calls Arduino CLI. At runtime
+the firmware fetches switch and PN532 reader topology from the backend.
 
 ```sh
 tools/arduino list
@@ -66,8 +67,9 @@ hello handshake while switches and healthy readers continue operating.
 
 Messages use newline-delimited JSON:
 
-- `hello`: hub ID, switch IDs, healthy detector IDs, and authoritative active
-  tags
+- `config_request`: compiled device ID and protocol schema
+- `hello`: configured hub ID and revision, switch IDs, healthy detector IDs,
+  and authoritative active tags
 - `tag_detected`: hub, detector ID, and raw tag UID
 - `tag_removed`: hub, detector ID, and raw tag UID
 - `move_ack`: switch command result

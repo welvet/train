@@ -21,10 +21,17 @@ class ReaderModule : public Module {
  private:
   EventBus& bus_;
   ControllerModel& model_;
-  Adafruit_PN532* readers_[READER_STORAGE_SIZE] = {nullptr};
+  static constexpr int kPinSlots = MAX_COMPONENT_PIN - MIN_COMPONENT_PIN + 1;
+  Adafruit_PN532* readers_[MAX_READERS] = {nullptr};
+  Adafruit_PN532* pinCache_[kPinSlots] = {nullptr};
   int nextReaderIndex_ = 0;
+  int provisioningIndex_ = 0;
 
+  static void receive(void* context, const Event& event);
+  void beginConfiguration();
+  void provisionNextReader();
   void updateReader(int index);
+  void scanReader(int index, bool publish);
   void publishChange(int index, bool detected);
   static bool uidMatches(
       const ReaderState& state,

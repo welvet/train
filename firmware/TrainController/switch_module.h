@@ -20,15 +20,16 @@ class SwitchModule : public Module {
  private:
   EventBus& bus_;
   ControllerModel& model_;
-  Servo servos_[SWITCH_STORAGE_SIZE];
+  Servo servos_[MAX_SWITCHES];
 
   static void receive(void* context, const Event& event);
   void move(const MoveSwitchRequestedEvent& request);
-  static int findSwitch(const char* id);
-  static bool resolveAngle(
+  int findSwitch(const char* id) const;
+  bool resolveAngle(
       int index,
       const MoveSwitchRequestedEvent& request,
       int& angle);
+  void reset();
 };
 
 }  // namespace train
