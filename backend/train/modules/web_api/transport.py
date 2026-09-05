@@ -13,10 +13,10 @@ from train.domain import (
     decode_public_event,
     encode_public_event,
 )
+from train.modules.web_api.schema import STATE_API_VERSION, openapi_document
 from train.modules.web_api.static_files import PACKAGED_STATIC_ROOT, StaticFileResolver
 
 COMMAND_TIMEOUT = 3.0
-STATE_API_VERSION = 1
 
 
 class WebApiServer:
@@ -46,6 +46,7 @@ class WebApiServer:
     async def start(self) -> None:
         app = web.Application()
         app.router.add_get("/health", self._handle_health)
+        app.router.add_get("/api/openapi.json", self._handle_openapi)
         app.router.add_get("/api/state", self._handle_state)
         app.router.add_post("/api/events", self._handle_event)
         app.router.add_get("/{path:.*}", self._static_files.handle)
@@ -82,6 +83,9 @@ class WebApiServer:
             "version": STATE_API_VERSION,
             "state": asdict(self._bus.state),
         })
+
+    async def _handle_openapi(self, request: web.Request) -> web.Response:
+        return web.json_response(openapi_document())
 
     async def _handle_event(self, request: web.Request) -> web.Response:
         try:

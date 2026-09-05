@@ -24,6 +24,7 @@ class PublicEventSpec:
     event_type: type[Event]
     decode: EventDecoder
     encode: EventEncoder
+    data_schema: Mapping[str, object]
 
 
 PUBLIC_EVENTS = (
@@ -38,6 +39,15 @@ PUBLIC_EVENTS = (
             "train_id": _set_train_speed(event).train_name,
             "speed": _set_train_speed(event).speed,
             "request_id": _set_train_speed(event).request_id,
+        },
+        {
+            "type": "object",
+            "properties": {
+                "train_id": {"type": "string", "minLength": 1},
+                "speed": {"type": "integer", "minimum": -100, "maximum": 100},
+            },
+            "required": ["train_id", "speed"],
+            "additionalProperties": True,
         },
     ),
     PublicEventSpec(
@@ -54,18 +64,35 @@ PUBLIC_EVENTS = (
             "target": _set_switch_position(event).target,
             "request_id": _set_switch_position(event).request_id,
         },
+        {
+            "type": "object",
+            "properties": {
+                "hub_id": {"type": "string", "minLength": 1},
+                "switch_id": {"type": "string", "minLength": 1},
+                "target": {
+                    "oneOf": [
+                        {"type": "string", "enum": ["straight", "diverge", "s", "d"]},
+                        {"type": "integer", "minimum": 0, "maximum": 180},
+                    ]
+                },
+            },
+            "required": ["hub_id", "switch_id", "target"],
+            "additionalProperties": True,
+        },
     ),
     PublicEventSpec(
         "automation_halt",
         AutomationHalt,
         lambda data: AutomationHalt(),
         lambda event: {},
+        {"type": "object", "additionalProperties": True},
     ),
     PublicEventSpec(
         "automation_resume",
         AutomationResume,
         lambda data: AutomationResume(),
         lambda event: {},
+        {"type": "object", "additionalProperties": True},
     ),
 )
 
