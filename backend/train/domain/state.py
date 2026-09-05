@@ -6,25 +6,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 
 from train.domain.events.base import Event
-from train.domain.events.hub import (
-    HubConnected,
-    HubDisconnected,
-    SwitchPositionChanged,
-    TagDetected,
-    TagRemoved,
-)
-from train.domain.events.system import (
-    AutomationHalt,
-    AutomationResume,
-    SystemShutdown,
-    SystemStarted,
-)
-from train.domain.events.train import (
-    TrainConnected,
-    TrainDisconnected,
-    TrainSpeedChanged,
-    TrainStatus,
-)
+from train.domain.reducers import REDUCERS
 
 
 @dataclass(slots=True)
@@ -118,99 +100,11 @@ class SystemState:
             self.updated_at = event.timestamp
 
     def _reduce(self, event: Event) -> bool:
-        if isinstance(event, SystemStarted):
-            return _set_if_different(self, "running", True)
-        if isinstance(event, SystemShutdown):
-            return _set_if_different(self, "running", False)
-        if isinstance(event, AutomationHalt):
-            return _set_if_different(self.automation, "halted", True)
-        if isinstance(event, AutomationResume):
-            return _set_if_different(self.automation, "halted", False)
-        if isinstance(event, TrainConnected):
-            hub = self._ensure_lego_hub(event.train_name)
-            return _set_if_different(hub, "connected", True)
-        if isinstance(event, TrainDisconnected):
-            hub = self._ensure_lego_hub(event.train_name)
-            return _set_if_different(hub, "connected", False)
-        if isinstance(event, TrainSpeedChanged):
-            if not event.success:
-                return False
-            train = self._ensure_train(event.train_name)
-            return _set_if_different(train, "speed", event.speed)
-        if isinstance(event, TrainStatus):
-            hub = self._ensure_lego_hub(event.train_name)
-            battery_changed = _set_if_different(
-                hub, "battery_pct", event.battery_pct
-            )
-            voltage_changed = _set_if_different(hub, "voltage", event.voltage)
-            return battery_changed or voltage_changed
-        if isinstance(event, HubConnected):
-            return self._connect_hub(event)
-        if isinstance(event, HubDisconnected):
-            hub = self._ensure_hub(event.hub_name)
-            changed = _set_if_different(hub, "connected", False)
-            for detector in hub.detectors.values():
-                changed = (
-                    _set_if_different(detector, "available", False) or changed
-                )
-            return changed
-        if isinstance(event, SwitchPositionChanged):
-            if not event.ok:
-                return False
-            hub = self._ensure_hub(event.hub_name)
-            switch = hub.switches.setdefault(
-                event.switch_name,
-                SwitchState(switch_id=event.switch_name),
-            )
-            return _set_if_different(switch, "angle", event.angle)
-        if isinstance(event, TagDetected):
-            detector = self._ensure_detector(
-                event.hub_name, event.detector_name
-            )
-            changed = _set_if_different(detector, "triggered", True)
-            return _set_if_different(detector, "train_id", event.train_id) or changed
-        if isinstance(event, TagRemoved):
-            detector = self._ensure_detector(
-                event.hub_name, event.detector_name
-            )
-            if not detector.triggered or detector.train_id != event.train_id:
-                return False
-            detector.triggered = False
-            detector.train_id = None
-            return True
+        for event_type in type(event).__mro__:
+            reducer = REDUCERS.get(event_type)
+            if reducer is not None:
+                return reducer(self, event)
         return False
-
-    def _connect_hub(self, event: HubConnected) -> bool:
-        hub = self._ensure_hub(event.hub_name)
-        changed = _set_if_different(hub, "connected", True)
-        for switch_id in event.switches:
-            if switch_id not in hub.switches:
-                hub.switches[switch_id] = SwitchState(switch_id=switch_id)
-                changed = True
-        available_detectors = set(event.detectors)
-        active_trains = dict(event.active_trains)
-        for detector_id in available_detectors:
-            if detector_id not in hub.detectors:
-                hub.detectors[detector_id] = DetectorState(
-                    detector_id=detector_id
-                )
-                changed = True
-        for detector in hub.detectors.values():
-            available = detector.detector_id in available_detectors
-            train_id = active_trains.get(detector.detector_id)
-            detector_changed = _set_if_different(
-                detector, "available", available
-            )
-            detector_changed = (
-                _set_if_different(detector, "triggered", train_id is not None)
-                or detector_changed
-            )
-            detector_changed = (
-                _set_if_different(detector, "train_id", train_id)
-                or detector_changed
-            )
-            changed = detector_changed or changed
-        return changed
 
     def _ensure_train(
         self, train_id: str, *, lego_hub_id: str | None = None
@@ -235,20 +129,27 @@ class SystemState:
             hub_id, ArduinoHubState(hub_id=hub_id)
         )
 
+    def _ensure_switch(
+        self, hub_id: str, switch_id: str
+    ) -> tuple[SwitchState, bool]:
+        hub = self._ensure_hub(hub_id)
+        switch = hub.switches.get(switch_id)
+        if switch is not None:
+            return switch, False
+        switch = SwitchState(switch_id=switch_id)
+        hub.switches[switch_id] = switch
+        return switch, True
+
     def _ensure_detector(
         self, hub_id: str, detector_id: str
-    ) -> DetectorState:
+    ) -> tuple[DetectorState, bool]:
         hub = self._ensure_hub(hub_id)
-        return hub.detectors.setdefault(
-            detector_id, DetectorState(detector_id=detector_id)
-        )
-
-
-def _set_if_different(target: object, field_name: str, value: object) -> bool:
-    if getattr(target, field_name) == value:
-        return False
-    setattr(target, field_name, value)
-    return True
+        detector = hub.detectors.get(detector_id)
+        if detector is not None:
+            return detector, False
+        detector = DetectorState(detector_id=detector_id)
+        hub.detectors[detector_id] = detector
+        return detector, True
 
 
 def _names(value: object) -> tuple[str, ...]:
