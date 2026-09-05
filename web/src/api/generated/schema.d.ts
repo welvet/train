@@ -36,6 +36,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/state/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["streamSystemState"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -120,6 +136,7 @@ export interface components {
             [key: string]: unknown;
         };
         StateEnvelope: {
+            snapshot_at: number;
             state: components["schemas"]["SystemState"];
             /** @constant */
             version: 1;
@@ -233,6 +250,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StateEnvelope"];
+                };
+            };
+        };
+    };
+    streamSystemState: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Authoritative state snapshots as server-sent events */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": string;
                 };
             };
         };

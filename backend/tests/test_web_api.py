@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
+from aiohttp import ClientResponse
 from aiohttp.test_utils import TestClient, TestServer
 
 import train.modules.web_api.transport as web_transport
@@ -13,6 +15,7 @@ from train.domain import (
     SetSwitchPosition,
     SetTrainSpeed,
     SwitchPositionChanged,
+    SystemStarted,
     SystemState,
     TrainSpeedChanged,
 )
@@ -85,6 +88,7 @@ async def test_state_returns_complete_domain_snapshot(
     assert response.status == 200
     envelope = await response.json()
     assert envelope["version"] == 1
+    assert envelope["snapshot_at"] > 0
     body = envelope["state"]
     assert body["revision"] == 1
     assert body["trains"]["express"] == {
@@ -109,7 +113,73 @@ async def test_openapi_exposes_state_and_public_event_contract(
     assert response.status == 200
     body = await response.json()
     assert body["openapi"] == "3.1.0"
-    assert set(body["paths"]) == {"/api/state", "/api/events"}
+    assert set(body["paths"]) == {
+        "/api/state",
+        "/api/state/stream",
+        "/api/events",
+    }
+
+
+async def test_state_stream_sends_initial_and_changed_full_snapshots(
+    bus: EventBus, client: TestClient
+) -> None:
+    response = await client.get("/api/state/stream")
+    try:
+        assert response.status == 200
+        assert response.headers["Content-Type"].startswith("text/event-stream")
+        initial = await _read_state_event(response)
+        assert initial["state"]["revision"] == 0
+
+        await bus.publish(SystemStarted())
+
+        changed = await _read_state_event(response)
+        assert changed["version"] == 1
+        assert changed["snapshot_at"] >= initial["snapshot_at"]
+        assert changed["state"]["revision"] == 1
+        assert changed["state"]["running"] is True
+    finally:
+        response.close()
+
+
+async def test_state_stream_closes_when_module_stops(bus: EventBus) -> None:
+    module = WebApiModule(bus, host="127.0.0.1", port=0)
+    await module.start()
+    assert module._app is not None
+    client = TestClient(TestServer(module._app))
+    await client.start_server()
+    response = await client.get("/api/state/stream")
+    try:
+        await _read_state_event(response)
+
+        await asyncio.wait_for(module.stop(), timeout=0.5)
+
+        assert await response.content.read() == b""
+    finally:
+        response.close()
+        await client.close()
+        await module.stop()
+
+
+async def test_state_stream_sends_keepalive_comments(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(web_transport, "STREAM_KEEPALIVE_INTERVAL", 0.01)
+    response = await client.get("/api/state/stream")
+    try:
+        await _read_state_event(response)
+        async with asyncio.timeout(1):
+            assert await response.content.readline() == b": keepalive\n"
+            assert await response.content.readline() == b"\n"
+    finally:
+        response.close()
+
+
+async def _read_state_event(response: ClientResponse) -> dict[str, object]:
+    async with asyncio.timeout(1):
+        assert await response.content.readline() == b"event: state\n"
+        data = await response.content.readline()
+        assert await response.content.readline() == b"\n"
+    return json.loads(data.removeprefix(b"data: "))
 
 
 async def test_event_endpoint_decodes_and_publishes_command(
