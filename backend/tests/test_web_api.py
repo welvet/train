@@ -88,10 +88,11 @@ async def test_state_returns_complete_domain_snapshot(
 
     assert response.status == 200
     envelope = await response.json()
-    assert envelope["version"] == 3
+    assert envelope["version"] == 4
     assert envelope["snapshot_at"] > 0
     assert envelope["automation"] == {
         "document": {"version": 1, "rules": []},
+        "eligible_train_ids": [],
         "paused": False,
         "statuses": [],
     }
@@ -140,7 +141,7 @@ async def test_state_stream_sends_initial_and_changed_full_snapshots(
         await bus.publish(SystemStarted())
 
         changed = await _read_state_event(response)
-        assert changed["version"] == 3
+        assert changed["version"] == 4
         assert changed["snapshot_at"] >= initial["snapshot_at"]
         assert changed["state"]["revision"] == 1
         assert changed["state"]["running"] is True
@@ -194,6 +195,7 @@ async def test_automation_update_returns_and_streams_replacement(
 ) -> None:
     current = {
         "document": {"version": 1, "rules": []},
+        "eligible_train_ids": ["express"],
         "paused": False,
         "statuses": [],
     }

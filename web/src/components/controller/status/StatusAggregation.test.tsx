@@ -67,6 +67,20 @@ it("keeps a new empty rule as an unfinished choice until a step is added", () =>
   expect(screen.getByRole("button", { name: "Save automation" })).toBeEnabled();
 });
 
+it("offers only trains the backend marks eligible for automation", () => {
+  const onReplaceAutomation = vi.fn();
+  renderStatus(emptyDocument, onReplaceAutomation);
+
+  fireEvent.click(
+    screen.getByRole("button", { name: "Create automation for yard / D1" }),
+  );
+
+  expect(screen.getByRole("button", { name: "Run when express arrives" })).toBeVisible();
+  expect(
+    screen.queryByRole("button", { name: "Run when untagged arrives" }),
+  ).not.toBeInTheDocument();
+});
+
 it("keeps an empty nested action quiet and unsaveable until it gets a child", () => {
   const onReplaceAutomation = vi.fn();
   renderStatus(emptyDocument, onReplaceAutomation);
@@ -197,7 +211,11 @@ function systemModel(automationDocument: AutomationDocument): SystemModel {
     running: true,
     automationHalted: false,
     automationDocument,
-    trains: [{ id: "express", speed: 0, legoHub: null }],
+    automationTrainIds: ["express"],
+    trains: [
+      { id: "express", speed: 0, legoHub: null },
+      { id: "untagged", speed: 0, legoHub: null },
+    ],
     arduinoHubs: [
       {
         id: "yard",

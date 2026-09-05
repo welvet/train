@@ -121,6 +121,7 @@ async def test_module_runs_matching_tree_with_acknowledged_commands(
         assert [(item.train_name, item.speed) for item in speeds] == [
             ("express", 45)
         ]
+        assert module.snapshot()["eligible_train_ids"] == ["express"]
         assert module.snapshot()["statuses"][0]["state"] is RuleState.IDLE
     finally:
         await module.stop()

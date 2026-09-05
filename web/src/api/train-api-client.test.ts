@@ -46,6 +46,25 @@ describe("TrainApiClient", () => {
     });
   });
 
+  it("rejects state without automation-eligible train ids", async () => {
+    const envelope = stateEnvelope();
+    Reflect.deleteProperty(envelope.automation, "eligible_train_ids");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify(envelope), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+
+    await expect(new TrainApiClient().getState()).rejects.toMatchObject({
+      message: "The backend returned an unsupported state format",
+      status: 0,
+    });
+  });
+
   it("marks a timed out command as having an unknown outcome", async () => {
     vi.stubGlobal(
       "fetch",
@@ -102,7 +121,7 @@ describe("TrainApiClient", () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
         JSON.stringify({
-          automation: { document, paused: false, statuses: [] },
+          automation: { document, eligible_train_ids: [], paused: false, statuses: [] },
         }),
         {
           status: 200,
@@ -256,10 +275,11 @@ class FakeEventSource {
 
 function stateEnvelope(): StateEnvelope {
   return {
-    version: 3 as const,
+    version: 4 as const,
     snapshot_at: 2,
     automation: {
       document: { version: 1, rules: [] },
+      eligible_train_ids: [],
       paused: false,
       statuses: [],
     },

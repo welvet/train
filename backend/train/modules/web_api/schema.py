@@ -8,7 +8,7 @@ from typing import Any, get_args, get_origin, get_type_hints
 from train.domain.state import SystemState
 from train.domain.vocabulary import PUBLIC_EVENTS
 
-STATE_API_VERSION = 3
+STATE_API_VERSION = 4
 
 
 def openapi_document() -> dict[str, object]:
@@ -33,13 +33,17 @@ def openapi_document() -> dict[str, object]:
         "type": "object",
         "properties": {
             "document": {"$ref": "#/components/schemas/AutomationDocument"},
+            "eligible_train_ids": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
             "paused": {"type": "boolean"},
             "statuses": {
                 "type": "array",
                 "items": {"type": "object", "additionalProperties": True},
             },
         },
-        "required": ["document", "paused", "statuses"],
+        "required": ["document", "eligible_train_ids", "paused", "statuses"],
         "additionalProperties": False,
     }
     schemas["AutomationUpdateResponse"] = {

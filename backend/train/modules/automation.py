@@ -114,6 +114,7 @@ class AutomationModule(Module):
     def snapshot(self) -> dict[str, object]:
         return {
             "document": copy.deepcopy(self._document_json),
+            "eligible_train_ids": sorted(self._tagged_trains),
             "paused": self._runner.paused,
             "statuses": [asdict(status) for status in self._runner.statuses()],
         }

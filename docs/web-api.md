@@ -8,8 +8,8 @@ switch-specific routing.
 ## Read system state
 
 `GET /api/state` returns the current `SystemState` in a versioned JSON envelope.
-Version 3 has the shape
-`{"version": 3, "snapshot_at": 123.4, "state": {...}, "automation": {...}}`.
+Version 4 has the shape
+`{"version": 4, "snapshot_at": 123.4, "state": {...}, "automation": {...}}`.
 `snapshot_at` records
 when the backend created the response so clients can reject older snapshots.
 Configured trains, Arduino hubs, switches, and detectors are present before their
@@ -17,9 +17,11 @@ hardware connects. Runtime events update the same state read by automation and
 the API.
 
 `automation.document` contains the complete JSON stored in
-`data/automations.json`. `automation.statuses` reports each rule's current
-runtime state and last failure, and `automation.paused` reports the global halt
-state. `PUT /api/automation` accepts a complete replacement document. The
+`data/automations.json`. `automation.eligible_train_ids` contains the configured
+train IDs that have tags and can trigger detector rules, without exposing their
+tag values. `automation.statuses` reports each rule's current runtime state and
+last failure, and `automation.paused` reports the global halt state. `PUT
+/api/automation` accepts a complete replacement document. The
 backend validates the whole tree and its topology references before atomically
 persisting and applying it. Invalid updates leave the previous automation
 running. Every valid replacement cancels and awaits all current automation work
@@ -75,7 +77,7 @@ queued command from one already sent to hardware, inspect current state before
 retrying. Commands targeting the same train or switch are serialized across
 both automation and HTTP callers.
 
-Version 3 does not accept client idempotency keys. A timeout covers queueing,
+Version 4 does not accept client idempotency keys. A timeout covers queueing,
 publication, and acknowledgement, and means the physical outcome may be unknown.
 Inspect state before deciding whether to issue another command.
 

@@ -105,6 +105,12 @@
           "document": {
             "$ref": "#/components/schemas/AutomationDocument"
           },
+          "eligible_train_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "paused": {
             "type": "boolean"
           },
@@ -118,6 +124,7 @@
         },
         "required": [
           "document",
+          "eligible_train_ids",
           "paused",
           "statuses"
         ],
@@ -354,7 +361,7 @@
             "$ref": "#/components/schemas/SystemState"
           },
           "version": {
-            "const": 3,
+            "const": 4,
             "type": "integer"
           }
         },
@@ -451,7 +458,7 @@
   },
   "info": {
     "title": "Train Web API",
-    "version": "3"
+    "version": "4"
   },
   "openapi": "3.1.0",
   "paths": {

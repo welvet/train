@@ -42,6 +42,7 @@ export interface SystemModel {
   readonly running: boolean;
   readonly automationHalted: boolean;
   readonly automationDocument: AutomationDocument;
+  readonly automationTrainIds: readonly string[];
   readonly trains: readonly TrainModel[];
   readonly arduinoHubs: readonly ArduinoHubModel[];
 }
