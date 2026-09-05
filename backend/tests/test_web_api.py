@@ -110,6 +110,20 @@ async def test_invalid_speed_value(bus: EventBus, client: TestClient) -> None:
     assert resp.status == 400
 
 
+async def test_invalid_speed_json_preserves_error_contract(
+    bus: EventBus,
+    client: TestClient,
+) -> None:
+    resp = await client.post(
+        "/trains/arctic_express/speed",
+        data="{",
+        headers={"Content-Type": "application/json"},
+    )
+
+    assert resp.status == 400
+    assert await resp.json() == {"error": 'body must be {"speed": <int>}'}
+
+
 async def test_speed_out_of_range(bus: EventBus, client: TestClient) -> None:
     resp = await client.post("/trains/arctic_express/speed", json={"speed": 200})
     assert resp.status == 400
