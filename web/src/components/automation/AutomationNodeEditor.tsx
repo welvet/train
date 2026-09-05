@@ -9,11 +9,11 @@ import { WaitEditor } from "./nodes/WaitEditor";
 import type { AutomationNode, SwitchOption } from "./types";
 import classes from "./automation.module.css";
 
-const NODE_LABELS: Record<AutomationNode["type"], string> = {
-  set_switch: "Move switch",
-  wait: "Wait",
-  set_train_speed: "Set train speed",
-  on_count: "Count detections",
+const NODE_LABELS: Record<AutomationNode["type"], { emoji: string; label: string }> = {
+  set_switch: { emoji: "🚦", label: "Switch" },
+  wait: { emoji: "⏱️", label: "Wait" },
+  set_train_speed: { emoji: "🚂", label: "Speed" },
+  on_count: { emoji: "🔁", label: "Count" },
 };
 
 export function AutomationNodeList({
@@ -77,52 +77,55 @@ function AutomationNodeEditor({
   readonly onMove: (offset: -1 | 1) => void;
 }) {
   const hasChildren = node.type === "wait" || node.type === "on_count";
+  const heading = NODE_LABELS[node.type];
 
   return (
     <li className={classes.nodeItem}>
-      <Paper withBorder radius="md" p="sm" className={classes.nodeCard}>
-        <Stack gap="sm">
+      <Paper withBorder radius="lg" p={{ base: "sm", sm: "md" }} className={classes.nodeCard}>
+        <Stack gap="md">
           <Group justify="space-between" align="center" wrap="nowrap">
             <Group gap="xs" wrap="nowrap">
-              <Badge variant="light" color={hasChildren ? "violet" : "blue"} circle>
+              <Badge variant="filled" color={hasChildren ? "violet" : "blue"} circle size="lg">
                 {index + 1}
               </Badge>
-              <Text fw={700} size="sm">
-                {NODE_LABELS[node.type]}
-              </Text>
+              <Text className={classes.stepEmoji} aria-hidden>{heading.emoji}</Text>
+              <Text fw={800}>{heading.label}</Text>
             </Group>
-            <Group gap={4} wrap="nowrap">
+            <Group gap={6} wrap="nowrap">
               <Tooltip label="Move up">
                 <ActionIcon
-                  variant="subtle"
+                  variant="light"
                   color="gray"
+                  size="lg"
                   disabled={index === 0}
-                  aria-label={`Move ${NODE_LABELS[node.type]} step ${index + 1} up`}
+                  aria-label={`Move ${heading.label} step ${index + 1} up`}
                   onClick={() => onMove(-1)}
                 >
-                  ↑
+                  ⬆️
                 </ActionIcon>
               </Tooltip>
               <Tooltip label="Move down">
                 <ActionIcon
-                  variant="subtle"
+                  variant="light"
                   color="gray"
+                  size="lg"
                   disabled={index === count - 1}
-                  aria-label={`Move ${NODE_LABELS[node.type]} step ${index + 1} down`}
+                  aria-label={`Move ${heading.label} step ${index + 1} down`}
                   onClick={() => onMove(1)}
                 >
-                  ↓
+                  ⬇️
                 </ActionIcon>
               </Tooltip>
-              <Tooltip label="Remove step">
+              <Tooltip label="Remove">
                 <ActionIcon
-                  variant="subtle"
+                  variant="light"
                   color="red"
+                  size="lg"
                   disabled={count === 1}
-                  aria-label={`Remove ${NODE_LABELS[node.type]} step ${index + 1}`}
+                  aria-label={`Remove ${heading.label} step ${index + 1}`}
                   onClick={onRemove}
                 >
-                  ×
+                  🗑️
                 </ActionIcon>
               </Tooltip>
             </Group>
@@ -139,9 +142,7 @@ function AutomationNodeEditor({
 
           {hasChildren && (
             <div className={classes.children}>
-              <Text size="xs" c="dimmed" fw={700} mb="xs">
-                Then
-              </Text>
+              <Text className={classes.thenArrow} aria-hidden>👇</Text>
               <AutomationNodeList
                 nodes={node.children}
                 switches={switches}

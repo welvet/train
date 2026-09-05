@@ -6,19 +6,14 @@ import {
   Box,
   Button,
   Group,
-  NativeSelect,
   Paper,
+  SimpleGrid,
   Stack,
-  Switch,
   Text,
-  Textarea,
-  TextInput,
   VisuallyHidden,
 } from "@mantine/core";
-import { useState } from "react";
 
 import { AutomationNodeList } from "./AutomationNodeEditor";
-import { parseAutomation, serializeAutomation } from "./automation-json";
 import {
   validateAutomationTopology,
   visitAutomationNodes,
@@ -47,51 +42,40 @@ export function AutomationEditor({
   disabled = false,
   onDocumentChange,
 }: AutomationEditorProps) {
-  const [jsonOpen, setJsonOpen] = useState(false);
-  const [jsonDraft, setJsonDraft] = useState("");
-  const [jsonBase, setJsonBase] = useState("");
-  const [jsonError, setJsonError] = useState<string | null>(null);
-  const [jsonApplied, setJsonApplied] = useState(false);
   const indexedRules = document.rules
     .map((rule, index) => ({ rule, index }))
     .filter(
       ({ rule }) =>
-        rule.root.hub_id === hubId && rule.root.detector_id === detectorId,
+        rule.enabled &&
+        rule.root.hub_id === hubId &&
+        rule.root.detector_id === detectorId,
     );
-  const serialization = trySerialize(document, topology);
-  const documentJson = serialization.json ?? "";
-  const jsonStale = jsonOpen && (serialization.error !== null || jsonBase !== documentJson);
+  const availableTrainIds = topology.trainIds.filter(
+    (trainId) => !indexedRules.some(({ rule }) => rule.root.train_id === trainId),
+  );
+  const localValidationError = getValidationError(
+    { version: 1, rules: indexedRules.map(({ rule }) => rule) },
+    topology,
+  );
 
   const setDocument = (next: AutomationDocument) => {
     onDocumentChange(next);
-    setJsonApplied(false);
   };
 
   const replaceRule = (index: number, next: AutomationRule) => {
-    let rules = document.rules.map((rule, itemIndex) => (itemIndex === index ? next : rule));
-    if (next.enabled) {
-      rules = rules.map((rule, itemIndex) =>
-        itemIndex !== index && sameTrigger(rule, next) ? { ...rule, enabled: false } : rule,
-      );
-    }
-    setDocument({ version: 1, rules });
+    setDocument({
+      version: 1,
+      rules: document.rules.map((rule, itemIndex) =>
+        itemIndex === index ? { ...next, enabled: true } : rule,
+      ),
+    });
   };
 
   const createRule = () => {
-    const trainId =
-      topology.trainIds.find(
-        (id) => !indexedRules.some(({ rule }) => rule.root.train_id === id),
-      ) ?? topology.trainIds[0] ?? "";
-    const id = uniqueRuleId(document, ruleId(hubId, detectorId, trainId));
+    const trainId = availableTrainIds[0] ?? "";
     const next: AutomationRule = {
-      id,
-      enabled: !document.rules.some(
-        (rule) =>
-          rule.enabled &&
-          rule.root.hub_id === hubId &&
-          rule.root.detector_id === detectorId &&
-          rule.root.train_id === trainId,
-      ),
+      id: uniqueRuleId(document, ruleId(hubId, detectorId, trainId)),
+      enabled: true,
       root: {
         type: "train_detected",
         hub_id: hubId,
@@ -101,49 +85,6 @@ export function AutomationEditor({
       },
     };
     setDocument({ version: 1, rules: [...document.rules, next] });
-  };
-
-  const refreshJson = () => {
-    if (serialization.error) {
-      setJsonError(serialization.error);
-      setJsonApplied(false);
-      return;
-    }
-    setJsonDraft(documentJson);
-    setJsonBase(documentJson);
-    setJsonError(null);
-    setJsonApplied(false);
-  };
-
-  const toggleJson = () => {
-    if (!jsonOpen) {
-      if (serialization.error) {
-        setJsonError(serialization.error);
-        return;
-      }
-      refreshJson();
-    }
-    setJsonOpen((open) => !open);
-  };
-
-  const applyJson = () => {
-    if (jsonStale) {
-      setJsonError("The visual draft changed after this JSON snapshot. Regenerate before applying.");
-      return;
-    }
-    try {
-      const next = parseAutomation(jsonDraft);
-      validateAutomationTopology(next, topology);
-      onDocumentChange(next);
-      const serialized = serializeAutomation(next);
-      setJsonDraft(serialized);
-      setJsonBase(serialized);
-      setJsonError(null);
-      setJsonApplied(true);
-    } catch (error) {
-      setJsonApplied(false);
-      setJsonError(error instanceof Error ? error.message : "Could not apply JSON.");
-    }
   };
 
   const conflicts = sharedTargetWarnings(document).filter((warning) =>
@@ -156,123 +97,83 @@ export function AutomationEditor({
         Automation for {hubId} / {detectorId}
       </VisuallyHidden>
       <Box mt="md" className={classes.editor}>
-      <Group justify="space-between" align="center" wrap="wrap" gap="xs">
-        <Group gap="xs">
-          <Text fw={700} size="sm">Automation</Text>
-          <Badge color="gray" variant="light">Editable draft</Badge>
+        <Group justify="space-between" align="center">
+          <Group gap="xs">
+            <Text className={classes.titleEmoji} aria-hidden>⚙️</Text>
+            <Text fw={800}>Automation</Text>
+          </Group>
+          {indexedRules.length > 0 && (
+            <Badge color="green" variant="light" size="lg">⚡ On</Badge>
+          )}
         </Group>
-        <Button
-          variant="subtle"
-          size="compact-sm"
-          onClick={toggleJson}
-          disabled={!jsonOpen && serialization.error !== null}
-          aria-label={`${jsonOpen ? "Hide" : "View"} automation JSON for ${hubId} / ${detectorId}`}
-        >
-          {jsonOpen ? "Hide JSON" : "View JSON"}
-        </Button>
-      </Group>
-      <Text size="xs" c="dimmed" mt={2}>
-        Runs when a configured train is detected here. Save the complete tree above
-        when the draft is ready.
-      </Text>
-      {!jsonOpen && serialization.error && (
-        <Text size="xs" c="red" mt={2}>{serialization.error}</Text>
-      )}
 
-      {jsonOpen && (
-        <Paper withBorder radius="md" p="sm" mt="sm">
-          <Stack gap="xs">
-            <Textarea
-              label="Complete automation JSON"
-              aria-label={`Complete automation JSON for ${hubId} / ${detectorId}`}
-              description="Import or export the version 1 document for every detector"
-              rows={12}
-              ff="monospace"
-              value={jsonDraft}
-              onChange={(event) => {
-                setJsonDraft(event.currentTarget.value);
-                setJsonApplied(false);
-              }}
-            />
-            {jsonStale && (
-              <Alert color="yellow" title="JSON snapshot is out of date">
-                The visual draft changed. Regenerate the JSON before applying edits from it.
-              </Alert>
-            )}
-            {jsonError && <Alert color="red" title="JSON not applied">{jsonError}</Alert>}
-            {jsonApplied && (
-              <Alert color="green" title="JSON applied to the visual draft">
-                Every detector now reflects the parsed document.
-              </Alert>
-            )}
-            <Group justify="flex-end">
+        {localValidationError && (
+          <Alert color="red" title="Needs a fix" mt="sm">{localValidationError}</Alert>
+        )}
+        {conflicts.map((warning) => (
+          <Alert color="yellow" title="Same track control" mt="sm" key={warning.target}>
+            {warning.target} is changed by more than one rule.
+          </Alert>
+        ))}
+
+        {indexedRules.length === 0 ? (
+          <Paper withBorder radius="lg" p="lg" mt="sm" className={classes.emptyState}>
+            <Stack gap="md" align="center">
+              <Text className={classes.emptyEmoji} aria-hidden>🪄</Text>
               <Button
-                variant="default"
-                size="xs"
-                onClick={refreshJson}
-                disabled={serialization.error !== null}
+                size="xl"
+                onClick={createRule}
+                disabled={topology.trainIds.length === 0}
+                aria-label={`Create automation for ${hubId} / ${detectorId}`}
               >
-                Regenerate
+                🚂 Build
               </Button>
-              <Button size="xs" onClick={applyJson} disabled={jsonStale}>Apply JSON</Button>
-            </Group>
-          </Stack>
-        </Paper>
-      )}
-
-      {conflicts.map((warning) => (
-        <Alert color="yellow" title="Shared automation target" mt="sm" key={warning.target}>
-          {warning.target} is used by enabled rules {warning.ruleIds.join(" and ")}.
-        </Alert>
-      ))}
-
-      {indexedRules.length === 0 ? (
-        <Paper withBorder radius="md" p="md" mt="sm" className={classes.emptyState}>
-          <Stack gap="xs" align="flex-start">
-            <Text size="sm" fw={700}>No automation for this detector</Text>
-            <Text size="xs" c="dimmed">Add a local draft and arrange its steps in execution order.</Text>
+              {topology.trainIds.length === 0 && (
+                <Text size="sm" c="orange">Add a train first</Text>
+              )}
+            </Stack>
+          </Paper>
+        ) : (
+          <Stack gap="md" mt="sm">
+            {indexedRules.map(({ rule, index }) => (
+              <RuleEditor
+                key={`${index}-${rule.id}`}
+                rule={rule}
+                topology={topology}
+                unavailableTrainIds={indexedRules
+                  .filter((item) => item.index !== index)
+                  .map((item) => item.rule.root.train_id)}
+                onTrainChange={(trainId) =>
+                  replaceRule(index, {
+                    ...rule,
+                    id: uniqueRuleId(
+                      { version: 1, rules: document.rules.filter((_, itemIndex) => itemIndex !== index) },
+                      ruleId(hubId, detectorId, trainId),
+                    ),
+                    root: { ...rule.root, train_id: trainId },
+                  })
+                }
+                onChange={(next) => replaceRule(index, next)}
+                onRemove={() =>
+                  setDocument({
+                    version: 1,
+                    rules: document.rules.filter((_, itemIndex) => itemIndex !== index),
+                  })
+                }
+              />
+            ))}
             <Button
-              size="xs"
+              variant="light"
+              size="lg"
+              className={classes.addRuleButton}
               onClick={createRule}
-              disabled={topology.trainIds.length === 0}
-              aria-label={`Create automation for ${hubId} / ${detectorId}`}
+              disabled={availableTrainIds.length === 0}
+              aria-label={`Add automation for another train at ${hubId} / ${detectorId}`}
             >
-              Create automation
+              ＋ 🚂
             </Button>
-            {topology.trainIds.length === 0 && (
-              <Text size="xs" c="orange">Configure a train before creating this trigger.</Text>
-            )}
           </Stack>
-        </Paper>
-      ) : (
-        <Stack gap="sm" mt="sm">
-          {indexedRules.map(({ rule, index }) => (
-            <RuleEditor
-              key={`${index}-${rule.id}`}
-              rule={rule}
-              topology={topology}
-              duplicateId={document.rules.some((item, itemIndex) => itemIndex !== index && item.id === rule.id)}
-              onChange={(next) => replaceRule(index, next)}
-              onRemove={() =>
-                setDocument({
-                  version: 1,
-                  rules: document.rules.filter((_, itemIndex) => itemIndex !== index),
-                })
-              }
-            />
-          ))}
-          <Button
-            variant="light"
-            size="xs"
-            onClick={createRule}
-            disabled={topology.trainIds.length === 0}
-            aria-label={`Add alternative automation for ${hubId} / ${detectorId}`}
-            style={{ alignSelf: "flex-start" }}
-          >
-            + Add alternative rule
-          </Button>
-        </Stack>
-      )}
+        )}
       </Box>
     </fieldset>
   );
@@ -281,75 +182,62 @@ export function AutomationEditor({
 function RuleEditor({
   rule,
   topology,
-  duplicateId,
+  unavailableTrainIds,
+  onTrainChange,
   onChange,
   onRemove,
 }: {
   readonly rule: AutomationRule;
   readonly topology: AutomationTopology;
-  readonly duplicateId: boolean;
+  readonly unavailableTrainIds: readonly string[];
+  readonly onTrainChange: (trainId: string) => void;
   readonly onChange: (rule: AutomationRule) => void;
   readonly onRemove: () => void;
 }) {
   return (
-    <Paper withBorder radius="md" p="sm" className={classes.ruleCard}>
-      <Stack gap="sm">
-        <Group justify="space-between" align="flex-start" wrap="wrap">
-          <TextInput
-            label="Rule name"
-            value={rule.id}
-            error={!rule.id.trim() ? "Rule name is required" : duplicateId ? "Rule name must be unique" : undefined}
-            onChange={(event) => onChange({ ...rule, id: event.currentTarget.value })}
-            className={classes.ruleName}
-          />
-          <Switch
-            label="Enabled"
-            checked={rule.enabled}
-            onChange={(event) => onChange({ ...rule, enabled: event.currentTarget.checked })}
-            mt={26}
-          />
-        </Group>
-        <NativeSelect
-          label="When this train arrives"
-          description="The train must have a configured NFC tag when this tree is saved"
-          data={topology.trainIds}
-          value={rule.root.train_id}
-          onChange={(event) => {
-            onChange({ ...rule, root: { ...rule.root, train_id: event.currentTarget.value } });
-          }}
+    <Paper withBorder radius="lg" p={{ base: "sm", sm: "md" }} className={classes.ruleCard}>
+      <Stack gap="md">
+        <fieldset className={classes.choiceFieldset}>
+          <VisuallyHidden component="legend">Choose a train</VisuallyHidden>
+          <SimpleGrid cols={{ base: 1, sm: Math.min(topology.trainIds.length, 3) }} spacing="xs">
+            {topology.trainIds.map((trainId) => (
+              <Button
+                key={trainId}
+                variant={rule.root.train_id === trainId ? "filled" : "light"}
+                color="violet"
+                size="xl"
+                className={classes.trainButton}
+                disabled={unavailableTrainIds.includes(trainId)}
+                onClick={() => onTrainChange(trainId)}
+                aria-label={`Run when ${trainId} arrives`}
+                aria-pressed={rule.root.train_id === trainId}
+              >
+                <span aria-hidden className={classes.buttonEmoji}>🚂</span>
+                <span>{trainId}</span>
+              </Button>
+            ))}
+          </SimpleGrid>
+        </fieldset>
+
+        <Text className={classes.flowArrow} aria-hidden>👇</Text>
+        <AutomationNodeList
+          nodes={rule.root.children}
+          switches={topology.switches}
+          onChange={(children) => onChange({ ...rule, root: { ...rule.root, children } })}
         />
-        <div>
-          <Text size="xs" c="dimmed" fw={700} mb="xs">Do these steps in order</Text>
-          <AutomationNodeList
-            nodes={rule.root.children}
-            switches={topology.switches}
-            onChange={(children) => onChange({ ...rule, root: { ...rule.root, children } })}
-          />
-        </div>
-        <Group justify="space-between">
-          <Text size="xs" c="dimmed">
-            Starting with a train already here can run this rule immediately.
-          </Text>
-          <Button
-            variant="subtle"
-            color="red"
-            size="xs"
-            onClick={onRemove}
-            aria-label={`Remove rule ${rule.id}`}
-          >
-            Remove rule
-          </Button>
-        </Group>
+
+        <Button
+          variant="light"
+          color="red"
+          size="lg"
+          className={classes.removeRuleButton}
+          onClick={onRemove}
+          aria-label={`Remove automation for ${rule.root.train_id}`}
+        >
+          🗑️
+        </Button>
       </Stack>
     </Paper>
-  );
-}
-
-function sameTrigger(left: AutomationRule, right: AutomationRule) {
-  return (
-    left.root.hub_id === right.root.hub_id &&
-    left.root.detector_id === right.root.detector_id &&
-    left.root.train_id === right.root.train_id
   );
 }
 
@@ -374,7 +262,7 @@ function sharedTargetWarnings(document: AutomationDocument) {
     const ruleTargets = new Set<string>();
     visitAutomationNodes(rule.root.children, (node) => {
       if (node.type === "set_train_speed") ruleTargets.add(`Train ${rule.root.train_id}`);
-      if (node.type === "set_switch") ruleTargets.add(`Switch ${node.hub_id} / ${node.switch_id}`);
+      if (node.type === "set_switch") ruleTargets.add(`Switch ${node.switch_id}`);
     });
     for (const target of ruleTargets) targets.set(target, [...(targets.get(target) ?? []), rule.id]);
   }
@@ -383,17 +271,14 @@ function sharedTargetWarnings(document: AutomationDocument) {
     .map(([target, ruleIds]) => ({ target, ruleIds }));
 }
 
-function trySerialize(
+function getValidationError(
   document: AutomationDocument,
   topology: AutomationTopology,
-): { json: string | null; error: string | null } {
+): string | null {
   try {
     validateAutomationTopology(document, topology);
-    return { json: serializeAutomation(document), error: null };
+    return null;
   } catch (error) {
-    return {
-      json: null,
-      error: error instanceof Error ? error.message : "The automation draft is invalid.",
-    };
+    return error instanceof Error ? error.message : "This automation needs a fix.";
   }
 }
