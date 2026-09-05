@@ -17,6 +17,8 @@ from train.domain import (
     TagDetected,
     TagRemoved,
     TrainTagRegistry,
+    UnknownTagDetected,
+    UnknownTagRemoved,
 )
 from train.modules.arduino_hub.protocol import (
     Hello,
@@ -43,9 +45,15 @@ class HubClient(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
+class TagPresence:
+    train_id: str | None = None
+    tag_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class PresenceChange:
     detector_name: str
-    train_id: str
+    presence: TagPresence
     detected: bool
 
 
@@ -146,7 +154,7 @@ class ArduinoHubController:
             return False
 
         previous_state = self._bus.state.arduino_hubs.get(hello.hub_name)
-        previous = _active_trains(previous_state)
+        previous = _active_tags(previous_state)
         current = self._resolve_tag_snapshot(hello)
         client.bind(hello.hub_name)
         old_client = self._clients.get(hello.hub_name)
@@ -164,21 +172,21 @@ class ArduinoHubController:
             hub_name=hello.hub_name,
             switches=hello.switches,
             detectors=hello.detectors,
-            active_trains=tuple(current.items()),
+            active_trains=tuple(
+                (detector_name, presence.train_id)
+                for detector_name, presence in current.items()
+                if presence.train_id is not None
+            ),
+            active_unknown_tags=tuple(
+                (detector_name, presence.tag_id)
+                for detector_name, presence in current.items()
+                if presence.tag_id is not None
+            ),
         ))
         await self._publish_snapshot_changes(hello.hub_name, previous, current)
         return True
 
     async def _handle_tag_change(self, hub_name: str, message: TagChanged) -> None:
-        train_id = self._train_tags.resolve(message.tag_id)
-        if train_id is None:
-            self._log.warning(
-                "Ignoring unknown train tag %s from %s/%s",
-                TrainTagRegistry.normalize(message.tag_id),
-                hub_name,
-                message.detector_name,
-            )
-            return
         state = self._bus.state.arduino_hubs.get(hub_name)
         if (
             state is None
@@ -191,25 +199,30 @@ class ArduinoHubController:
                 message.detector_name,
             )
             return
-        detector = state.detectors[message.detector_name]
-        active_train_id = detector.train_id if detector.triggered else None
+        tag_id = TrainTagRegistry.normalize(message.tag_id)
+        train_id = self._train_tags.resolve(tag_id)
+        presence = TagPresence(
+            train_id=train_id,
+            tag_id=None if train_id is not None else tag_id,
+        )
+        active = _active_tags(state).get(message.detector_name)
         changes: tuple[PresenceChange, ...]
         if message.detected:
-            if active_train_id == train_id:
+            if active == presence:
                 changes = ()
             else:
                 pending: list[PresenceChange] = []
-                if active_train_id is not None:
+                if active is not None:
                     pending.append(PresenceChange(
-                        message.detector_name, active_train_id, False
+                        message.detector_name, active, False
                     ))
                 pending.append(PresenceChange(
-                    message.detector_name, train_id, True
+                    message.detector_name, presence, True
                 ))
                 changes = tuple(pending)
-        elif active_train_id == train_id:
+        elif active == presence:
             changes = (PresenceChange(
-                message.detector_name, train_id, False
+                message.detector_name, presence, False
             ),)
         else:
             changes = ()
@@ -253,34 +266,38 @@ class ArduinoHubController:
         angle = switch.get(event.target)
         return angle if isinstance(angle, int) and not isinstance(angle, bool) else None
 
-    def _resolve_tag_snapshot(self, hello: Hello) -> dict[str, str]:
-        resolved: dict[str, str] = {}
+    def _resolve_tag_snapshot(self, hello: Hello) -> dict[str, TagPresence]:
+        resolved: dict[str, TagPresence] = {}
         for tag in hello.detected_tags:
-            train_id = self._train_tags.resolve(tag.tag_id)
-            if tag.detector_name in hello.detectors and train_id is not None:
-                resolved[tag.detector_name] = train_id
-            else:
+            if tag.detector_name not in hello.detectors:
                 self._log.warning(
-                    "Ignoring invalid train tag snapshot %s from %s/%s",
-                    TrainTagRegistry.normalize(tag.tag_id),
+                    "Ignoring tag snapshot from unavailable detector %s/%s: %s",
                     hello.hub_name,
                     tag.detector_name,
+                    TrainTagRegistry.normalize(tag.tag_id),
                 )
+                continue
+            tag_id = TrainTagRegistry.normalize(tag.tag_id)
+            train_id = self._train_tags.resolve(tag_id)
+            resolved[tag.detector_name] = TagPresence(
+                train_id=train_id,
+                tag_id=None if train_id is not None else tag_id,
+            )
         return resolved
 
     async def _publish_snapshot_changes(
         self,
         hub_name: str,
-        previous: dict[str, str],
-        current: dict[str, str],
+        previous: dict[str, TagPresence],
+        current: dict[str, TagPresence],
     ) -> None:
         changes: list[PresenceChange] = []
-        for detector_name, train_id in previous.items():
-            if current.get(detector_name) != train_id:
-                changes.append(PresenceChange(detector_name, train_id, False))
-        for detector_name, train_id in current.items():
-            if previous.get(detector_name) != train_id:
-                changes.append(PresenceChange(detector_name, train_id, True))
+        for detector_name, presence in previous.items():
+            if current.get(detector_name) != presence:
+                changes.append(PresenceChange(detector_name, presence, False))
+        for detector_name, presence in current.items():
+            if previous.get(detector_name) != presence:
+                changes.append(PresenceChange(detector_name, presence, True))
         await self._publish_tag_changes(hub_name, changes)
 
     async def _publish_tag_changes(
@@ -289,17 +306,29 @@ class ArduinoHubController:
         changes: tuple[PresenceChange, ...] | list[PresenceChange],
     ) -> None:
         for change in changes:
-            if change.detected:
+            if change.presence.train_id is not None and change.detected:
                 await self._bus.publish(TagDetected(
                     hub_name=hub_name,
                     detector_name=change.detector_name,
-                    train_id=change.train_id,
+                    train_id=change.presence.train_id,
                 ))
-            else:
+            elif change.presence.train_id is not None:
                 await self._bus.publish(TagRemoved(
                     hub_name=hub_name,
                     detector_name=change.detector_name,
-                    train_id=change.train_id,
+                    train_id=change.presence.train_id,
+                ))
+            elif change.presence.tag_id is not None and change.detected:
+                await self._bus.publish(UnknownTagDetected(
+                    hub_name=hub_name,
+                    detector_name=change.detector_name,
+                    tag_id=change.presence.tag_id,
+                ))
+            elif change.presence.tag_id is not None:
+                await self._bus.publish(UnknownTagRemoved(
+                    hub_name=hub_name,
+                    detector_name=change.detector_name,
+                    tag_id=change.presence.tag_id,
                 ))
 
     async def _publish_switch_result(
@@ -318,13 +347,20 @@ class ArduinoHubController:
         ))
 
 
-def _active_trains(state: ArduinoHubState | None) -> dict[str, str]:
+def _active_tags(state: ArduinoHubState | None) -> dict[str, TagPresence]:
     if state is None:
         return {}
     return {
-        detector_id: detector.train_id
+        detector_id: TagPresence(
+            train_id=detector.train_id,
+            tag_id=detector.unknown_tag_id,
+        )
         for detector_id, detector in state.detectors.items()
-        if detector.triggered and detector.train_id is not None
+        if detector.triggered
+        and (
+            detector.train_id is not None
+            or detector.unknown_tag_id is not None
+        )
     }
 
 
@@ -341,6 +377,7 @@ def _indexed_hub_info(state: ArduinoHubState) -> dict[str, Any]:
                 "name": detector.detector_id,
                 "triggered": detector.triggered,
                 "train_id": detector.train_id,
+                "unknown_tag_id": detector.unknown_tag_id,
             }
             for name, detector in state.detectors.items()
         },

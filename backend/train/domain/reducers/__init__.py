@@ -5,6 +5,8 @@ from train.domain.events.hub import (
     SwitchPositionChanged,
     TagDetected,
     TagRemoved,
+    UnknownTagDetected,
+    UnknownTagRemoved,
 )
 from train.domain.events.system import (
     AutomationHalt,
@@ -25,6 +27,8 @@ from train.domain.reducers.hub import (
     reduce_switch_position_changed,
     reduce_tag_detected,
     reduce_tag_removed,
+    reduce_unknown_tag_detected,
+    reduce_unknown_tag_removed,
 )
 from train.domain.reducers.system import (
     reduce_automation_halt,
@@ -56,6 +60,8 @@ REDUCERS: dict[type[Event], Reducer] = {
     ),
     TagDetected: adapt(TagDetected, reduce_tag_detected),
     TagRemoved: adapt(TagRemoved, reduce_tag_removed),
+    UnknownTagDetected: adapt(UnknownTagDetected, reduce_unknown_tag_detected),
+    UnknownTagRemoved: adapt(UnknownTagRemoved, reduce_unknown_tag_removed),
 }
 
 

@@ -15,11 +15,22 @@ export function DetectorRow({ detector }: { readonly detector: DetectorModel }) 
           <Badge color={detector.available ? "green" : "gray"} variant="light">
             {detector.available ? "Available" : "Unavailable"}
           </Badge>
-          <Text size="sm" fw={detector.triggered ? 700 : 400}>
-            {detector.triggered
-              ? `Detected ${detector.trainId ?? "unknown train"}`
-              : "Clear"}
-          </Text>
+          {detector.unknownTagId ? (
+            <>
+              <Badge color="orange" variant="light">
+                Unknown tag
+              </Badge>
+              <Text size="sm" fw={700} ff="monospace">
+                {detector.unknownTagId}
+              </Text>
+            </>
+          ) : (
+            <Text size="sm" fw={detector.triggered ? 700 : 400}>
+              {detector.triggered && detector.trainId
+                ? `Detected ${detector.trainId}`
+                : "Clear"}
+            </Text>
+          )}
         </>
       }
     />

@@ -32,6 +32,8 @@ it("renders the full device hierarchy from one state request", async () => {
   expect(screen.getByText("yard")).toBeInTheDocument();
   expect(screen.getByText("S1")).toBeInTheDocument();
   expect(screen.getByText("D1")).toBeInTheDocument();
+  expect(screen.getByText("Unknown tag")).toBeInTheDocument();
+  expect(screen.getByText("DE:AD:BE:EF")).toBeInTheDocument();
   for (const speed of [-100, -80, -50, -30, 30, 50, 80, 100]) {
     expect(
       screen.getByRole("button", { name: `Set express speed to ${speed}%` }),
@@ -64,7 +66,7 @@ it("renders the full device hierarchy from one state request", async () => {
 
 function stateEnvelope() {
   return {
-    version: 1,
+    version: 2,
     snapshot_at: Date.now() / 1000,
     state: {
       revision: 4,
@@ -99,6 +101,14 @@ function stateEnvelope() {
               available: true,
               triggered: false,
               train_id: null,
+              unknown_tag_id: null,
+            },
+            D2: {
+              detector_id: "D2",
+              available: true,
+              triggered: true,
+              train_id: null,
+              unknown_tag_id: "DE:AD:BE:EF",
             },
           },
         },

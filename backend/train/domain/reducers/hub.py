@@ -8,6 +8,8 @@ from train.domain.events.hub import (
     SwitchPositionChanged,
     TagDetected,
     TagRemoved,
+    UnknownTagDetected,
+    UnknownTagRemoved,
 )
 from train.domain.reducers.base import set_if_different
 
@@ -24,6 +26,7 @@ def reduce_hub_connected(state: SystemState, event: HubConnected) -> bool:
 
     available_detectors = set(event.detectors)
     active_trains = dict(event.active_trains)
+    active_unknown_tags = dict(event.active_unknown_tags)
     for detector_id in available_detectors:
         _, created = state._ensure_detector(event.hub_name, detector_id)
         changed = created or changed
@@ -31,15 +34,28 @@ def reduce_hub_connected(state: SystemState, event: HubConnected) -> bool:
     for detector in hub.detectors.values():
         available = detector.detector_id in available_detectors
         train_id = active_trains.get(detector.detector_id)
+        unknown_tag_id = (
+            None
+            if train_id is not None
+            else active_unknown_tags.get(detector.detector_id)
+        )
         detector_changed = set_if_different(
             detector, "available", available
         )
         detector_changed = (
-            set_if_different(detector, "triggered", train_id is not None)
+            set_if_different(
+                detector,
+                "triggered",
+                train_id is not None or unknown_tag_id is not None,
+            )
             or detector_changed
         )
         detector_changed = (
             set_if_different(detector, "train_id", train_id)
+            or detector_changed
+        )
+        detector_changed = (
+            set_if_different(detector, "unknown_tag_id", unknown_tag_id)
             or detector_changed
         )
         changed = detector_changed or changed
@@ -70,7 +86,8 @@ def reduce_tag_detected(state: SystemState, event: TagDetected) -> bool:
         event.hub_name, event.detector_name
     )
     changed = set_if_different(detector, "triggered", True)
-    return set_if_different(detector, "train_id", event.train_id) or changed
+    changed = set_if_different(detector, "train_id", event.train_id) or changed
+    return set_if_different(detector, "unknown_tag_id", None) or changed
 
 
 def reduce_tag_removed(state: SystemState, event: TagRemoved) -> bool:
@@ -81,4 +98,34 @@ def reduce_tag_removed(state: SystemState, event: TagRemoved) -> bool:
         return False
     detector.triggered = False
     detector.train_id = None
+    return True
+
+
+def reduce_unknown_tag_detected(
+    state: SystemState, event: UnknownTagDetected
+) -> bool:
+    detector, _ = state._ensure_detector(
+        event.hub_name, event.detector_name
+    )
+    changed = set_if_different(detector, "triggered", True)
+    changed = set_if_different(detector, "train_id", None) or changed
+    return (
+        set_if_different(detector, "unknown_tag_id", event.tag_id)
+        or changed
+    )
+
+
+def reduce_unknown_tag_removed(
+    state: SystemState, event: UnknownTagRemoved
+) -> bool:
+    detector, _ = state._ensure_detector(
+        event.hub_name, event.detector_name
+    )
+    if (
+        not detector.triggered
+        or detector.unknown_tag_id != event.tag_id
+    ):
+        return False
+    detector.triggered = False
+    detector.unknown_tag_id = None
     return True

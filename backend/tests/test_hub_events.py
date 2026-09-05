@@ -6,6 +6,8 @@ from train.domain import (
     SwitchPositionChanged,
     TagDetected,
     TagRemoved,
+    UnknownTagDetected,
+    UnknownTagRemoved,
 )
 
 
@@ -39,11 +41,13 @@ def test_hub_connected_fields() -> None:
         switches=("S1", "S2"),
         detectors=("D1", "D2"),
         active_trains=(("D1", "arctic_express"),),
+        active_unknown_tags=(("D2", "DE:AD:BE:EF"),),
     )
     assert e.hub_name == "A_HUB_1"
     assert e.switches == ("S1", "S2")
     assert e.detectors == ("D1", "D2")
     assert e.active_trains == (("D1", "arctic_express"),)
+    assert e.active_unknown_tags == (("D2", "DE:AD:BE:EF"),)
 
 
 def test_hub_disconnected_fields() -> None:
@@ -63,6 +67,15 @@ def test_tag_detector_event_fields() -> None:
     assert detected.train_id == "arctic_express"
     assert removed.train_id == "arctic_express"
 
+    unknown_detected = UnknownTagDetected(
+        hub_name="A_HUB_1", detector_name="D1", tag_id="DE:AD:BE:EF"
+    )
+    unknown_removed = UnknownTagRemoved(
+        hub_name="A_HUB_1", detector_name="D1", tag_id="DE:AD:BE:EF"
+    )
+    assert unknown_detected.tag_id == "DE:AD:BE:EF"
+    assert unknown_removed.tag_id == "DE:AD:BE:EF"
+
 
 def test_all_events_are_subclass_of_event() -> None:
     for cls in (
@@ -72,6 +85,8 @@ def test_all_events_are_subclass_of_event() -> None:
         HubDisconnected,
         TagDetected,
         TagRemoved,
+        UnknownTagDetected,
+        UnknownTagRemoved,
     ):
         assert issubclass(cls, Event)
         assert isinstance(cls(), Event)

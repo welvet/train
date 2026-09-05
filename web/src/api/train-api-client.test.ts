@@ -159,7 +159,7 @@ class FakeEventSource {
 
 function stateEnvelope() {
   return {
-    version: 1 as const,
+    version: 2 as const,
     snapshot_at: 2,
     state: {
       revision: 1,

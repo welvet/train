@@ -10,6 +10,8 @@ from train.domain import (
     SystemState,
     TagDetected,
     TagRemoved,
+    UnknownTagDetected,
+    UnknownTagRemoved,
     TrainConnected,
     TrainDisconnected,
     TrainSpeedChanged,
@@ -33,6 +35,8 @@ def test_all_state_events_have_explicit_reducers() -> None:
         SwitchPositionChanged,
         TagDetected,
         TagRemoved,
+        UnknownTagDetected,
+        UnknownTagRemoved,
     }
 
 
@@ -142,10 +146,27 @@ def test_state_reconciles_hub_snapshot_and_tag_events() -> None:
     ))
     assert hub.detectors["D1"].train_id == "cargo"
 
+    state.apply(UnknownTagDetected(
+        hub_name="yard", detector_name="D1", tag_id="DE:AD:BE:EF"
+    ))
+    assert hub.detectors["D1"].train_id is None
+    assert hub.detectors["D1"].unknown_tag_id == "DE:AD:BE:EF"
+
+    state.apply(UnknownTagRemoved(
+        hub_name="yard", detector_name="D1", tag_id="stale"
+    ))
+    assert hub.detectors["D1"].unknown_tag_id == "DE:AD:BE:EF"
+
+    state.apply(UnknownTagRemoved(
+        hub_name="yard", detector_name="D1", tag_id="DE:AD:BE:EF"
+    ))
+    assert hub.detectors["D1"].triggered is False
+    assert hub.detectors["D1"].unknown_tag_id is None
+
     state.apply(HubDisconnected(hub_name="yard"))
     assert hub.connected is False
     assert hub.detectors["D1"].available is False
-    assert hub.detectors["D1"].train_id == "cargo"
+    assert hub.detectors["D1"].train_id is None
 
 
 def test_snapshot_is_isolated_from_live_state() -> None:

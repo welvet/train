@@ -7,6 +7,8 @@ from train.domain.events.hub import (
     SwitchPositionChanged,
     TagDetected,
     TagRemoved,
+    UnknownTagDetected,
+    UnknownTagRemoved,
 )
 from train.domain.events.system import (
     AutomationHalt,
@@ -58,6 +60,8 @@ __all__ = [
     "SystemState",
     "TagDetected",
     "TagRemoved",
+    "UnknownTagDetected",
+    "UnknownTagRemoved",
     "TrainConnected",
     "TrainDisconnected",
     "TrainSpeedChanged",

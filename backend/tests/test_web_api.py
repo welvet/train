@@ -87,7 +87,7 @@ async def test_state_returns_complete_domain_snapshot(
 
     assert response.status == 200
     envelope = await response.json()
-    assert envelope["version"] == 1
+    assert envelope["version"] == 2
     assert envelope["snapshot_at"] > 0
     body = envelope["state"]
     assert body["revision"] == 1
@@ -133,7 +133,7 @@ async def test_state_stream_sends_initial_and_changed_full_snapshots(
         await bus.publish(SystemStarted())
 
         changed = await _read_state_event(response)
-        assert changed["version"] == 1
+        assert changed["version"] == 2
         assert changed["snapshot_at"] >= initial["snapshot_at"]
         assert changed["state"]["revision"] == 1
         assert changed["state"]["running"] is True

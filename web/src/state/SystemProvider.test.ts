@@ -24,7 +24,7 @@ it("uses the revision to order snapshots with the same timestamp", () => {
 
 function stateEnvelope(revision: number, snapshotAt: number): StateEnvelope {
   return {
-    version: 1,
+    version: 2,
     snapshot_at: snapshotAt,
     state: {
       revision,
