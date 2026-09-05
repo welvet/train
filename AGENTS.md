@@ -10,7 +10,7 @@ excluded from Git.
   or responses. It may contain device identifiers and credentials.
 - Tests must create isolated temporary configurations; they must never depend
   on or mutate the real `data/` directory.
-- Product code belongs in `backend/`, `firmware/`, and `tools/`. Runtime
+- Product code belongs in `backend/`, `firmware/`, `tools/`, and `web/`. Runtime
   choices—trains, Arduino devices, track automation, and secrets—belong only
   in `data/`.
 - `deploy/`, `releases/`, and `current` are server-loop runtime state. They are
