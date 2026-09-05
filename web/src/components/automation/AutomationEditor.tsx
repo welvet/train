@@ -81,7 +81,7 @@ export function AutomationEditor({
         hub_id: hubId,
         detector_id: detectorId,
         train_id: trainId,
-        children: [{ type: "set_train_speed", speed: 0, children: [] }],
+        children: [],
       },
     };
     setDocument({ version: 1, rules: [...document.rules, next] });
@@ -118,8 +118,7 @@ export function AutomationEditor({
 
         {indexedRules.length === 0 ? (
           <Paper withBorder radius="lg" p="lg" mt="sm" className={classes.emptyState}>
-            <Stack gap="md" align="center">
-              <Text className={classes.emptyEmoji} aria-hidden>🪄</Text>
+            <Stack align="center">
               <Button
                 size="xl"
                 onClick={createRule}
@@ -223,6 +222,7 @@ function RuleEditor({
         <AutomationNodeList
           nodes={rule.root.children}
           switches={topology.switches}
+          allowEmpty
           onChange={(children) => onChange({ ...rule, root: { ...rule.root, children } })}
         />
 

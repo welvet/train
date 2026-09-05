@@ -48,6 +48,7 @@ it("creates an always-on rule with a generated id", () => {
   const getDocument = renderEditor();
 
   expect(screen.queryByText("⚡ On")).not.toBeInTheDocument();
+  expect(screen.queryByText("🪄")).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Create automation for yard / D1" }));
 
   expect(screen.getByText("⚡ On")).toBeInTheDocument();
@@ -55,17 +56,16 @@ it("creates an always-on rule with a generated id", () => {
     "aria-pressed",
     "true",
   );
-  expect(screen.getByRole("button", { name: "Stop train" })).toHaveAttribute(
-    "aria-pressed",
-    "true",
-  );
+  expect(screen.queryByRole("button", { name: "Stop train" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Add speed step" })).toBeVisible();
+  expect(screen.queryByText("Needs a fix")).not.toBeInTheDocument();
   expect(screen.queryByLabelText("Rule name")).not.toBeInTheDocument();
   expect(screen.queryByLabelText("Enabled")).not.toBeInTheDocument();
   expect(screen.queryByText("View JSON")).not.toBeInTheDocument();
   expect(getDocument().rules[0]).toMatchObject({
     id: "yard_d1_express",
     enabled: true,
-    root: { train_id: "express" },
+    root: { train_id: "express", children: [] },
   });
 });
 
@@ -73,6 +73,7 @@ it("builds a rule through large picture controls", () => {
   const getDocument = renderEditor();
   fireEvent.click(screen.getByRole("button", { name: "Create automation for yard / D1" }));
 
+  fireEvent.click(screen.getByRole("button", { name: "Add speed step" }));
   fireEvent.click(screen.getByRole("button", { name: "Set train speed to 50%" }));
   fireEvent.click(screen.getByRole("button", { name: "Add wait step" }));
   fireEvent.click(screen.getByRole("button", { name: "Wait 5 seconds" }));
@@ -90,6 +91,16 @@ it("builds a rule through large picture controls", () => {
       ],
     },
   ]);
+});
+
+it("can return to an empty list after choosing the wrong first step", () => {
+  const getDocument = renderEditor();
+  fireEvent.click(screen.getByRole("button", { name: "Create automation for yard / D1" }));
+  fireEvent.click(screen.getByRole("button", { name: "Add speed step" }));
+  fireEvent.click(screen.getByRole("button", { name: "Remove Speed step 1" }));
+
+  expect(getDocument().rules[0].root.children).toEqual([]);
+  expect(screen.getByRole("button", { name: "Add speed step" })).toBeVisible();
 });
 
 it("regenerates the hidden rule id when the train changes", () => {
