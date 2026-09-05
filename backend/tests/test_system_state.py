@@ -1,16 +1,55 @@
 from train.domain import (
     AutomationHalt,
+    AutomationResume,
     HubConnected,
     HubDisconnected,
     SetTrainSpeed,
     SwitchPositionChanged,
+    SystemShutdown,
+    SystemStarted,
     SystemState,
     TagDetected,
     TagRemoved,
     TrainConnected,
+    TrainDisconnected,
     TrainSpeedChanged,
     TrainStatus,
 )
+from train.domain.reducers import REDUCERS
+
+
+def test_all_state_events_have_explicit_reducers() -> None:
+    assert set(REDUCERS) == {
+        SystemStarted,
+        SystemShutdown,
+        AutomationHalt,
+        AutomationResume,
+        TrainConnected,
+        TrainDisconnected,
+        TrainSpeedChanged,
+        TrainStatus,
+        HubConnected,
+        HubDisconnected,
+        SwitchPositionChanged,
+        TagDetected,
+        TagRemoved,
+    }
+
+
+def test_state_routes_event_subclasses_to_their_registered_reducer() -> None:
+    class SpecializedTrainStatus(TrainStatus):
+        pass
+
+    state = SystemState.from_topology(train_hubs={"express": "hub_red"})
+
+    state.apply(SpecializedTrainStatus(
+        train_name="express", battery_pct=72, voltage=7.4
+    ))
+
+    hub = state.lego_hubs["hub_red"]
+    assert hub.battery_pct == 72
+    assert hub.voltage == 7.4
+    assert state.revision == 1
 
 
 def test_state_starts_with_configured_disconnected_topology() -> None:
