@@ -110,6 +110,7 @@ export interface components {
         };
         AutomationSnapshot: {
             document: components["schemas"]["AutomationDocument"];
+            eligible_train_ids: string[];
             paused: boolean;
             statuses: {
                 [key: string]: unknown;
@@ -171,7 +172,7 @@ export interface components {
             snapshot_at: number;
             state: components["schemas"]["SystemState"];
             /** @constant */
-            version: 3;
+            version: 4;
         };
         SwitchState: {
             angle: number;

@@ -103,7 +103,12 @@ it("loads and saves the backend automation document", async () => {
         return Promise.resolve(
           new Response(
             JSON.stringify({
-              automation: { document, paused: false, statuses: [] },
+              automation: {
+                document,
+                eligible_train_ids: envelope.automation.eligible_train_ids,
+                paused: false,
+                statuses: [],
+              },
             }),
             { status: 200, headers: { "Content-Type": "application/json" } },
           ),
@@ -197,6 +202,7 @@ it("disables automation editing while a save is in flight", async () => {
       JSON.stringify({
         automation: {
           document: envelope.automation.document,
+          eligible_train_ids: envelope.automation.eligible_train_ids,
           paused: false,
           statuses: [],
         },
@@ -239,6 +245,7 @@ it("keeps a dormant backend rule off when creating an active rule", async () => 
             ? JSON.stringify({
                 automation: {
                   document: JSON.parse(String(init?.body)),
+                  eligible_train_ids: envelope.automation.eligible_train_ids,
                   paused: false,
                   statuses: [],
                 },
@@ -278,10 +285,11 @@ it("keeps a dormant backend rule off when creating an active rule", async () => 
 
 function stateEnvelope(): StateEnvelope {
   return {
-    version: 3,
+    version: 4,
     snapshot_at: Date.now() / 1000,
     automation: {
       document: { version: 1, rules: [] },
+      eligible_train_ids: ["express"],
       paused: false,
       statuses: [],
     },

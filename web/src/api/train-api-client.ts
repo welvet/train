@@ -218,11 +218,12 @@ export class TrainApiClient {
 function isStateEnvelope(value: unknown): value is StateEnvelope {
   if (
     !isRecord(value) ||
-    value.version !== 3 ||
+    value.version !== 4 ||
     typeof value.snapshot_at !== "number" ||
     !isRecord(value.state) ||
     !isRecord(value.automation) ||
     !isRecord(value.automation.document) ||
+    !isStringArray(value.automation.eligible_train_ids) ||
     typeof value.automation.paused !== "boolean" ||
     !Array.isArray(value.automation.statuses)
   ) {
@@ -238,6 +239,10 @@ function isStateEnvelope(value: unknown): value is StateEnvelope {
     isRecord(state.lego_hubs) &&
     isRecord(state.arduino_hubs)
   );
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

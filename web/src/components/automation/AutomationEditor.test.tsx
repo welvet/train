@@ -69,6 +69,15 @@ it("creates an always-on rule with a generated id", () => {
   });
 });
 
+it("explains that automation needs a tagged train", () => {
+  renderEditor(undefined, { ...topology, trainIds: [] });
+
+  expect(
+    screen.getByRole("button", { name: "Create automation for yard / D1" }),
+  ).toBeDisabled();
+  expect(screen.getByText("Add a tag to a train first")).toBeVisible();
+});
+
 it("builds a rule through large picture controls", () => {
   const getDocument = renderEditor();
   fireEvent.click(screen.getByRole("button", { name: "Create automation for yard / D1" }));

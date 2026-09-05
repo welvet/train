@@ -223,7 +223,7 @@ function nodesForVisibleValidation(
 
 function topologyFor(system: SystemModel): AutomationTopology {
   return {
-    trainIds: system.trains.map((train) => train.id),
+    trainIds: system.automationTrainIds,
     switches: system.arduinoHubs.flatMap((hub) =>
       hub.switches.map((railwaySwitch) => ({
         hubId: hub.id,

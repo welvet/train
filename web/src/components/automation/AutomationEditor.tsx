@@ -128,7 +128,7 @@ export function AutomationEditor({
                 🚂 Build
               </Button>
               {topology.trainIds.length === 0 && (
-                <Text size="sm" c="orange">Add a train first</Text>
+                <Text size="sm" c="orange">Add a tag to a train first</Text>
               )}
             </Stack>
           </Paper>

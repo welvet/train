@@ -11,6 +11,9 @@ export function toSystemModel(envelope: StateEnvelope): SystemModel {
     running: state.running,
     automationHalted: state.automation.halted,
     automationDocument: validateAutomation(envelope.automation.document),
+    automationTrainIds: [...envelope.automation.eligible_train_ids].sort((left, right) =>
+      left.localeCompare(right, undefined, { numeric: true }),
+    ),
     trains: Object.values(state.trains)
       .map((train) => {
         const hub = state.lego_hubs[train.lego_hub_id];

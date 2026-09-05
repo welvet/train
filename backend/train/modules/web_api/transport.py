@@ -262,6 +262,7 @@ class WebApiServer:
 def _empty_automation_snapshot() -> dict[str, object]:
     return {
         "document": {"version": 1, "rules": []},
+        "eligible_train_ids": [],
         "paused": False,
         "statuses": [],
     }
