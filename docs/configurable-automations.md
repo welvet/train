@@ -5,11 +5,12 @@ runtime.
 
 ## Goal
 
-Replace installation-written Python automation with a small JSON action tree
+Replace installation-written Python automation with a small JSON state tree
 that can later be edited by the web UI. A rule starts with one concrete event:
-a configured train is detected by a configured detector. The rule then walks
-an action tree which can move switches, change the detected train's speed,
-wait, or act only on a particular occurrence.
+a configured train is detected by a configured detector. That detector is the
+root node. Control nodes below it can wait or act only on a particular
+occurrence, while terminal leaves move switches or change the detected train's
+speed.
 
 The first version is deliberately small. It is for a LEGO railway, so it does
 not try to be a general workflow language or a railway interlocking system.
@@ -27,28 +28,29 @@ under `data/`, it belongs to one installation and must remain outside Git.
     {
       "id": "send_red_train_from_station",
       "enabled": true,
-      "trigger": {
+      "root": {
         "type": "train_detected",
         "hub_id": "hub_1",
         "detector_id": "station",
-        "train_id": "red_train"
-      },
-      "action": {
-        "type": "sequence",
-        "actions": [
+        "train_id": "red_train",
+        "children": [
           {
             "type": "set_switch",
             "hub_id": "hub_1",
             "switch_id": "S1",
-            "position": "straight"
+            "position": "straight",
+            "children": []
           },
           {
-            "type": "delay",
+            "type": "wait",
             "seconds": 1,
-            "action": {
-              "type": "set_train_speed",
-              "speed": 45
-            }
+            "children": [
+              {
+                "type": "set_train_speed",
+                "speed": 45,
+                "children": []
+              }
+            ]
           }
         ]
       }
@@ -70,22 +72,28 @@ Each rule has these fields:
 | --- | --- | --- |
 | `id` | string | Stable, unique identifier used by the UI, logs, and runtime state. |
 | `enabled` | boolean | Disabled rules neither count detections nor run actions. |
-| `trigger` | object | The detector and train pair that starts the rule. |
-| `action` | action node | The root of the action tree. |
+| `root` | `train_detected` node | The detector and train pair that starts the tree. |
 
-Version 1 has one trigger type, `train_detected`:
+Version 1 has one root type, `train_detected`:
 
 ```json
 {
   "type": "train_detected",
   "hub_id": "hub_1",
   "detector_id": "D1",
-  "train_id": "red_train"
+  "train_id": "red_train",
+  "children": [
+    {
+      "type": "set_train_speed",
+      "speed": 40,
+      "children": []
+    }
+  ]
 }
 ```
 
 Detector IDs are scoped to an Arduino hub, so both `hub_id` and `detector_id`
-are required. The backend matches this trigger to the existing `TagDetected`
+are required. The backend matches this root to the existing `TagDetected`
 event's `hub_name`, `detector_name`, and `train_id`. A tag which remains on a
 detector across a brief hub reconnect does not create another occurrence. An
 active tag first discovered in a hub's startup snapshot does create one. The
@@ -93,35 +101,36 @@ editor should make that startup behavior visible because starting the backend
 with a train already on a detector can immediately actuate the railway.
 
 Only one rule for a particular `(hub_id, detector_id, train_id)` tuple may be
-enabled. If several things should happen for the same detection, they belong
-in one `sequence`. The UI can keep alternative rules but must disable all but
-one of them before saving.
+enabled. The UI can keep alternative rules but must disable all but one of them
+before saving.
 
-## Action nodes
+## Tree nodes
 
-Every node has a `type` discriminator. Terminal nodes perform a hardware
-command. Container nodes own one or more nested nodes, which gives the UI a
-simple tree to render and edit.
+Every node has a `type` discriminator and a `children` array, so the UI can
+render and edit the complete structure with one recursive tree component.
+Children execute in array order. Control nodes own one or more children;
+terminal hardware nodes are leaves and require an empty `children` array.
 
 | Type | Kind | Fields | Behavior |
 | --- | --- | --- | --- |
-| `set_train_speed` | terminal | `speed` | Sets the train from the trigger to a signed speed from `-100` to `100`. Zero stops it. |
-| `set_switch` | terminal | `hub_id`, `switch_id`, `position` | Moves a configured switch to `straight` or `diverge`. |
-| `sequence` | container | `actions` | Runs one or more child nodes in order. |
-| `delay` | container | `seconds`, `action` | Waits, then runs its child node. |
-| `on_count` | conditional container | `count`, `mode`, `action` | Runs its child only when this node reaches the configured occurrence. |
+| `train_detected` | root | `hub_id`, `detector_id`, `train_id`, `children` | Runs its children when the configured detector sees the configured train. |
+| `set_train_speed` | terminal | `speed`, `children` | Sets the train from the root to a signed speed from `-100` to `100`. Zero stops it. |
+| `set_switch` | terminal | `hub_id`, `switch_id`, `position`, `children` | Moves a configured switch to `straight` or `diverge`. |
+| `wait` | control | `seconds`, `children` | Waits, then runs its children in order. |
+| `on_count` | conditional | `count`, `mode`, `children` | Runs its children only when this node reaches the configured occurrence. |
 
 ### Set the detected train's speed
 
 ```json
 {
   "type": "set_train_speed",
-  "speed": -35
+  "speed": -35,
+  "children": []
 }
 ```
 
 The target train is intentionally not configurable on this node: it is always
-the train named by the rule trigger. This keeps a detector/train rule local and
+the train named by the rule root. This keeps a detector/train rule local and
 prevents an accidental edit from driving an unrelated train.
 
 ### Set a switch
@@ -131,50 +140,35 @@ prevents an accidental edit from driving an unrelated train.
   "type": "set_switch",
   "hub_id": "hub_1",
   "switch_id": "S2",
-  "position": "diverge"
+  "position": "diverge",
+  "children": []
 }
 ```
 
 Version 1 exposes the configured `straight` and `diverge` positions, not raw
 servo angles. A successful command means the Arduino accepted the target; the
-switch has no physical position sensor.
+switch has no physical position sensor. Each hardware command is awaited before
+the next sibling starts. A tree which will move a train across a switch must
+put a suitable `wait` node after `set_switch` and enclose the movement actions
+under that wait.
 
-### Sequence
+### Wait
 
 ```json
 {
-  "type": "sequence",
-  "actions": [
-    {"type": "set_train_speed", "speed": 0},
+  "type": "wait",
+  "seconds": 5,
+  "children": [
     {
-      "type": "set_switch",
-      "hub_id": "hub_1",
-      "switch_id": "S1",
-      "position": "straight"
+      "type": "set_train_speed",
+      "speed": 40,
+      "children": []
     }
   ]
 }
 ```
 
-Children run in array order. Each hardware command is awaited before the next
-child starts. A switch acknowledgement does not mean that the servo has
-physically settled. A sequence which will move a train across that switch must
-include a suitable `delay` between `set_switch` and `set_train_speed`.
-
-### Delay
-
-```json
-{
-  "type": "delay",
-  "seconds": 5,
-  "action": {
-    "type": "set_train_speed",
-    "speed": 40
-  }
-}
-```
-
-`seconds` is a finite number from `0` through `3600`. The delay is asynchronous,
+`seconds` is a finite number from `0` through `3600`. The wait is asynchronous,
 so hardware connections and the web API continue running while this rule waits.
 
 ### Occurrence count
@@ -184,20 +178,23 @@ so hardware connections and the web API continue running while this rule waits.
   "type": "on_count",
   "count": 5,
   "mode": "once",
-  "action": {
-    "type": "set_train_speed",
-    "speed": 50
-  }
+  "children": [
+    {
+      "type": "set_train_speed",
+      "speed": 50,
+      "children": []
+    }
+  ]
 }
 ```
 
 Each time execution reaches an `on_count` node, its private counter advances.
-With `mode: "once"`, the child runs only when the counter reaches `count`; the
-node remains closed afterward. With `mode: "repeat"`, the child runs on every
-multiple of `count`, such as the 5th, 10th, and 15th occurrences. `count` must
-be a positive integer. A qualifying occurrence is consumed before its child
-runs. If that child later fails or is cancelled, `once` remains closed and
-`repeat` waits for the next multiple; an arrival is never relabeled as the
+With `mode: "once"`, its children run only when the counter reaches `count`;
+the node remains closed afterward. With `mode: "repeat"`, its children run on
+every multiple of `count`, such as the 5th, 10th, and 15th occurrences. `count`
+must be a positive integer. A qualifying occurrence is consumed before its
+children run. If a child later fails or is cancelled, `once` remains closed
+and `repeat` waits for the next multiple; an arrival is never relabeled as the
 fifth one after the fact.
 
 Counters belong to the node's path within a rule, not just to its displayed
@@ -218,32 +215,34 @@ disabled
    v
 idle -- matching TagDetected --> running
  ^                              /   |
- |                             /    | delay
- |        action completes ---'     v
+ |                             /    | wait
+ |          tree completes ---'     v
  |                               waiting
  |                                  |
  '----------------------------------'
 ```
 
-When a matching detection arrives in `idle`, the rule evaluates its tree. A
-blocked `on_count` returns directly to `idle`; a passing node continues into
-its child. Terminal commands use the backend's existing acknowledged
+When a matching detection arrives in `idle`, the rule enters its root and runs
+children in order. A blocked `on_count` skips its subtree and returns to its
+parent; a passing node enters its children. A `wait` sleeps before entering its
+children. Terminal commands use the backend's existing acknowledged
 `SetTrainSpeed` and `SetSwitchPosition` command paths.
 
-The event-bus subscriber only matches the trigger, admits the run, updates any
-immediate state, and starts an engine-owned task. It then returns without
-waiting for the action tree. This is required because event publication awaits
-subscribers, while an Arduino connection reads messages serially: awaiting a
-switch action inside the subscriber would prevent that same connection from
-reading the acknowledgement. The engine tracks every execution task so it can
-cancel and await it during reconfiguration, halt, or backend shutdown.
+The event-bus subscriber only matches the root condition, admits the run,
+updates any immediate state, and starts an engine-owned task. It then returns
+without waiting for the state tree. This is required because event publication
+awaits subscribers, while an Arduino connection reads messages serially:
+awaiting a switch command inside the subscriber would prevent that same
+connection from reading the acknowledgement. The engine tracks every execution
+task so it can cancel and await it during reconfiguration, halt, or backend
+shutdown.
 
 A rule has at most one active execution. Another matching detection while that
 rule is `running` or `waiting` is ignored and does not advance counters. This
-simple rule prevents two delayed copies of the same action tree from racing.
+simple rule prevents two delayed copies of the same state tree from racing.
 Different rules may run concurrently.
 
-Disabling a rule cancels its complete execution, including a pending delay or
+Disabling a rule cancels its complete execution, including a pending wait or
 an awaited command, and prevents any later nodes from running. A command which
 was already sent may still have affected the hardware even though its wait was
 cancelled. A global automation halt does the same for every rule, but does not
@@ -254,10 +253,10 @@ A future UI should label this control **Pause automation**, not **Stop railway**
 or **Emergency stop**.
 
 If a terminal command is rejected, times out, or targets disconnected hardware,
-the complete current execution stops, including later actions in every enclosing
-sequence. The backend logs the rule ID and failing node. The rule returns to
-`idle` for a future detection; it is not permanently disabled by a transient
-hardware failure.
+the complete current execution stops and every node not yet started is skipped.
+The backend logs the rule ID and failing node. The rule returns to `idle` for a
+future detection; it is not permanently disabled by a transient hardware
+failure.
 
 ## Validation and simple conflict handling
 
@@ -275,60 +274,82 @@ Validation checks that:
 
 - rule IDs are non-empty and unique;
 - every train, hub, detector, and switch exists in `trains.json` or
-  `arduinos.json`, and every train used by a trigger has an NFC `tag_id`;
+  `arduinos.json`, and every train used by a root has an NFC `tag_id`;
 - only one rule per detector/train tuple is enabled;
 - node fields and values follow the constraints above;
-- every sequence has at least one child; and
+- every rule has exactly one `train_detected` root, and `train_detected` does
+  not appear below that root;
+- every node contains a `children` array, roots and control nodes have at least
+  one child, and terminal nodes have none;
 - unknown versions, node types, fields, and enum values are rejected.
 
 Version 1 does not calculate dependencies or resolve conflicts between
-different triggers. Two rules can still target the same train or switch at
+different roots. Two rules can still target the same train or switch at
 about the same time. The existing command bus serializes commands for one
-resource, and the last command to run determines its state. The editor should
-show a warning for shared targets and let the operator disable one of the
-rules. There are no priorities, locks spanning an action tree, or automatic
-winner selection.
+resource. The last successful command normally determines its observed state;
+after a timeout, the physical outcome remains unknown. The editor should show
+a warning for shared targets and let the operator disable one of the rules.
+There are no priorities, locks spanning a state tree, or automatic winner
+selection.
 
 ## Nested example: every fifth arrival
 
-This rule does nothing for the first four accepted detections. On the fifth
-accepted detection, it diverts the switch, waits five seconds, then starts the
-detected train. It repeats on the tenth accepted detection because the count
-mode is `repeat`.
+This rule does nothing for the first four accepted detections. On the fifth it
+waits five seconds, sets speed to `50`, waits five seconds, stops, waits another
+five seconds, and sets speed to `20`. It runs only once because the count mode
+is `once`.
 
 ```json
 {
   "id": "occasional_station_departure",
   "enabled": true,
-  "trigger": {
+  "root": {
     "type": "train_detected",
     "hub_id": "hub_1",
     "detector_id": "station",
-    "train_id": "red_train"
-  },
-  "action": {
-    "type": "on_count",
-    "count": 5,
-    "mode": "repeat",
-    "action": {
-      "type": "sequence",
-      "actions": [
-        {
-          "type": "set_switch",
-          "hub_id": "hub_1",
-          "switch_id": "S2",
-          "position": "diverge"
-        },
-        {
-          "type": "delay",
-          "seconds": 5,
-          "action": {
-            "type": "set_train_speed",
-            "speed": 40
+    "train_id": "red_train",
+    "children": [
+      {
+        "type": "on_count",
+        "count": 5,
+        "mode": "once",
+        "children": [
+          {
+            "type": "wait",
+            "seconds": 5,
+            "children": [
+              {
+                "type": "set_train_speed",
+                "speed": 50,
+                "children": []
+              },
+              {
+                "type": "wait",
+                "seconds": 5,
+                "children": [
+                  {
+                    "type": "set_train_speed",
+                    "speed": 0,
+                    "children": []
+                  },
+                  {
+                    "type": "wait",
+                    "seconds": 5,
+                    "children": [
+                      {
+                        "type": "set_train_speed",
+                        "speed": 20,
+                        "children": []
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
           }
-        }
-      ]
-    }
+        ]
+      }
+    ]
   }
 }
 ```
@@ -339,12 +360,12 @@ This proposal replaces the public programmable automation surface; it does not
 run alongside user-written `automation.py`. A later implementation should:
 
 1. load and validate `data/automations.json` against the installation topology;
-2. translate `TagDetected` events into rule invocations;
+2. translate `TagDetected` events into root-node invocations;
 3. keep rule state, timers, and counters inside one internal automation engine;
 4. dispatch the existing acknowledged train and switch commands; and
 5. expose validated rule configuration and runtime status for a future UI.
 
 Arbitrary event subscriptions, Python callbacks, speed ramps, and custom
-background tasks are intentionally outside version 1. New trigger or node
+background tasks are intentionally outside version 1. New root or node
 types can be added in a later schema version when there is a concrete UI use
 case.
