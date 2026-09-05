@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
 import { useState } from "react";
 
@@ -86,11 +86,31 @@ it("builds a rule through large picture controls", () => {
       type: "wait",
       seconds: 5,
       children: [
-        { type: "set_train_speed", speed: 0 },
         { type: "set_switch", switch_id: "S1", position: "diverge" },
       ],
     },
   ]);
+});
+
+it("starts every nested action list empty and lets it return to empty", () => {
+  const getDocument = renderEditor();
+  fireEvent.click(screen.getByRole("button", { name: "Create automation for yard / D1" }));
+  fireEvent.click(screen.getByRole("button", { name: "Add wait step" }));
+  fireEvent.click(screen.getAllByRole("button", { name: "Add count step" }).at(-1)!);
+
+  expect(getDocument().rules[0].root.children).toMatchObject([
+    { type: "wait", children: [] },
+    { type: "on_count", children: [] },
+  ]);
+  expect(screen.queryByRole("button", { name: "Stop train" })).not.toBeInTheDocument();
+
+  const waitSteps = screen.getByRole("group", { name: "Steps after Wait step 1" });
+  fireEvent.click(within(waitSteps).getByRole("button", { name: "Add speed step" }));
+  fireEvent.click(screen.getByRole("button", { name: "Remove Speed step 1" }));
+  expect(getDocument().rules[0].root.children[0]).toMatchObject({
+    type: "wait",
+    children: [],
+  });
 });
 
 it("can return to an empty list after choosing the wrong first step", () => {

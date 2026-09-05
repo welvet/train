@@ -23,14 +23,14 @@ export function createNode(
       return {
         type,
         seconds: 1,
-        children: [{ type: "set_train_speed", speed: 0, children: [] }],
+        children: [],
       };
     case "on_count":
       return {
         type,
         count: 2,
         mode: "once",
-        children: [{ type: "set_train_speed", speed: 0, children: [] }],
+        children: [],
       };
   }
 }
