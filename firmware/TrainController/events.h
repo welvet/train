@@ -20,6 +20,7 @@ enum class EventType : uint8_t {
   MoveSwitchRequested,
   SwitchMoved,
   TagChanged,
+  Count,
 };
 
 class Event {

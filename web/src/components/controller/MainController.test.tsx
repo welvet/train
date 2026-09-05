@@ -65,6 +65,7 @@ it("renders the full device hierarchy from one state request", async () => {
 function stateEnvelope() {
   return {
     version: 1,
+    snapshot_at: Date.now() / 1000,
     state: {
       revision: 4,
       updated_at: Date.now() / 1000,

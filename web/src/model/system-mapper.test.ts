@@ -5,6 +5,7 @@ import { toSystemModel } from "./system-mapper";
 it("maps and sorts the backend state into the UI model", () => {
   const envelope: StateEnvelope = {
     version: 1,
+    snapshot_at: 13,
     state: {
       revision: 7,
       updated_at: 12.5,

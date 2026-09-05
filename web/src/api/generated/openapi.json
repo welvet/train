@@ -292,6 +292,9 @@
       "StateEnvelope": {
         "additionalProperties": false,
         "properties": {
+          "snapshot_at": {
+            "type": "number"
+          },
           "state": {
             "$ref": "#/components/schemas/SystemState"
           },
@@ -302,6 +305,7 @@
         },
         "required": [
           "version",
+          "snapshot_at",
           "state"
         ],
         "type": "object"
@@ -475,6 +479,23 @@
               }
             },
             "description": "Current authoritative system state"
+          }
+        }
+      }
+    },
+    "/api/state/stream": {
+      "get": {
+        "operationId": "streamSystemState",
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Authoritative state snapshots as server-sent events"
           }
         }
       }

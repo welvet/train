@@ -4,6 +4,9 @@ export type StateEnvelope = components["schemas"]["StateEnvelope"];
 export type PublicEvent = components["schemas"]["PublicEvent"];
 export type CommandResponse = components["schemas"]["CommandResponse"];
 
+const INITIAL_STREAM_RECONNECT_DELAY_MS = 2_000;
+const MAX_STREAM_RECONNECT_DELAY_MS = 30_000;
+
 export class ApiRequestError extends Error {
   constructor(
     message: string,
@@ -53,6 +56,93 @@ export class TrainApiClient {
     return (await response.json()) as CommandResponse;
   }
 
+  subscribeToState(
+    onState: (state: StateEnvelope) => void,
+    onError: (error: Error) => void,
+  ): () => void {
+    if (typeof EventSource === "undefined") {
+      return () => undefined;
+    }
+
+    let source: EventSource | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let reconnectDelay = INITIAL_STREAM_RECONNECT_DELAY_MS;
+    let closed = false;
+
+    const scheduleReconnect = () => {
+      if (!closed && reconnectTimer === null) {
+        reconnectTimer = setTimeout(() => {
+          reconnectTimer = null;
+          connect();
+        }, reconnectDelay);
+        reconnectDelay = Math.min(
+          reconnectDelay * 2,
+          MAX_STREAM_RECONNECT_DELAY_MS,
+        );
+      }
+    };
+
+    const connect = () => {
+      if (closed) {
+        return;
+      }
+
+      let activeSource: EventSource;
+      try {
+        activeSource = new EventSource(this.url("/api/state/stream"));
+      } catch (error) {
+        onError(
+          error instanceof Error
+            ? error
+            : new Error("Unable to open the live state connection"),
+        );
+        scheduleReconnect();
+        return;
+      }
+
+      source = activeSource;
+      activeSource.addEventListener("state", (event) => {
+        if (closed || source !== activeSource) {
+          return;
+        }
+        try {
+          const body: unknown = JSON.parse((event as MessageEvent<string>).data);
+          if (!isStateEnvelope(body)) {
+            throw new Error("The backend streamed an unsupported state format");
+          }
+          reconnectDelay = INITIAL_STREAM_RECONNECT_DELAY_MS;
+          onState(body);
+        } catch (error) {
+          onError(error instanceof Error ? error : new Error("Invalid state update"));
+        }
+      });
+      activeSource.onerror = () => {
+        if (closed || source !== activeSource) {
+          return;
+        }
+        activeSource.close();
+        source = null;
+        onError(
+          new Error("Live state connection interrupted; reconnecting with refresh"),
+        );
+        scheduleReconnect();
+      };
+    };
+
+    connect();
+
+    return () => {
+      closed = true;
+      if (reconnectTimer !== null) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+      const activeSource = source;
+      source = null;
+      activeSource?.close();
+    };
+  }
+
   private url(path: string): string {
     return `${this.baseUrl.replace(/\/$/, "")}${path}`;
   }
@@ -72,7 +162,12 @@ export class TrainApiClient {
 }
 
 function isStateEnvelope(value: unknown): value is StateEnvelope {
-  if (!isRecord(value) || value.version !== 1 || !isRecord(value.state)) {
+  if (
+    !isRecord(value) ||
+    value.version !== 1 ||
+    typeof value.snapshot_at !== "number" ||
+    !isRecord(value.state)
+  ) {
     return false;
   }
   const state = value.state;

@@ -17,9 +17,10 @@ def openapi_document() -> dict[str, object]:
         "type": "object",
         "properties": {
             "version": {"type": "integer", "const": STATE_API_VERSION},
+            "snapshot_at": {"type": "number"},
             "state": {"$ref": "#/components/schemas/SystemState"},
         },
-        "required": ["version", "state"],
+        "required": ["version", "snapshot_at", "state"],
         "additionalProperties": False,
     }
 
@@ -79,6 +80,21 @@ def openapi_document() -> dict[str, object]:
                                     "schema": {
                                         "$ref": "#/components/schemas/StateEnvelope"
                                     }
+                                }
+                            },
+                        }
+                    },
+                }
+            },
+            "/api/state/stream": {
+                "get": {
+                    "operationId": "streamSystemState",
+                    "responses": {
+                        "200": {
+                            "description": "Authoritative state snapshots as server-sent events",
+                            "content": {
+                                "text/event-stream": {
+                                    "schema": {"type": "string"}
                                 }
                             },
                         }

@@ -6,6 +6,7 @@ import {
   type ReactNode,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useState,
 } from "react";
@@ -13,6 +14,7 @@ import {
 import {
   ApiRequestError,
   type PublicEvent,
+  type StateEnvelope,
   TrainApiClient,
 } from "@/src/api/train-api-client";
 import { toSystemModel } from "@/src/model/system-mapper";
@@ -36,6 +38,7 @@ export interface SystemContextValue {
   readonly connection: ConnectionState;
   readonly refreshing: boolean;
   readonly error: string | null;
+  readonly liveUpdateError: string | null;
   readonly commandError: string | null;
   readonly pendingResources: ReadonlySet<string>;
   readonly actions: SystemActions;
@@ -50,17 +53,41 @@ export function SystemProvider({ children }: { readonly children: ReactNode }) {
     () => new Set(),
   );
   const [commandError, setCommandError] = useState<string | null>(null);
+  const [streamError, setStreamError] = useState<string | null>(null);
 
-  const stateQuery = useQuery({
+  const stateQuery = useQuery<StateEnvelope>({
     queryKey: STATE_QUERY_KEY,
     queryFn: ({ signal }) => apiClient.getState(signal),
-    refetchInterval: 2_000,
+    structuralSharing: (current, incoming) =>
+      latestState(
+        current as StateEnvelope | undefined,
+        incoming as StateEnvelope,
+      ),
+    refetchInterval: 30_000,
     refetchIntervalInBackground: false,
     refetchOnReconnect: true,
     refetchOnWindowFocus: true,
     retry: 2,
     staleTime: 1_000,
   });
+  const refreshState = stateQuery.refetch;
+
+  useEffect(
+    () =>
+      apiClient.subscribeToState(
+        (state) => {
+          setStreamError(null);
+          queryClient.setQueryData<StateEnvelope>(STATE_QUERY_KEY, (current) =>
+            latestState(current, state),
+          );
+        },
+        (error) => {
+          setStreamError(error.message);
+          void refreshState();
+        },
+      ),
+    [apiClient, queryClient, refreshState],
+  );
 
   const commandMutation = useMutation({
     mutationFn: ({ event }: { event: PublicEvent }) => apiClient.publishEvent(event),
@@ -135,7 +162,9 @@ export function SystemProvider({ children }: { readonly children: ReactNode }) {
       model,
       connection,
       refreshing: stateQuery.isFetching,
-      error: stateQuery.error instanceof Error ? stateQuery.error.message : null,
+      error:
+        stateQuery.error instanceof Error ? stateQuery.error.message : null,
+      liveUpdateError: streamError,
       commandError,
       pendingResources,
       actions,
@@ -148,10 +177,30 @@ export function SystemProvider({ children }: { readonly children: ReactNode }) {
       pendingResources,
       stateQuery.error,
       stateQuery.isFetching,
+      streamError,
     ],
   );
 
   return <SystemContext.Provider value={value}>{children}</SystemContext.Provider>;
+}
+
+export function latestState(
+  current: StateEnvelope | undefined,
+  incoming: StateEnvelope,
+): StateEnvelope {
+  if (!current) {
+    return incoming;
+  }
+  if (incoming.snapshot_at < current.snapshot_at) {
+    return current;
+  }
+  if (
+    incoming.snapshot_at === current.snapshot_at &&
+    incoming.state.revision < current.state.revision
+  ) {
+    return current;
+  }
+  return incoming;
 }
 
 export function useSystem(): SystemContextValue {
