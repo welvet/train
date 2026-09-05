@@ -75,9 +75,27 @@ def test_bundle_contains_wheel_and_runtime_data_only(
 
     commands: list[list[str]] = []
 
-    def fake_build(command: list[str], *, check: bool) -> None:
+    def fake_build(
+        command: list[str],
+        *,
+        check: bool,
+        cwd: Path | None = None,
+        env: dict[str, str] | None = None,
+    ) -> None:
         assert check is True
         commands.append(command)
+        if command == ["npm", "ci"]:
+            assert cwd is not None
+            assert env is not None
+            assert not any(name.startswith("NEXT_PUBLIC_") for name in env)
+            assert not (cwd / ".env").exists()
+            return
+        if command == ["npm", "run", "build"]:
+            assert cwd is not None
+            output = cwd / "out"
+            output.mkdir()
+            (output / "index.html").write_text("<h1>Train</h1>")
+            return
         option = "--wheel-dir" if "wheel" in command else "--dest"
         wheel_dir = Path(command[command.index(option) + 1])
         name = (
@@ -88,7 +106,16 @@ def test_bundle_contains_wheel_and_runtime_data_only(
         with zipfile.ZipFile(
             wheel_dir / name, "w"
         ) as wheel:
-            wheel.writestr("package/__init__.py", "")
+            if "wheel" in command:
+                source = Path(command[-1])
+                static_index = source / "train/modules/web_api/static/index.html"
+                assert static_index.read_text() == "<h1>Train</h1>"
+                wheel.writestr(
+                    "train/modules/web_api/static/index.html",
+                    static_index.read_bytes(),
+                )
+            else:
+                wheel.writestr("package/__init__.py", "")
 
     monkeypatch.setattr(_deployment.subprocess, "run", fake_build)
     bundle = tmp_path / "backend.tar.gz"
@@ -110,6 +137,12 @@ def test_bundle_contains_wheel_and_runtime_data_only(
         manifest = json.load(archive.extractfile("manifest.json"))
     assert set(manifest["files"]) == names - {"manifest.json"}
     assert manifest["runtime"] == target.as_dict()
+    assert commands[:2] == [["npm", "ci"], ["npm", "run", "build"]]
+    with tarfile.open(bundle, "r:gz") as archive:
+        backend_wheel = archive.extractfile("wheels/train-0.1.0-py3-none-any.whl")
+        assert backend_wheel is not None
+        with zipfile.ZipFile(io.BytesIO(backend_wheel.read())) as wheel:
+            assert wheel.read("train/modules/web_api/static/index.html") == b"<h1>Train</h1>"
     download = next(command for command in commands if "download" in command)
     assert download[download.index("--platform") + 1] == target.platform.replace(
         "-", "_"

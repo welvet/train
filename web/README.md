@@ -24,8 +24,9 @@ npm ci
 npm run build
 ```
 
-Next.js writes the static site to `out/`. Publish that directory with any
-static file host; a Node.js server is not required in production.
+Next.js writes the static site to `out/`. The release builder packages that
+directory into the Python wheel, and the backend web API serves it from `/`.
+A Node.js server is not required in production.
 
 ## Checks
 

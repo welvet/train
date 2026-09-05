@@ -5,6 +5,7 @@ import collections
 import logging
 import os
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from aiohttp import web
@@ -16,6 +17,7 @@ from train.modules.web_api.protocol import (
     parse_speed,
     parse_switch_target,
 )
+from train.modules.web_api.static_files import PACKAGED_STATIC_ROOT, StaticFileResolver
 
 LOG_BUFFER_SIZE = 200
 LOG_SUBSCRIBER_QUEUE_SIZE = 500
@@ -50,12 +52,16 @@ class WebApiServer:
         port: int,
         shutdown_callback: Callable[[], Any] | None,
         readiness_check: Callable[[], bool],
+        static_root: Path | None = None,
     ) -> None:
         self._controller = controller
         self._host = host
         self._port = port
         self._shutdown_callback = shutdown_callback
         self._readiness_check = readiness_check
+        self._static_files = StaticFileResolver(
+            static_root if static_root is not None else PACKAGED_STATIC_ROOT
+        )
         self._app: web.Application | None = None
         self._runner: web.AppRunner | None = None
         self._log = logging.getLogger("train.web")
@@ -83,6 +89,7 @@ class WebApiServer:
         app.router.add_post("/halt", self._handle_halt)
         app.router.add_post("/resume", self._handle_resume)
         app.router.add_get("/logs", self._handle_logs)
+        app.router.add_get("/{path:.*}", self._static_files.handle)
         self._app = app
         self._runner = web.AppRunner(app)
         await self._runner.setup()
