@@ -21,8 +21,6 @@ struct SwitchState {
 };
 
 struct ControllerModel {
-  // Each state area has one writer: Wi-Fi, transport, readers, and switches.
-  // Other modules may project this state but communicate changes through events.
   bool wifiConnected = false;
   bool backendConnected = false;
   ReaderState readers[READER_STORAGE_SIZE];

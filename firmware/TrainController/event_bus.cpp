@@ -14,8 +14,6 @@ bool EventBus::subscribe(EventMask events, void* context, Handler handler) {
 }
 
 void EventBus::publish(const Event& event) {
-  // Delivery is synchronous. Event references and any borrowed fields remain
-  // valid for all subscribers and nested publications until this call returns.
   const uint8_t subscriberCount = subscriberCount_;
   for (uint8_t index = 0; index < subscriberCount; ++index) {
     const Subscriber& subscriber = subscribers_[index];
