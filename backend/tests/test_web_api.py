@@ -101,6 +101,17 @@ async def test_state_returns_complete_domain_snapshot(
     }
 
 
+async def test_openapi_exposes_state_and_public_event_contract(
+    client: TestClient,
+) -> None:
+    response = await client.get("/api/openapi.json")
+
+    assert response.status == 200
+    body = await response.json()
+    assert body["openapi"] == "3.1.0"
+    assert set(body["paths"]) == {"/api/state", "/api/events"}
+
+
 async def test_event_endpoint_decodes_and_publishes_command(
     bus: EventBus, client: TestClient
 ) -> None:

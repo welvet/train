@@ -59,6 +59,13 @@ Inspect state before deciding whether to issue another command.
 Events that report facts, such as connections, telemetry, detections, and
 hardware acknowledgements, are internal-only and are rejected by this endpoint.
 
+## Generated contract
+
+`GET /api/openapi.json` returns the versioned OpenAPI 3.1 contract for the state
+snapshot and public command vocabulary. The checked-in frontend contract is
+generated from the backend domain and vocabulary with
+`tools/generate-web-contract`; it must not be edited by hand.
+
 ## Operational health
 
 `GET /health` remains separate because the release supervisor uses it for

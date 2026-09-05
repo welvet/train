@@ -35,6 +35,7 @@ RUNTIME_DATA_FILES = (
 WEB_BUILD_INPUTS = (
     "app",
     "public",
+    "src",
     "eslint.config.mjs",
     "next.config.ts",
     "package-lock.json",

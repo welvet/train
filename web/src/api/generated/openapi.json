@@ -1,0 +1,483 @@
+{
+  "components": {
+    "schemas": {
+      "ApiError": {
+        "additionalProperties": true,
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "type": "object"
+      },
+      "ArduinoHubState": {
+        "additionalProperties": false,
+        "properties": {
+          "connected": {
+            "type": "boolean"
+          },
+          "detectors": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/DetectorState"
+            },
+            "type": "object"
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "hub_id": {
+            "type": "string"
+          },
+          "switches": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/SwitchState"
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "hub_id",
+          "device_id",
+          "connected",
+          "switches",
+          "detectors"
+        ],
+        "type": "object"
+      },
+      "AutomationHalt": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/AutomationHaltData"
+          },
+          "type": {
+            "const": "automation_halt",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      "AutomationHaltData": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "AutomationResume": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/AutomationResumeData"
+          },
+          "type": {
+            "const": "automation_resume",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      "AutomationResumeData": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "AutomationState": {
+        "additionalProperties": false,
+        "properties": {
+          "halted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "halted"
+        ],
+        "type": "object"
+      },
+      "CommandResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "command": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "completed": {
+            "const": true,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "command",
+          "completed"
+        ],
+        "type": "object"
+      },
+      "DetectorState": {
+        "additionalProperties": false,
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "detector_id": {
+            "type": "string"
+          },
+          "train_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "triggered": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "detector_id",
+          "available",
+          "triggered",
+          "train_id"
+        ],
+        "type": "object"
+      },
+      "LegoHubState": {
+        "additionalProperties": false,
+        "properties": {
+          "battery_pct": {
+            "type": "integer"
+          },
+          "connected": {
+            "type": "boolean"
+          },
+          "hub_id": {
+            "type": "string"
+          },
+          "train_id": {
+            "type": "string"
+          },
+          "voltage": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "hub_id",
+          "train_id",
+          "connected",
+          "battery_pct",
+          "voltage"
+        ],
+        "type": "object"
+      },
+      "PublicEvent": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/SetTrainSpeed"
+          },
+          {
+            "$ref": "#/components/schemas/SetSwitchPosition"
+          },
+          {
+            "$ref": "#/components/schemas/AutomationHalt"
+          },
+          {
+            "$ref": "#/components/schemas/AutomationResume"
+          }
+        ]
+      },
+      "SetSwitchPosition": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/SetSwitchPositionData"
+          },
+          "type": {
+            "const": "set_switch_position",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "data"
+        ],
+        "type": "object"
+      },
+      "SetSwitchPositionData": {
+        "additionalProperties": true,
+        "properties": {
+          "hub_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "switch_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "target": {
+            "oneOf": [
+              {
+                "enum": [
+                  "straight",
+                  "diverge",
+                  "s",
+                  "d"
+                ],
+                "type": "string"
+              },
+              {
+                "maximum": 180,
+                "minimum": 0,
+                "type": "integer"
+              }
+            ]
+          }
+        },
+        "required": [
+          "hub_id",
+          "switch_id",
+          "target"
+        ],
+        "type": "object"
+      },
+      "SetTrainSpeed": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/SetTrainSpeedData"
+          },
+          "type": {
+            "const": "set_train_speed",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "data"
+        ],
+        "type": "object"
+      },
+      "SetTrainSpeedData": {
+        "additionalProperties": true,
+        "properties": {
+          "speed": {
+            "maximum": 100,
+            "minimum": -100,
+            "type": "integer"
+          },
+          "train_id": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "train_id",
+          "speed"
+        ],
+        "type": "object"
+      },
+      "StateEnvelope": {
+        "additionalProperties": false,
+        "properties": {
+          "state": {
+            "$ref": "#/components/schemas/SystemState"
+          },
+          "version": {
+            "const": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "state"
+        ],
+        "type": "object"
+      },
+      "SwitchState": {
+        "additionalProperties": false,
+        "properties": {
+          "angle": {
+            "type": "integer"
+          },
+          "switch_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "switch_id",
+          "angle"
+        ],
+        "type": "object"
+      },
+      "SystemState": {
+        "additionalProperties": false,
+        "properties": {
+          "arduino_hubs": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ArduinoHubState"
+            },
+            "type": "object"
+          },
+          "automation": {
+            "$ref": "#/components/schemas/AutomationState"
+          },
+          "lego_hubs": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/LegoHubState"
+            },
+            "type": "object"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "running": {
+            "type": "boolean"
+          },
+          "trains": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/TrainState"
+            },
+            "type": "object"
+          },
+          "updated_at": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "revision",
+          "updated_at",
+          "running",
+          "automation",
+          "trains",
+          "lego_hubs",
+          "arduino_hubs"
+        ],
+        "type": "object"
+      },
+      "TrainState": {
+        "additionalProperties": false,
+        "properties": {
+          "lego_hub_id": {
+            "type": "string"
+          },
+          "speed": {
+            "type": "integer"
+          },
+          "train_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "train_id",
+          "lego_hub_id",
+          "speed"
+        ],
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "Train Web API",
+    "version": "1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/events": {
+      "post": {
+        "operationId": "publishEvent",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublicEvent"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandResponse"
+                }
+              }
+            },
+            "description": "Command completed"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid public event"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unknown resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Hardware rejected the command"
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Command outcome is unknown"
+          }
+        }
+      }
+    },
+    "/api/state": {
+      "get": {
+        "operationId": "getSystemState",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StateEnvelope"
+                }
+              }
+            },
+            "description": "Current authoritative system state"
+          }
+        }
+      }
+    }
+  }
+}

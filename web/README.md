@@ -1,7 +1,7 @@
 # Train web UI
 
-A minimal Next.js and TypeScript UI for the train project. The current page is
-intentionally limited to “Hello world” and does not connect to the backend.
+A responsive Next.js and TypeScript UI for monitoring and controlling the train
+system through the backend's public web API.
 
 ## Requirements
 
@@ -33,4 +33,15 @@ A Node.js server is not required in production.
 ```sh
 npm run lint
 npm run typecheck
+npm test
 ```
+
+The frontend API types are generated from the backend-owned OpenAPI contract:
+
+```sh
+tools/generate-web-contract
+cd web
+npm run generate:api
+```
+
+Generated files under `src/api/generated/` must not be edited manually.

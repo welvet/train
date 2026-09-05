@@ -1,0 +1,44 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT / "backend"))
+
+from train.modules.web_api.schema import openapi_document
+
+OUTPUT = REPO_ROOT / "web" / "src" / "api" / "generated" / "openapi.json"
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Generate the TypeScript-facing Train Web API contract"
+    )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="fail if the checked-in contract is not current",
+    )
+    args = parser.parse_args()
+
+    rendered = json.dumps(openapi_document(), indent=2, sort_keys=True) + "\n"
+    if args.check:
+        if not OUTPUT.is_file() or OUTPUT.read_text() != rendered:
+            print(
+                "web API contract is stale; run tools/generate-web-contract",
+                file=sys.stderr,
+            )
+            return 1
+        return 0
+
+    OUTPUT.parent.mkdir(parents=True, exist_ok=True)
+    OUTPUT.write_text(rendered)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

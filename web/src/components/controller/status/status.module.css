@@ -1,0 +1,40 @@
+.list,
+.nestedList {
+  display: grid;
+  gap: var(--mantine-spacing-sm);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.nestedList {
+  padding-left: var(--mantine-spacing-lg);
+  border-left: 2px solid var(--mantine-color-default-border);
+}
+
+.listItem {
+  min-width: 0;
+}
+
+.icon {
+  display: grid;
+  flex: 0 0 42px;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+}
+
+.summary {
+  justify-content: flex-end;
+}
+
+@media (max-width: 48em) {
+  .nestedList {
+    padding-left: var(--mantine-spacing-sm);
+  }
+
+  .summary {
+    width: 100%;
+    justify-content: flex-start;
+  }
+}
