@@ -48,6 +48,25 @@ it("does not let a local draft overwrite an external automation update", () => {
   expect(onReplaceAutomation).not.toHaveBeenCalled();
 });
 
+it("keeps a new empty rule as an unfinished choice until a step is added", () => {
+  const onReplaceAutomation = vi.fn();
+  renderStatus(emptyDocument, onReplaceAutomation);
+
+  fireEvent.click(
+    screen.getByRole("button", { name: "Create automation for yard / D1" }),
+  );
+
+  expect(screen.getByText("Unsaved")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Save automation" })).toBeDisabled();
+  expect(
+    screen.queryByText("Automation draft cannot be saved"),
+  ).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "Add speed step" }));
+
+  expect(screen.getByRole("button", { name: "Save automation" })).toBeEnabled();
+});
+
 it("removes only invalid dormant rules from the document-level cleanup", async () => {
   const invalidDormantRule: AutomationDocument["rules"][number] = {
     id: "missing_switch",

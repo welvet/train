@@ -181,6 +181,7 @@ it("disables automation editing while a save is in flight", async () => {
   fireEvent.click(
     await screen.findByRole("button", { name: "Create automation for yard / D1" }),
   );
+  fireEvent.click(screen.getByRole("button", { name: "Add speed step" }));
   fireEvent.click(screen.getByRole("button", { name: "Save automation" }));
   expect(screen.getByRole("button", { name: "Run when express arrives" })).toBeDisabled();
 
@@ -257,6 +258,7 @@ it("keeps a dormant backend rule off when creating an active rule", async () => 
 
   expect(await screen.findByText("Saved")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Create automation for yard / D1" }));
+  fireEvent.click(screen.getByRole("button", { name: "Add speed step" }));
   expect(screen.getByText("Unsaved")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Save automation" }));
   await waitFor(() =>

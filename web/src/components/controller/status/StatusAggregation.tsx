@@ -44,6 +44,20 @@ export function StatusAggregation({
       !rule.enabled &&
       automationValidationError({ version: 1, rules: [rule] }, topology) !== null,
   );
+  const hasEmptyActiveRule = automationDocument.rules.some(
+    (rule) => rule.enabled && rule.root.children.length === 0,
+  );
+  const visibleValidationError = hasEmptyActiveRule
+    ? automationValidationError(
+        {
+          version: 1,
+          rules: automationDocument.rules.filter(
+            (rule) => !rule.enabled || rule.root.children.length > 0,
+          ),
+        },
+        topology,
+      )
+    : validationError;
 
   const saveAutomation = async () => {
     const saved = await onReplaceAutomation(automationDocument);
@@ -80,7 +94,6 @@ export function StatusAggregation({
       <Paper withBorder radius="md" p="md">
         <Group justify="space-between" align="center" wrap="wrap">
           <Group gap="xs">
-            <Text fz="xl" aria-hidden>🪄</Text>
             <Text fw={800}>Automation</Text>
             <Badge
               color={changedElsewhere ? "orange" : dirty ? "yellow" : "green"}
@@ -118,7 +131,7 @@ export function StatusAggregation({
             </Stack>
           </Alert>
         )}
-        {!changedElsewhere && validationError && (
+        {!changedElsewhere && visibleValidationError && (
           <Alert color="red" title="Automation draft cannot be saved" mt="sm">
             {invalidDormantRules.length > 0 ? (
               <Stack gap="xs" align="flex-start">
@@ -143,7 +156,7 @@ export function StatusAggregation({
                   🧹 Clean up
                 </Button>
               </Stack>
-            ) : validationError}
+            ) : visibleValidationError}
           </Alert>
         )}
       </Paper>
