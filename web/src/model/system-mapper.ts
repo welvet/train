@@ -40,6 +40,7 @@ export function toSystemModel(envelope: StateEnvelope): SystemModel {
             available: item.available,
             triggered: item.triggered,
             trainId: item.train_id,
+            unknownTagId: item.unknown_tag_id,
           }))
           .sort(byId),
       }))

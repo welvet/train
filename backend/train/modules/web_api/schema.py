@@ -8,7 +8,7 @@ from typing import Any, get_args, get_origin, get_type_hints
 from train.domain.state import SystemState
 from train.domain.vocabulary import PUBLIC_EVENTS
 
-STATE_API_VERSION = 1
+STATE_API_VERSION = 2
 
 
 def openapi_document() -> dict[str, object]:

@@ -4,7 +4,7 @@ import { toSystemModel } from "./system-mapper";
 
 it("maps and sorts the backend state into the UI model", () => {
   const envelope: StateEnvelope = {
-    version: 1,
+    version: 2,
     snapshot_at: 13,
     state: {
       revision: 7,
@@ -42,7 +42,8 @@ it("maps and sorts the backend state into the UI model", () => {
               detector_id: "D1",
               available: true,
               triggered: true,
-              train_id: "alpha",
+              train_id: null,
+              unknown_tag_id: "DE:AD:BE:EF",
             },
           },
         },
@@ -62,6 +63,7 @@ it("maps and sorts the backend state into the UI model", () => {
   expect(model.arduinoHubs[0].detectors[0]).toMatchObject({
     id: "D1",
     triggered: true,
-    trainId: "alpha",
+    trainId: null,
+    unknownTagId: "DE:AD:BE:EF",
   });
 });

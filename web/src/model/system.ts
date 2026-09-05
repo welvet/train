@@ -23,6 +23,7 @@ export interface DetectorModel {
   readonly available: boolean;
   readonly triggered: boolean;
   readonly trainId: string | null;
+  readonly unknownTagId: string | null;
 }
 
 export interface ArduinoHubModel {

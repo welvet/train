@@ -29,6 +29,7 @@ class HubConnected(Event):
     switches: tuple[str, ...] = ()
     detectors: tuple[str, ...] = ()
     active_trains: tuple[tuple[str, str], ...] = ()
+    active_unknown_tags: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,3 +49,17 @@ class TagRemoved(Event):
     hub_name: str = ""
     detector_name: str = ""
     train_id: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class UnknownTagDetected(Event):
+    hub_name: str = ""
+    detector_name: str = ""
+    tag_id: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class UnknownTagRemoved(Event):
+    hub_name: str = ""
+    detector_name: str = ""
+    tag_id: str = ""

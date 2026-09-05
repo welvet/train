@@ -8,8 +8,8 @@ switch-specific routing.
 ## Read system state
 
 `GET /api/state` returns the current `SystemState` in a versioned JSON envelope.
-Version 1 has the shape
-`{"version": 1, "snapshot_at": 123.4, "state": {...}}`. `snapshot_at` records
+Version 2 has the shape
+`{"version": 2, "snapshot_at": 123.4, "state": {...}}`. `snapshot_at` records
 when the backend created the response so clients can reject older snapshots.
 Configured trains, Arduino hubs, switches, and detectors are present before their
 hardware connects. Runtime events update the same state read by automation and
@@ -23,8 +23,10 @@ is the timestamp of that event. A response includes:
   state; and
 - Arduino hubs with their configured device IDs, switches, and detectors.
 
-Hardware addresses, tag UIDs, pins, and workspace credentials are not part of
-the domain state and are never returned.
+Hardware addresses, configured train-tag UIDs, pins, and workspace credentials
+are not returned. When a detector sees an unconfigured tag, its normalized UID
+is included temporarily as `unknown_tag_id` so an operator can identify and add
+the train. The UID is cleared when that tag is removed.
 
 `GET /api/state/stream` sends the same complete envelope as a server-sent event
 immediately after connection and whenever the state revision changes. Clients
@@ -60,7 +62,7 @@ queued command from one already sent to hardware, inspect current state before
 retrying. Commands targeting the same train or switch are serialized across
 both automation and HTTP callers.
 
-Version 1 does not accept client idempotency keys. A timeout covers queueing,
+Version 2 does not accept client idempotency keys. A timeout covers queueing,
 publication, and acknowledgement, and means the physical outcome may be unknown.
 Inspect state before deciding whether to issue another command.
 

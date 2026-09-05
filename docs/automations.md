@@ -9,7 +9,14 @@ public, stable automation surface. Import them through these modules:
 
 ```python
 from train.automation import AutomationContext
-from train.domain import HubConnected, SystemStarted, TagDetected, TagRemoved
+from train.domain import (
+    HubConnected,
+    SystemStarted,
+    TagDetected,
+    TagRemoved,
+    UnknownTagDetected,
+    UnknownTagRemoved,
+)
 ```
 
 Do not import from `train.core` or `train.modules`; those packages are backend
@@ -183,15 +190,18 @@ classes from `train.domain` and access their fields directly.
 | `TrainDisconnected` | `train_name`, `ble_address` | BLE train became unavailable. |
 | `TrainSpeedChanged` | `train_name`, `speed`, `success`, `request_id` | A speed-command BLE write completed. |
 | `TrainStatus` | `train_name`, `battery_pct`, `voltage` | Periodic train telemetry. |
-| `HubConnected` | `hub_name`, `switches`, `detectors`, `active_trains` | Arduino hub connected and supplied its topology and current detections. |
+| `HubConnected` | `hub_name`, `switches`, `detectors`, `active_trains`, `active_unknown_tags` | Arduino hub connected and supplied its topology and current detections. |
 | `HubDisconnected` | `hub_name` | Arduino hub disconnected. |
 | `SwitchPositionChanged` | `hub_name`, `switch_name`, `angle`, `ok`, `request_id` | Firmware accepted or rejected a switch target. |
 | `TagDetected` | `hub_name`, `detector_name`, `train_id` | A known train tag appeared at a detector. |
 | `TagRemoved` | `hub_name`, `detector_name`, `train_id` | That train tag left the detector. |
+| `UnknownTagDetected` | `hub_name`, `detector_name`, `tag_id` | An unconfigured tag appeared at a detector. |
+| `UnknownTagRemoved` | `hub_name`, `detector_name`, `tag_id` | That unconfigured tag left the detector. |
 
 `HubConnected.active_trains` is a tuple of `(detector_name, train_id)` pairs.
-It is the reconnect snapshot; use it to initialize state that would otherwise
-depend on detection events emitted while the hub was offline.
+`HubConnected.active_unknown_tags` similarly contains `(detector_name, tag_id)`
+pairs. They are the reconnect snapshot; use them to initialize state that would
+otherwise depend on detection events emitted while the hub was offline.
 
 `SetTrainSpeed` and `SetSwitchPosition` are command events used by the context
 helpers and the public event transport. Automation programs should call

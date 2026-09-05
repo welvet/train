@@ -15,6 +15,8 @@ from train.domain import (
     SystemState,
     TagDetected,
     TagRemoved,
+    UnknownTagDetected,
+    UnknownTagRemoved,
 )
 from train.modules.arduino_hub import ArduinoHubModule
 
@@ -257,6 +259,7 @@ async def test_reconnect_reconciles_tag_removed_while_disconnected(
         "name": "D1",
         "triggered": False,
         "train_id": None,
+        "unknown_tag_id": None,
     }
 
     writer1.close()
@@ -265,7 +268,7 @@ async def test_reconnect_reconciles_tag_removed_while_disconnected(
     await writer2.wait_closed()
 
 
-async def test_unknown_tags_are_ignored(bus: EventBus, hub) -> None:
+async def test_unknown_tags_are_published_and_tracked(bus: EventBus, hub) -> None:
     mod, port = hub
     events = _collect_events(bus)
     reader, writer = await _connect_hub(
@@ -273,22 +276,60 @@ async def test_unknown_tags_are_ignored(bus: EventBus, hub) -> None:
         detected_tags=[{"detector": "D1", "tag_id": "DE:AD:BE:EF"}],
     )
     await _send_line(writer, {
-        "event": "tag_detected",
+        "event": "tag_removed",
         "hub": "A_HUB_1",
         "detector": "D1",
         "tag_id": "DE:AD:BE:EF",
     })
     await asyncio.sleep(0.05)
 
-    assert not [
-        event for event in events if isinstance(event, (TagDetected, TagRemoved))
+    unknown_events = [
+        event
+        for event in events
+        if isinstance(event, (UnknownTagDetected, UnknownTagRemoved))
     ]
+    assert [type(event) for event in unknown_events] == [
+        UnknownTagDetected,
+        UnknownTagRemoved,
+    ]
+    assert all(event.tag_id == "DE:AD:BE:EF" for event in unknown_events)
     info = mod.get_hub_info("A_HUB_1")
     assert info is not None
     assert info["detectors"]["D1"]["triggered"] is False
+    assert info["detectors"]["D1"]["unknown_tag_id"] is None
 
     writer.close()
     await writer.wait_closed()
+
+
+async def test_reconnect_reconciles_unknown_tag_removed_while_disconnected(
+    bus: EventBus, hub
+) -> None:
+    mod, port = hub
+    events = _collect_events(bus)
+    reader1, writer1 = await _connect_hub(
+        port,
+        detected_tags=[{"detector": "D1", "tag_id": "de:ad:be:ef"}],
+    )
+    events.clear()
+
+    reader2, writer2 = await _connect_hub(port)
+    await asyncio.sleep(0.05)
+
+    removed = [
+        event for event in events if isinstance(event, UnknownTagRemoved)
+    ]
+    assert len(removed) == 1
+    assert removed[0].tag_id == "DE:AD:BE:EF"
+    info = mod.get_hub_info("A_HUB_1")
+    assert info is not None
+    assert info["detectors"]["D1"]["triggered"] is False
+    assert info["detectors"]["D1"]["unknown_tag_id"] is None
+
+    writer1.close()
+    await writer1.wait_closed()
+    writer2.close()
+    await writer2.wait_closed()
 
 
 async def test_events_from_unavailable_detector_are_ignored(
@@ -366,6 +407,47 @@ async def test_live_tag_events_are_idempotent_and_reconcile_replacement(
     info = mod.get_hub_info("A_HUB_1")
     assert info is not None
     assert info["detectors"]["D1"]["train_id"] == "cargo_train"
+
+    writer.close()
+    await writer.wait_closed()
+
+
+async def test_live_tag_events_reconcile_known_and_unknown_replacements(
+    bus: EventBus, hub
+) -> None:
+    mod, port = hub
+    events = _collect_events(bus)
+    reader, writer = await _connect_hub(port)
+
+    for tag_id in ("DE:AD:BE:EF", "04:A1:B2:C3", "CA:FE:BA:BE"):
+        await _send_line(writer, {
+            "event": "tag_detected",
+            "hub": "A_HUB_1",
+            "detector": "D1",
+            "tag_id": tag_id,
+        })
+    await asyncio.sleep(0.05)
+
+    tag_events = [
+        event
+        for event in events
+        if isinstance(
+            event,
+            (TagDetected, TagRemoved, UnknownTagDetected, UnknownTagRemoved),
+        )
+    ]
+    assert [type(event) for event in tag_events] == [
+        UnknownTagDetected,
+        UnknownTagRemoved,
+        TagDetected,
+        TagRemoved,
+        UnknownTagDetected,
+    ]
+    info = mod.get_hub_info("A_HUB_1")
+    assert info is not None
+    assert info["detectors"]["D1"]["triggered"] is True
+    assert info["detectors"]["D1"]["train_id"] is None
+    assert info["detectors"]["D1"]["unknown_tag_id"] == "CA:FE:BA:BE"
 
     writer.close()
     await writer.wait_closed()

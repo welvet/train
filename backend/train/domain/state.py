@@ -42,6 +42,7 @@ class DetectorState:
     available: bool = False
     triggered: bool = False
     train_id: str | None = None
+    unknown_tag_id: str | None = None
 
 
 @dataclass(slots=True)

@@ -164,7 +164,7 @@ export class TrainApiClient {
 function isStateEnvelope(value: unknown): value is StateEnvelope {
   if (
     !isRecord(value) ||
-    value.version !== 1 ||
+    value.version !== 2 ||
     typeof value.snapshot_at !== "number" ||
     !isRecord(value.state)
   ) {

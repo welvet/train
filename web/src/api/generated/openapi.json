@@ -145,13 +145,24 @@
           },
           "triggered": {
             "type": "boolean"
+          },
+          "unknown_tag_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
           "detector_id",
           "available",
           "triggered",
-          "train_id"
+          "train_id",
+          "unknown_tag_id"
         ],
         "type": "object"
       },
@@ -299,7 +310,7 @@
             "$ref": "#/components/schemas/SystemState"
           },
           "version": {
-            "const": 1,
+            "const": 2,
             "type": "integer"
           }
         },
@@ -395,7 +406,7 @@
   },
   "info": {
     "title": "Train Web API",
-    "version": "1"
+    "version": "2"
   },
   "openapi": "3.1.0",
   "paths": {

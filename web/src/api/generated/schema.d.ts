@@ -103,6 +103,7 @@ export interface components {
             detector_id: string;
             train_id: string | null;
             triggered: boolean;
+            unknown_tag_id: string | null;
         };
         LegoHubState: {
             battery_pct: number;
@@ -139,7 +140,7 @@ export interface components {
             snapshot_at: number;
             state: components["schemas"]["SystemState"];
             /** @constant */
-            version: 1;
+            version: 2;
         };
         SwitchState: {
             angle: number;
