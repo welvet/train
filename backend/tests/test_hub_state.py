@@ -1,4 +1,4 @@
-from train.domain.hubs import HubState, TrainPresenceChange
+from train.domain import HubState, TrainPresenceChange
 
 
 def test_hub_state_tracks_switches_and_train_presence() -> None:

@@ -11,14 +11,14 @@ from typing import Any
 from bleak import BleakClient
 
 from train.core.event_bus import EventBus
-from train.core.events.train import (
+from train.core.module import Module
+from train.domain import (
     SetTrainSpeed,
     TrainConnected,
     TrainDisconnected,
     TrainSpeedChanged,
     TrainStatus,
 )
-from train.core.module import Module
 
 HUB_SERVICE_UUID = "00001623-1212-efde-1623-785feabcd123"
 HUB_CHARACTERISTIC_UUID = "00001624-1212-efde-1623-785feabcd123"

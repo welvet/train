@@ -5,16 +5,17 @@ from collections.abc import Mapping
 from typing import Any, Protocol
 
 from train.core.event_bus import EventBus
-from train.core.events.hub import (
+from train.domain import (
     HubConnected,
     HubDisconnected,
+    HubState,
     SetSwitchPosition,
     SwitchPositionChanged,
     TagDetected,
     TagRemoved,
+    TrainPresenceChange,
+    TrainTagRegistry,
 )
-from train.domain.hubs import HubState, TrainPresenceChange
-from train.domain.train_tags import TrainTagRegistry
 from train.modules.arduino_hub.protocol import (
     Hello,
     InboundMessage,

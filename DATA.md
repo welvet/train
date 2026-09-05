@@ -123,7 +123,7 @@ Exports a synchronous registration phase and an asynchronous runtime entry
 point:
 
 ```python
-from train.automation import TagDetected
+from train.domain import TagDetected
 
 
 async def on_train_detected(event):
@@ -139,8 +139,9 @@ async def run(ctx):
 ```
 
 `configure` registers handlers before hardware modules start, so startup events
-cannot be missed. The script may import `AutomationContext` and supported event
-classes from `train.automation`. It is loaded only when the backend starts.
+cannot be missed. The script may import `AutomationContext` from
+`train.automation` and event classes from `train.domain`. It is loaded only when
+the backend starts.
 
 ## Commands
 

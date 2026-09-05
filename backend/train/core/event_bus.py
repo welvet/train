@@ -6,7 +6,7 @@ from collections import defaultdict
 from collections.abc import Callable, Coroutine
 from typing import Any, TypeVar
 
-from train.core.events.base import Event
+from train.domain import Event
 
 E = TypeVar("E", bound=Event)
 EventHandler = Callable[[Any], Coroutine[Any, Any, None]]

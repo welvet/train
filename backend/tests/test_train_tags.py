@@ -1,4 +1,4 @@
-from train.domain.train_tags import TrainTagRegistry
+from train.domain import TrainTagRegistry
 
 
 def test_train_tag_registry_normalizes_hardware_ids() -> None:

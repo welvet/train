@@ -4,8 +4,8 @@ import pytest
 
 from train.core.app import App
 from train.core.event_bus import EventBus
-from train.core.events import Event, SystemShutdown, SystemStarted
 from train.core.module import Module
+from train.domain import Event, SystemShutdown, SystemStarted
 
 
 class RecorderModule(Module):

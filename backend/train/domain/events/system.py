@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from train.core.events.base import Event
+from train.domain.events.base import Event
 
 
 @dataclass(frozen=True, slots=True)

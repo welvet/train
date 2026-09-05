@@ -4,9 +4,8 @@ import asyncio
 from typing import Any
 
 from train.core.event_bus import EventBus
-from train.core.events.hub import SetSwitchPosition
 from train.core.module import Module
-from train.domain.train_tags import TrainTagRegistry
+from train.domain import SetSwitchPosition, TrainTagRegistry
 from train.modules.arduino_hub.controller import ArduinoHubController, HubClient
 from train.modules.arduino_hub.transport import ArduinoHubServer
 

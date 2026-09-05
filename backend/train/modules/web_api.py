@@ -9,24 +9,23 @@ from typing import Any, Callable
 from aiohttp import web
 
 from train.core.event_bus import EventBus
-from train.core.events.system import AutomationHalt, AutomationResume
-from train.core.events.hub import (
+from train.core.module import Module
+from train.domain import (
+    AutomationHalt,
+    AutomationResume,
     HubConnected,
     HubDisconnected,
+    HubState,
     SetSwitchPosition,
+    SetTrainSpeed,
     SwitchPositionChanged,
     TagDetected,
     TagRemoved,
-)
-from train.core.events.train import (
-    SetTrainSpeed,
     TrainConnected,
     TrainDisconnected,
     TrainSpeedChanged,
     TrainStatus,
 )
-from train.core.module import Module
-from train.domain.hubs import HubState
 
 RESPONSE_TIMEOUT = 2.0
 LOG_BUFFER_SIZE = 200
