@@ -14,6 +14,9 @@ train = "train.__main__:main"
 [tool.setuptools.package-data]
 "train.modules.web_api" = ["static/**/*"]
 
+[tool.setuptools.packages.find]
+include = ["automation_tree*", "train*"]
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
