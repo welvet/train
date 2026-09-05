@@ -3,7 +3,11 @@ import { useMemo, useState } from "react";
 
 import { serializeAutomation } from "@/src/components/automation/automation-json";
 import { validateAutomationTopology } from "@/src/components/automation/automation-validation";
-import type { AutomationDocument, AutomationTopology } from "@/src/components/automation/types";
+import type {
+  AutomationDocument,
+  AutomationNode,
+  AutomationTopology,
+} from "@/src/components/automation/types";
 import type { SystemModel } from "@/src/model/system";
 import { ArduinoHubRow } from "./rows/ArduinoHubRow";
 import { TrainRow } from "./rows/TrainRow";
@@ -44,20 +48,10 @@ export function StatusAggregation({
       !rule.enabled &&
       automationValidationError({ version: 1, rules: [rule] }, topology) !== null,
   );
-  const hasEmptyActiveRule = automationDocument.rules.some(
-    (rule) => rule.enabled && rule.root.children.length === 0,
+  const visibleValidationError = automationValidationError(
+    documentForVisibleValidation(automationDocument),
+    topology,
   );
-  const visibleValidationError = hasEmptyActiveRule
-    ? automationValidationError(
-        {
-          version: 1,
-          rules: automationDocument.rules.filter(
-            (rule) => !rule.enabled || rule.root.children.length > 0,
-          ),
-        },
-        topology,
-      )
-    : validationError;
 
   const saveAutomation = async () => {
     const saved = await onReplaceAutomation(automationDocument);
@@ -193,6 +187,38 @@ export function StatusAggregation({
 
 function compactJson(source: string): string {
   return JSON.stringify(JSON.parse(source));
+}
+
+function documentForVisibleValidation(
+  document: AutomationDocument,
+): AutomationDocument {
+  return {
+    version: 1,
+    rules: document.rules.map((rule) =>
+      rule.enabled
+        ? {
+            ...rule,
+            root: {
+              ...rule.root,
+              children: nodesForVisibleValidation(rule.root.children),
+            },
+          }
+        : rule,
+    ),
+  };
+}
+
+function nodesForVisibleValidation(
+  nodes: readonly AutomationNode[],
+): readonly AutomationNode[] {
+  if (nodes.length === 0) {
+    return [{ type: "set_train_speed", speed: 0, children: [] }];
+  }
+  return nodes.map((node) =>
+    node.type === "wait" || node.type === "on_count"
+      ? { ...node, children: nodesForVisibleValidation(node.children) }
+      : node,
+  );
 }
 
 function topologyFor(system: SystemModel): AutomationTopology {

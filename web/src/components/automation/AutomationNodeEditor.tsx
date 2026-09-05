@@ -19,19 +19,19 @@ const NODE_LABELS: Record<AutomationNode["type"], { emoji: string; label: string
 export function AutomationNodeList({
   nodes,
   switches,
-  allowEmpty = false,
+  accessibleLabel,
   onChange,
 }: {
   readonly nodes: readonly AutomationNode[];
   readonly switches: readonly SwitchOption[];
-  readonly allowEmpty?: boolean;
+  readonly accessibleLabel: string;
   readonly onChange: (nodes: readonly AutomationNode[]) => void;
 }) {
   const add = (type: AutomationNodeType) =>
     onChange([...nodes, createNode(type, switches)]);
 
   return (
-    <Stack gap="xs">
+    <Stack gap="xs" role="group" aria-label={accessibleLabel}>
       {nodes.length > 0 && (
         <ol className={classes.nodeList}>
           {nodes.map((node, index) => (
@@ -40,7 +40,6 @@ export function AutomationNodeList({
               node={node}
               index={index}
               count={nodes.length}
-              allowEmpty={allowEmpty}
               switches={switches}
               onChange={(next) =>
                 onChange(nodes.map((item, itemIndex) => (itemIndex === index ? next : item)))
@@ -66,7 +65,6 @@ function AutomationNodeEditor({
   node,
   index,
   count,
-  allowEmpty,
   switches,
   onChange,
   onRemove,
@@ -75,7 +73,6 @@ function AutomationNodeEditor({
   readonly node: AutomationNode;
   readonly index: number;
   readonly count: number;
-  readonly allowEmpty: boolean;
   readonly switches: readonly SwitchOption[];
   readonly onChange: (node: AutomationNode) => void;
   readonly onRemove: () => void;
@@ -126,7 +123,6 @@ function AutomationNodeEditor({
                   variant="light"
                   color="red"
                   size="lg"
-                  disabled={count === 1 && !allowEmpty}
                   aria-label={`Remove ${heading.label} step ${index + 1}`}
                   onClick={onRemove}
                 >
@@ -151,6 +147,7 @@ function AutomationNodeEditor({
               <AutomationNodeList
                 nodes={node.children}
                 switches={switches}
+                accessibleLabel={`Steps after ${heading.label} step ${index + 1}`}
                 onChange={(children) => onChange({ ...node, children })}
               />
             </div>

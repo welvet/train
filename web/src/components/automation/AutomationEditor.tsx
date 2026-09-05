@@ -222,7 +222,7 @@ function RuleEditor({
         <AutomationNodeList
           nodes={rule.root.children}
           switches={topology.switches}
-          allowEmpty
+          accessibleLabel="Automation steps"
           onChange={(children) => onChange({ ...rule, root: { ...rule.root, children } })}
         />
 

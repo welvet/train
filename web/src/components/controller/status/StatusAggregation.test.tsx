@@ -67,6 +67,50 @@ it("keeps a new empty rule as an unfinished choice until a step is added", () =>
   expect(screen.getByRole("button", { name: "Save automation" })).toBeEnabled();
 });
 
+it("keeps an empty nested action quiet and unsaveable until it gets a child", () => {
+  const onReplaceAutomation = vi.fn();
+  renderStatus(emptyDocument, onReplaceAutomation);
+
+  fireEvent.click(
+    screen.getByRole("button", { name: "Create automation for yard / D1" }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Add count step" }));
+
+  expect(screen.getByRole("button", { name: "Save automation" })).toBeDisabled();
+  expect(
+    screen.queryByText("Automation draft cannot be saved"),
+  ).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getAllByRole("button", { name: "Add speed step" })[0]);
+  expect(screen.getByRole("button", { name: "Save automation" })).toBeEnabled();
+});
+
+it("still shows unrelated validation errors on an unfinished rule", () => {
+  const document: AutomationDocument = {
+    version: 1,
+    rules: [
+      {
+        id: "missing_train",
+        enabled: true,
+        root: {
+          type: "train_detected",
+          hub_id: "yard",
+          detector_id: "D1",
+          train_id: "freight",
+          children: [{ type: "set_train_speed", speed: 0, children: [] }],
+        },
+      },
+    ],
+  };
+
+  renderStatus(document, vi.fn());
+  fireEvent.click(screen.getByRole("button", { name: "Remove Speed step 1" }));
+
+  expect(screen.getByText("Automation draft cannot be saved")).toBeInTheDocument();
+  expect(screen.getAllByText("Train freight is not configured.")).toHaveLength(2);
+  expect(screen.getByRole("button", { name: "Save automation" })).toBeDisabled();
+});
+
 it("removes only invalid dormant rules from the document-level cleanup", async () => {
   const invalidDormantRule: AutomationDocument["rules"][number] = {
     id: "missing_switch",
