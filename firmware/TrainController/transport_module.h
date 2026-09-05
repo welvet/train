@@ -27,6 +27,7 @@ class TransportModule : public Module {
   bool connectImmediately_ = false;
   char lineBuffer_[kLineBufferSize] = {0};
   size_t lineLength_ = 0;
+  bool lineOverflowed_ = false;
 
   static void receive(void* context, const Event& event);
   void onEvent(const Event& event);

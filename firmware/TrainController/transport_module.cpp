@@ -55,13 +55,17 @@ void TransportModule::readLines() {
   while (client_.available()) {
     const char value = client_.read();
     if (value == '\n') {
-      lineBuffer_[lineLength_] = '\0';
-      if (lineLength_ > 0) {
+      if (!lineOverflowed_ && lineLength_ > 0) {
+        lineBuffer_[lineLength_] = '\0';
         bus_.publish(InboundLineEvent(lineBuffer_));
       }
       lineLength_ = 0;
-    } else if (lineLength_ < kLineBufferSize - 1) {
+      lineOverflowed_ = false;
+    } else if (!lineOverflowed_ && lineLength_ < kLineBufferSize - 1) {
       lineBuffer_[lineLength_++] = value;
+    } else {
+      lineLength_ = 0;
+      lineOverflowed_ = true;
     }
   }
 }
@@ -70,6 +74,7 @@ void TransportModule::setBackendConnected(bool connected) {
   if (model_.backendConnected == connected) return;
   model_.backendConnected = connected;
   lineLength_ = 0;
+  lineOverflowed_ = false;
   if (connected) {
     bus_.publish(BackendConnectedEvent());
   } else {
