@@ -4,6 +4,22 @@
  */
 
 export interface paths {
+    "/api/automation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["replaceAutomation"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/events": {
         parameters: {
             query?: never;
@@ -72,6 +88,10 @@ export interface components {
                 [key: string]: components["schemas"]["SwitchState"];
             };
         };
+        /** @description Versioned configurable automation tree document */
+        AutomationDocument: {
+            [key: string]: unknown;
+        };
         AutomationHalt: {
             data?: components["schemas"]["AutomationHaltData"];
             /** @constant */
@@ -88,8 +108,18 @@ export interface components {
         AutomationResumeData: {
             [key: string]: unknown;
         };
+        AutomationSnapshot: {
+            document: components["schemas"]["AutomationDocument"];
+            paused: boolean;
+            statuses: {
+                [key: string]: unknown;
+            }[];
+        };
         AutomationState: {
             halted: boolean;
+        };
+        AutomationUpdateResponse: {
+            automation: components["schemas"]["AutomationSnapshot"];
         };
         CommandResponse: {
             command: {
@@ -137,10 +167,11 @@ export interface components {
             [key: string]: unknown;
         };
         StateEnvelope: {
+            automation: components["schemas"]["AutomationSnapshot"];
             snapshot_at: number;
             state: components["schemas"]["SystemState"];
             /** @constant */
-            version: 2;
+            version: 3;
         };
         SwitchState: {
             angle: number;
@@ -175,6 +206,57 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    replaceAutomation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AutomationDocument"];
+            };
+        };
+        responses: {
+            /** @description Automation replaced */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutomationUpdateResponse"];
+                };
+            };
+            /** @description Invalid automation document */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Automation persistence failed */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Automation runtime unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+        };
+    };
     publishEvent: {
         parameters: {
             query?: never;

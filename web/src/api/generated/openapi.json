@@ -54,6 +54,11 @@
         ],
         "type": "object"
       },
+      "AutomationDocument": {
+        "additionalProperties": true,
+        "description": "Versioned configurable automation tree document",
+        "type": "object"
+      },
       "AutomationHalt": {
         "additionalProperties": false,
         "properties": {
@@ -94,6 +99,30 @@
         "additionalProperties": true,
         "type": "object"
       },
+      "AutomationSnapshot": {
+        "additionalProperties": false,
+        "properties": {
+          "document": {
+            "$ref": "#/components/schemas/AutomationDocument"
+          },
+          "paused": {
+            "type": "boolean"
+          },
+          "statuses": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "document",
+          "paused",
+          "statuses"
+        ],
+        "type": "object"
+      },
       "AutomationState": {
         "additionalProperties": false,
         "properties": {
@@ -103,6 +132,18 @@
         },
         "required": [
           "halted"
+        ],
+        "type": "object"
+      },
+      "AutomationUpdateResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "automation": {
+            "$ref": "#/components/schemas/AutomationSnapshot"
+          }
+        },
+        "required": [
+          "automation"
         ],
         "type": "object"
       },
@@ -303,6 +344,9 @@
       "StateEnvelope": {
         "additionalProperties": false,
         "properties": {
+          "automation": {
+            "$ref": "#/components/schemas/AutomationSnapshot"
+          },
           "snapshot_at": {
             "type": "number"
           },
@@ -310,14 +354,15 @@
             "$ref": "#/components/schemas/SystemState"
           },
           "version": {
-            "const": 2,
+            "const": 3,
             "type": "integer"
           }
         },
         "required": [
           "version",
           "snapshot_at",
-          "state"
+          "state",
+          "automation"
         ],
         "type": "object"
       },
@@ -406,10 +451,67 @@
   },
   "info": {
     "title": "Train Web API",
-    "version": "2"
+    "version": "3"
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/automation": {
+      "put": {
+        "operationId": "replaceAutomation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutomationDocument"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutomationUpdateResponse"
+                }
+              }
+            },
+            "description": "Automation replaced"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid automation document"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Automation persistence failed"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Automation runtime unavailable"
+          }
+        }
+      }
+    },
     "/api/events": {
       "post": {
         "operationId": "publishEvent",

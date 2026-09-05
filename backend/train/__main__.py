@@ -2,7 +2,7 @@ import asyncio
 import logging
 
 from train.core.app import App
-from train.config import load_automation, load_runtime_config
+from train.config import default_automation_path, load_runtime_config
 from train.domain import SystemState
 from train.modules.arduino_hub import ArduinoHubModule
 from train.modules.automation import AutomationModule
@@ -17,7 +17,6 @@ def main() -> None:
     )
     logging.getLogger("bleak").setLevel(logging.WARNING)
     config = load_runtime_config()
-    automation = load_automation()
     app = App(state=SystemState.from_topology(
         train_hubs={
             train.train_id: train.lego_hub_id for train in config.trains
@@ -26,9 +25,8 @@ def main() -> None:
     ))
     automation_module = app.add_module(
         AutomationModule,
-        configure=automation.configure,
-        script=automation.run,
-        failure_callback=app.request_shutdown,
+        path=default_automation_path(),
+        tagged_trains={train.train_id for train in config.trains if train.tag_id},
     )
     app.add_module(
         LegoBleModule,
@@ -46,6 +44,10 @@ def main() -> None:
         host=config.backend.api_host,
         port=config.backend.api_port,
         readiness_check=lambda: automation_module.healthy,
+        automation_snapshot=automation_module.snapshot,
+        automation_update=automation_module.replace_json,
+        automation_subscribe=automation_module.subscribe_changes,
+        automation_unsubscribe=automation_module.unsubscribe_changes,
     )
     asyncio.run(app.run())
 

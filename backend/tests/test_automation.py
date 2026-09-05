@@ -1,640 +1,398 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from pathlib import Path
 
 import pytest
 
-import train.automation as automation_api
-import train.modules.automation as automation_module
+from automation_tree import AutomationParseError, RuleState
 from train.core.event_bus import EventBus
 from train.domain import (
+    AutomationHalt,
+    AutomationResume,
     SetSwitchPosition,
     SetTrainSpeed,
     SwitchPositionChanged,
     SystemState,
-    SystemStarted,
     TagDetected,
-    TrainConnected,
     TrainSpeedChanged,
 )
-from train.modules.automation import AutomationContext, AutomationModule
+from train.modules.automation import AutomationModule
+
+
+def _document(*children: dict[str, object]) -> dict[str, object]:
+    return {
+        "version": 1,
+        "rules": [{
+            "id": "station",
+            "enabled": True,
+            "root": {
+                "type": "train_detected",
+                "hub_id": "yard",
+                "detector_id": "D1",
+                "train_id": "express",
+                "children": list(children),
+            },
+        }],
+    }
+
+
+def _speed(speed: int) -> dict[str, object]:
+    return {"type": "set_train_speed", "speed": speed, "children": []}
+
+
+def _wait(seconds: float, *children: dict[str, object]) -> dict[str, object]:
+    return {"type": "wait", "seconds": seconds, "children": list(children)}
+
+
+def _switch(position: str) -> dict[str, object]:
+    return {
+        "type": "set_switch",
+        "hub_id": "yard",
+        "switch_id": "S1",
+        "position": position,
+        "children": [],
+    }
 
 
 @pytest.fixture
 def bus() -> EventBus:
     return EventBus(SystemState.from_topology(
-        train_hubs={"t1": "t1"},
+        train_hubs={"express": "express_hub", "untagged": "untagged_hub"},
         arduino_hubs={
-            "hub": {"switches": {"S1": {}}, "detectors": ()}
+            "yard": {"switches": {"S1": {}}, "detectors": ("D1",)}
         },
     ))
 
 
-@pytest.fixture
-def ctx(bus: EventBus) -> AutomationContext:
-    return AutomationContext(bus)
+def _write(path: Path, document: dict[str, object]) -> None:
+    path.write_text(json.dumps(document))
 
 
-def test_public_automation_api_only_exports_context() -> None:
-    assert automation_api.AutomationContext is AutomationContext
-    assert automation_api.__all__ == ["AutomationContext"]
-    assert not hasattr(automation_api, "TagDetected")
+async def _acknowledge_commands(
+    bus: EventBus,
+) -> tuple[list[SetTrainSpeed], list[SetSwitchPosition]]:
+    speeds: list[SetTrainSpeed] = []
+    switches: list[SetSwitchPosition] = []
 
+    async def set_speed(command: SetTrainSpeed) -> None:
+        speeds.append(command)
+        await bus.publish(TrainSpeedChanged(
+            train_name=command.train_name,
+            speed=command.speed,
+            success=True,
+            request_id=command.request_id,
+        ))
 
-def _auto_ack_switches(bus: EventBus) -> None:
-    async def _ack(event: SetSwitchPosition) -> None:
-        angle = event.target if isinstance(event.target, int) else 0
+    async def set_switch(command: SetSwitchPosition) -> None:
+        switches.append(command)
         await bus.publish(SwitchPositionChanged(
-            hub_name=event.hub_name, switch_name=event.switch_name,
-            angle=angle, ok=True, request_id=event.request_id,
+            hub_name=command.hub_name,
+            switch_name=command.switch_name,
+            angle=90,
+            ok=True,
+            request_id=command.request_id,
         ))
 
-    bus.subscribe(SetSwitchPosition, _ack)
+    bus.subscribe(SetTrainSpeed, set_speed)
+    bus.subscribe(SetSwitchPosition, set_switch)
+    return speeds, switches
 
 
-def _collect(bus: EventBus, event_type):
-    collected = []
+async def test_module_runs_matching_tree_with_acknowledged_commands(
+    bus: EventBus, tmp_path: Path
+) -> None:
+    path = tmp_path / "automations.json"
+    _write(path, _document(_switch("diverge"), _speed(45)))
+    speeds, switches = await _acknowledge_commands(bus)
+    module = AutomationModule(bus, path=path, tagged_trains={"express"})
+    await module.start()
 
-    async def handler(e):
-        collected.append(e)
-
-    bus.subscribe(event_type, handler)
-    return collected
-
-
-# --- AutomationContext unit tests ---
-
-
-async def test_set_speed_publishes(bus: EventBus, ctx: AutomationContext) -> None:
-    async def acknowledge(event: SetTrainSpeed) -> None:
-        await bus.publish(TrainSpeedChanged(
-            train_name=event.train_name,
-            speed=event.speed,
-            success=True,
-            request_id=event.request_id,
+    try:
+        await bus.publish(TagDetected(
+            hub_name="yard", detector_name="D1", train_id="express"
         ))
+        await module._runner.wait_idle()
 
-    bus.subscribe(SetTrainSpeed, acknowledge)
-    events = _collect(bus, SetTrainSpeed)
-    result = await ctx.set_speed("t1", 50)
-    assert len(events) == 1
-    assert events[0].train_name == "t1"
-    assert events[0].speed == 50
-    assert result.success
+        assert [(item.hub_name, item.switch_name, item.target) for item in switches] == [
+            ("yard", "S1", "diverge")
+        ]
+        assert [(item.train_name, item.speed) for item in speeds] == [
+            ("express", 45)
+        ]
+        assert module.snapshot()["statuses"][0]["state"] is RuleState.IDLE
+    finally:
+        await module.stop()
 
 
-@pytest.mark.parametrize("speed", [-101, 101, True, 1.5])
-async def test_set_speed_rejects_invalid_speed(
-    ctx: AutomationContext,
-    speed: object,
+async def test_replacement_cancels_old_tree_and_persists_new_document(
+    bus: EventBus, tmp_path: Path
 ) -> None:
-    with pytest.raises(ValueError, match="train speed"):
-        await ctx.set_speed("t1", speed)  # type: ignore[arg-type]
+    path = tmp_path / "automations.json"
+    _write(path, _document(_wait(10, _speed(10))))
+    speeds, _ = await _acknowledge_commands(bus)
+    module = AutomationModule(bus, path=path, tagged_trains={"express"})
+    await module.start()
 
-
-async def test_set_speed_raises_when_change_fails(
-    bus: EventBus,
-    ctx: AutomationContext,
-) -> None:
-    async def reject(event: SetTrainSpeed) -> None:
-        await bus.publish(TrainSpeedChanged(
-            train_name=event.train_name,
-            speed=event.speed,
-            success=False,
-            request_id=event.request_id,
+    try:
+        await bus.publish(TagDetected(
+            hub_name="yard", detector_name="D1", train_id="express"
         ))
-
-    bus.subscribe(SetTrainSpeed, reject)
-    with pytest.raises(RuntimeError, match="train speed change failed"):
-        await ctx.set_speed("t1", 50)
-
-
-async def test_set_speed_serializes_commands_across_contexts(
-    bus: EventBus,
-    ctx: AutomationContext,
-) -> None:
-    commands: list[int] = []
-    other_context = AutomationContext(bus)
-
-    async def acknowledge(event: SetTrainSpeed) -> None:
-        commands.append(event.speed)
-        await asyncio.sleep(0.01)
-        await bus.publish(TrainSpeedChanged(
-            train_name=event.train_name,
-            speed=event.speed,
-            success=True,
-            request_id=event.request_id,
-        ))
-
-    bus.subscribe(SetTrainSpeed, acknowledge)
-    first, second = await asyncio.gather(
-        ctx.set_speed("t1", 10),
-        other_context.set_speed("t1", 20),
-    )
-
-    assert commands == [10, 20]
-    assert (first.speed, second.speed) == (10, 20)
-
-
-async def test_set_speed_ignores_another_producers_result(
-    bus: EventBus,
-    ctx: AutomationContext,
-) -> None:
-    async def acknowledge(event: SetTrainSpeed) -> None:
-        await bus.publish(TrainSpeedChanged(
-            train_name=event.train_name,
-            speed=99,
-            success=True,
-            request_id="another-request",
-        ))
-        await bus.publish(TrainSpeedChanged(
-            train_name=event.train_name,
-            speed=event.speed,
-            success=True,
-            request_id=event.request_id,
-        ))
-
-    bus.subscribe(SetTrainSpeed, acknowledge)
-
-    result = await ctx.set_speed("t1", 20)
-
-    assert result.speed == 20
-
-
-async def test_set_speed_timeout_covers_dispatch(
-    bus: EventBus,
-    ctx: AutomationContext,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    cancelled = asyncio.Event()
-
-    async def hang(event: SetTrainSpeed) -> None:
-        try:
-            await asyncio.sleep(10)
-        finally:
-            cancelled.set()
-
-    bus.subscribe(SetTrainSpeed, hang)
-    monkeypatch.setattr(automation_module, "COMMAND_TIMEOUT", 0.01)
-
-    with pytest.raises(asyncio.TimeoutError):
-        await ctx.set_speed("t1", 20)
-    assert cancelled.is_set()
-
-
-async def test_set_switch_with_angle(bus: EventBus, ctx: AutomationContext) -> None:
-    _auto_ack_switches(bus)
-    events = _collect(bus, SetSwitchPosition)
-    result = await ctx.set_switch("hub", "S1", 58)
-    assert len(events) == 1
-    assert events[0].target == 58
-    assert result.ok
-
-
-async def test_set_switch_with_name(bus: EventBus, ctx: AutomationContext) -> None:
-    _auto_ack_switches(bus)
-    events = _collect(bus, SetSwitchPosition)
-    await ctx.set_switch("hub", "S1", "straight")
-    assert events[0].target == "straight"
-    await ctx.set_switch("hub", "S1", "diverge")
-    assert events[1].target == "diverge"
-
-
-@pytest.mark.parametrize("target", [-1, 181, True, "left"])
-async def test_set_switch_rejects_invalid_target(
-    ctx: AutomationContext, target: object
-) -> None:
-    with pytest.raises(ValueError, match="switch position"):
-        await ctx.set_switch("hub", "S1", target)  # type: ignore[arg-type]
-
-
-async def test_set_switch_raises_when_move_fails(
-    bus: EventBus, ctx: AutomationContext
-) -> None:
-    async def reject(event: SetSwitchPosition) -> None:
-        await bus.publish(SwitchPositionChanged(
-            hub_name=event.hub_name,
-            switch_name=event.switch_name,
-            angle=0,
-            ok=False,
-            request_id=event.request_id,
-        ))
-
-    bus.subscribe(SetSwitchPosition, reject)
-    with pytest.raises(RuntimeError, match="switch move failed"):
-        await ctx.set_switch("hub", "S1", "straight")
-
-
-async def test_set_switch_timeout_covers_dispatch(
-    bus: EventBus,
-    ctx: AutomationContext,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    cancelled = asyncio.Event()
-
-    async def hang(event: SetSwitchPosition) -> None:
-        try:
-            await asyncio.sleep(10)
-        finally:
-            cancelled.set()
-
-    bus.subscribe(SetSwitchPosition, hang)
-    monkeypatch.setattr(automation_module, "COMMAND_TIMEOUT", 0.01)
-
-    with pytest.raises(asyncio.TimeoutError):
-        await ctx.set_switch("hub", "S1", "straight")
-
-    assert cancelled.is_set()
-
-
-async def test_wait_for_resolves(bus: EventBus, ctx: AutomationContext) -> None:
-    async def publish_later():
-        await asyncio.sleep(0.05)
-        await bus.publish(TrainConnected(train_name="t1", ble_address="AA:BB"))
-
-    asyncio.create_task(publish_later())
-    event = await ctx.wait_for(TrainConnected)
-    assert event.train_name == "t1"
-
-
-async def test_wait_for_with_filter(bus: EventBus, ctx: AutomationContext) -> None:
-    async def publish_later():
-        await asyncio.sleep(0.05)
-        await bus.publish(TrainConnected(train_name="t1"))
-        await asyncio.sleep(0.05)
-        await bus.publish(TrainConnected(train_name="t2"))
-
-    asyncio.create_task(publish_later())
-    event = await ctx.wait_for(TrainConnected, filter=lambda e: e.train_name == "t2")
-    assert event.train_name == "t2"
-
-
-async def test_wait_for_timeout(bus: EventBus, ctx: AutomationContext) -> None:
-    with pytest.raises(asyncio.TimeoutError):
-        await ctx.wait_for(TrainConnected, timeout=0.05)
-
-
-async def test_context_state_is_an_isolated_shared_snapshot(
-    bus: EventBus, ctx: AutomationContext
-) -> None:
-    await bus.publish(TrainSpeedChanged(
-        train_name="express", speed=30, success=True
-    ))
-
-    snapshot = ctx.state
-    snapshot.trains["express"].speed = 90
-
-    assert bus.state.trains["express"].speed == 30
-
-
-async def test_wait_for_propagates_filter_failure(
-    bus: EventBus,
-    ctx: AutomationContext,
-) -> None:
-    def broken_filter(event: TrainConnected) -> bool:
-        raise ValueError("broken filter")
-
-    async def publish_later() -> None:
         await asyncio.sleep(0)
-        await bus.publish(TrainConnected(train_name="t1"))
+        assert module.snapshot()["statuses"][0]["state"] is RuleState.WAITING
 
-    asyncio.create_task(publish_later())
-    with pytest.raises(ValueError, match="broken filter"):
-        await ctx.wait_for(TrainConnected, filter=broken_filter)
+        replacement = _document(_speed(30))
+        snapshot = await module.replace_json(json.dumps(replacement))
+        assert snapshot["document"] == replacement
+        assert json.loads(path.read_text()) == replacement
 
-
-async def test_on_fires_callback(bus: EventBus, ctx: AutomationContext) -> None:
-    received = []
-
-    async def callback(event):
-        received.append(event)
-
-    ctx.on(TagDetected, callback)
-    await bus.publish(TagDetected(hub_name="h", detector_name="D1", train_id="t1"))
-    await asyncio.sleep(0.05)
-    assert len(received) == 1
-    assert received[0].detector_name == "D1"
+        await bus.publish(TagDetected(
+            hub_name="yard", detector_name="D1", train_id="express"
+        ))
+        await module._runner.wait_idle()
+        assert [command.speed for command in speeds] == [30]
+    finally:
+        await module.stop()
 
 
-async def test_on_with_filter(bus: EventBus, ctx: AutomationContext) -> None:
-    received = []
-
-    async def callback(event):
-        received.append(event)
-
-    ctx.on(TagDetected, callback, filter=lambda e: e.train_id == "t1")
-    await bus.publish(TagDetected(hub_name="h", detector_name="D1", train_id="t2"))
-    await asyncio.sleep(0.05)
-    assert len(received) == 0
-
-    await bus.publish(TagDetected(hub_name="h", detector_name="D1", train_id="t1"))
-    await asyncio.sleep(0.05)
-    assert len(received) == 1
-
-
-async def test_on_throttle(bus: EventBus, ctx: AutomationContext) -> None:
-    received = []
-
-    async def callback(event):
-        received.append(event)
-
-    ctx.on(TagDetected, callback, throttle=0.3)
-
-    # first event fires immediately
-    await bus.publish(TagDetected(hub_name="h", detector_name="D1", train_id="t1"))
-    await asyncio.sleep(0.05)
-    assert len(received) == 1
-
-    # repeats within throttle window are suppressed
-    await bus.publish(TagDetected(hub_name="h", detector_name="D1", train_id="t1"))
-    await asyncio.sleep(0.05)
-    await bus.publish(TagDetected(hub_name="h", detector_name="D1", train_id="t1"))
-    await asyncio.sleep(0.05)
-    assert len(received) == 1
-
-    # events keep coming — keeps resetting the cooldown
-    await asyncio.sleep(0.2)
-    await bus.publish(TagDetected(hub_name="h", detector_name="D1", train_id="t1"))
-    await asyncio.sleep(0.2)
-    await bus.publish(TagDetected(hub_name="h", detector_name="D1", train_id="t1"))
-    await asyncio.sleep(0.05)
-    assert len(received) == 1
-
-    # quiet for >0.3s — rearms, next event fires
-    await asyncio.sleep(0.4)
-    await bus.publish(TagDetected(hub_name="h", detector_name="D1", train_id="t1"))
-    await asyncio.sleep(0.05)
-    assert len(received) == 2
-    await ctx.cleanup()
-
-
-async def test_on_callback_runs_as_task(bus: EventBus, ctx: AutomationContext) -> None:
-    started = asyncio.Event()
-
-    async def slow_callback(event):
-        started.set()
-        await asyncio.sleep(10)
-
-    ctx.on(TrainConnected, slow_callback)
-    await bus.publish(TrainConnected(train_name="t1"))
-    await asyncio.wait_for(started.wait(), timeout=0.5)
-    await ctx.cleanup()
-
-
-def test_on_rejects_synchronous_callback(ctx: AutomationContext) -> None:
-    def callback(event):
-        pass
-
-    with pytest.raises(TypeError, match="async def"):
-        ctx.on(TrainConnected, callback)  # type: ignore[arg-type]
-
-
-@pytest.mark.parametrize(
-    "throttle",
-    [0, -0.1, True, "1", float("nan"), float("inf"), 10**1000],
-)
-def test_on_rejects_invalid_throttle(
-    ctx: AutomationContext,
-    throttle: object,
+async def test_reapplying_same_document_cancels_its_active_execution(
+    bus: EventBus, tmp_path: Path
 ) -> None:
-    async def callback(event):
-        pass
+    document = _document(_wait(10, _speed(10)))
+    path = tmp_path / "automations.json"
+    _write(path, document)
+    speeds, _ = await _acknowledge_commands(bus)
+    module = AutomationModule(bus, path=path, tagged_trains={"express"})
+    await module.start()
 
-    with pytest.raises(ValueError, match="greater than zero"):
-        ctx.on(TrainConnected, callback, throttle=throttle)  # type: ignore[arg-type]
+    try:
+        await bus.publish(TagDetected(
+            hub_name="yard", detector_name="D1", train_id="express"
+        ))
+        await asyncio.sleep(0)
+        assert module.snapshot()["statuses"][0]["state"] is RuleState.WAITING
+
+        await module.replace_json(json.dumps(document))
+        assert module.snapshot()["statuses"][0]["state"] is RuleState.IDLE
+        assert speeds == []
+    finally:
+        await module.stop()
 
 
-async def test_completed_callback_tasks_are_released(
-    bus: EventBus,
-    ctx: AutomationContext,
+async def test_replacement_keeps_old_document_visible_until_cancellation_finishes(
+    bus: EventBus, tmp_path: Path
 ) -> None:
-    completed = asyncio.Event()
+    path = tmp_path / "automations.json"
+    original = _document(_wait(10, _speed(10)))
+    replacement = _document(_speed(30))
+    _write(path, original)
+    module = AutomationModule(bus, path=path, tagged_trains={"express"})
+    cancellation_started = asyncio.Event()
+    finish_cancellation = asyncio.Event()
 
-    async def callback(event):
-        completed.set()
+    async def blocking_sleep(seconds: float) -> None:
+        try:
+            await asyncio.sleep(seconds)
+        finally:
+            cancellation_started.set()
+            await finish_cancellation.wait()
 
-    ctx.on(TrainConnected, callback)
-    await bus.publish(TrainConnected(train_name="t1"))
-    await completed.wait()
+    module._runner._sleep = blocking_sleep
+    await module.start()
+
+    try:
+        await bus.publish(TagDetected(
+            hub_name="yard", detector_name="D1", train_id="express"
+        ))
+        await asyncio.sleep(0)
+        update = asyncio.create_task(module.replace_json(json.dumps(replacement)))
+        await cancellation_started.wait()
+
+        assert module.snapshot()["document"] == original
+        assert not update.done()
+
+        finish_cancellation.set()
+        snapshot = await update
+        assert snapshot["document"] == replacement
+    finally:
+        finish_cancellation.set()
+        await module.stop()
+
+
+async def test_concurrent_replacements_return_their_own_committed_document(
+    bus: EventBus, tmp_path: Path
+) -> None:
+    path = tmp_path / "automations.json"
+    _write(path, _document(_speed(10)))
+    module = AutomationModule(bus, path=path, tagged_trains={"express"})
+    await module.start()
+    first = _document(_speed(20))
+    second = _document(_speed(30))
+
+    try:
+        first_result, second_result = await asyncio.gather(
+            module.replace_json(json.dumps(first)),
+            module.replace_json(json.dumps(second)),
+        )
+        assert first_result["document"] == first
+        assert second_result["document"] == second
+        assert json.loads(path.read_text()) == second
+    finally:
+        await module.stop()
+
+
+async def test_stop_waits_for_an_accepted_replacement(
+    bus: EventBus, tmp_path: Path
+) -> None:
+    path = tmp_path / "automations.json"
+    original = _document(_wait(10, _speed(10)))
+    replacement = _document(_speed(30))
+    _write(path, original)
+    module = AutomationModule(bus, path=path, tagged_trains={"express"})
+    cancellation_started = asyncio.Event()
+    finish_cancellation = asyncio.Event()
+
+    async def blocking_sleep(seconds: float) -> None:
+        try:
+            await asyncio.sleep(seconds)
+        finally:
+            cancellation_started.set()
+            await finish_cancellation.wait()
+
+    module._runner._sleep = blocking_sleep
+    await module.start()
+    await bus.publish(TagDetected(
+        hub_name="yard", detector_name="D1", train_id="express"
+    ))
+    await asyncio.sleep(0)
+    update = asyncio.create_task(module.replace_json(json.dumps(replacement)))
+    await cancellation_started.wait()
+    stop = asyncio.create_task(module.stop())
     await asyncio.sleep(0)
 
-    assert ctx._tasks == set()
+    assert not stop.done()
+
+    finish_cancellation.set()
+    await update
+    await stop
+    assert json.loads(path.read_text()) == replacement
 
 
-async def test_ramp_speed(bus: EventBus, ctx: AutomationContext) -> None:
-    async def acknowledge(event: SetTrainSpeed) -> None:
-        await bus.publish(TrainSpeedChanged(
-            train_name=event.train_name,
-            speed=event.speed,
-            success=True,
-            request_id=event.request_id,
+async def test_status_changes_notify_subscribers(
+    bus: EventBus, tmp_path: Path
+) -> None:
+    path = tmp_path / "automations.json"
+    _write(path, _document(_wait(0, _speed(20))))
+    await _acknowledge_commands(bus)
+    module = AutomationModule(bus, path=path, tagged_trains={"express"})
+    states: list[RuleState] = []
+
+    def changed() -> None:
+        statuses = module.snapshot()["statuses"]
+        if statuses:
+            states.append(statuses[0]["state"])
+
+    module.subscribe_changes(changed)
+    await module.start()
+    try:
+        await bus.publish(TagDetected(
+            hub_name="yard", detector_name="D1", train_id="express"
         ))
-
-    bus.subscribe(SetTrainSpeed, acknowledge)
-    events = _collect(bus, SetTrainSpeed)
-    await ctx.ramp_speed("t1", 0, 100, duration=0.1, steps=5)
-    speeds = [e.speed for e in events]
-    assert speeds[0] == 0
-    assert speeds[-1] == 100
-    assert speeds == sorted(speeds)
-    assert len(speeds) == 6
+        await module._runner.wait_idle()
+        assert RuleState.RUNNING in states
+        assert RuleState.WAITING in states
+        assert states[-1] is RuleState.IDLE
+    finally:
+        await module.stop()
 
 
-async def test_ramp_speed_final_exact(bus: EventBus, ctx: AutomationContext) -> None:
-    async def acknowledge(event: SetTrainSpeed) -> None:
-        await bus.publish(TrainSpeedChanged(
-            train_name=event.train_name,
-            speed=event.speed,
-            success=True,
-            request_id=event.request_id,
+async def test_halt_cancels_work_and_resume_accepts_new_detection(
+    bus: EventBus, tmp_path: Path
+) -> None:
+    path = tmp_path / "automations.json"
+    _write(path, _document(_speed(20)))
+    speeds, _ = await _acknowledge_commands(bus)
+    module = AutomationModule(bus, path=path, tagged_trains={"express"})
+    await module.start()
+
+    try:
+        await bus.publish(AutomationHalt())
+        await bus.publish(TagDetected(
+            hub_name="yard", detector_name="D1", train_id="express"
         ))
+        assert speeds == []
+        assert module.snapshot()["paused"] is True
 
-    bus.subscribe(SetTrainSpeed, acknowledge)
-    events = _collect(bus, SetTrainSpeed)
-    await ctx.ramp_speed("t1", 0, 77, duration=0.05, steps=3)
-    assert events[-1].speed == 77
+        await bus.publish(AutomationResume())
+        await bus.publish(TagDetected(
+            hub_name="yard", detector_name="D1", train_id="express"
+        ))
+        await module._runner.wait_idle()
+        assert [command.speed for command in speeds] == [20]
+    finally:
+        await module.stop()
 
 
 @pytest.mark.parametrize(
-    ("from_speed", "to_speed", "duration", "steps", "message"),
+    ("field", "value", "message"),
     [
-        (-101, 0, 1.0, 10, "train speed"),
-        (0, 101, 1.0, 10, "train speed"),
-        (0, 10, -1.0, 10, "duration"),
-        (0, 10, float("nan"), 10, "duration"),
-        (0, 10, float("inf"), 10, "duration"),
-        (0, 10, 10**1000, 10, "duration"),
-        (0, 10, 1.0, 0, "steps"),
+        ("train_id", "missing", "unknown train"),
+        ("train_id", "untagged", "has no tag_id"),
+        ("hub_id", "missing", "unknown Arduino hub"),
+        ("detector_id", "missing", "unknown detector"),
     ],
 )
-async def test_ramp_speed_rejects_invalid_arguments(
-    ctx: AutomationContext,
-    from_speed: int,
-    to_speed: int,
-    duration: float,
-    steps: int,
+async def test_start_rejects_unknown_topology_references(
+    bus: EventBus,
+    tmp_path: Path,
+    field: str,
+    value: str,
     message: str,
 ) -> None:
-    with pytest.raises(ValueError, match=message):
-        await ctx.ramp_speed("t1", from_speed, to_speed, duration, steps)
+    document = _document(_speed(20))
+    document["rules"][0]["root"][field] = value
+    path = tmp_path / "automations.json"
+    _write(path, document)
+    module = AutomationModule(bus, path=path, tagged_trains={"express"})
+
+    with pytest.raises(AutomationParseError, match=message):
+        await module.start()
 
 
-async def test_cleanup_cancels_tasks(bus: EventBus, ctx: AutomationContext) -> None:
-    async def long_running():
-        await asyncio.sleep(100)
-
-    task = ctx.spawn(long_running())
-    assert not task.done()
-    await ctx.cleanup()
-    assert task.done()
-
-
-async def test_cleanup_unsubscribes(bus: EventBus, ctx: AutomationContext) -> None:
-    received = []
-
-    async def callback(event):
-        received.append(event)
-
-    ctx.on(TrainConnected, callback)
-    await ctx.cleanup()
-    await bus.publish(TrainConnected(train_name="t1"))
-    await asyncio.sleep(0.05)
-    assert len(received) == 0
-
-
-async def test_cleanup_cancels_tasks_spawned_during_teardown(
-    bus: EventBus,
-    ctx: AutomationContext,
+async def test_update_rejects_unknown_switch_without_changing_active_document(
+    bus: EventBus, tmp_path: Path
 ) -> None:
-    started = asyncio.Event()
-    spawned: list[asyncio.Task[None]] = []
+    original = _document(_speed(20))
+    path = tmp_path / "automations.json"
+    _write(path, original)
+    module = AutomationModule(bus, path=path, tagged_trains={"express"})
+    await module.start()
 
-    async def callback(event: TrainConnected) -> None:
-        try:
-            started.set()
-            await asyncio.sleep(10)
-        finally:
-            spawned.append(ctx.spawn(asyncio.sleep(10)))
-
-    ctx.on(TrainConnected, callback)
-    await bus.publish(TrainConnected(train_name="t1"))
-    await started.wait()
-
-    await ctx.cleanup()
-
-    assert len(spawned) == 1
-    assert spawned[0].cancelled()
-    assert ctx._tasks == set()
-
-
-# --- AutomationModule tests ---
+    replacement = _document({
+        "type": "set_switch",
+        "hub_id": "yard",
+        "switch_id": "missing",
+        "position": "straight",
+        "children": [],
+    })
+    try:
+        with pytest.raises(AutomationParseError, match="unknown switch"):
+            await module.replace_json(json.dumps(replacement))
+        assert module.snapshot()["document"] == original
+        assert json.loads(path.read_text()) == original
+    finally:
+        await module.stop()
 
 
-async def test_module_runs_script(bus: EventBus) -> None:
-    flag = []
-
-    async def script(ctx):
-        flag.append(True)
-
-    mod = AutomationModule(bus, script=script)
-    await mod.start()
-    await asyncio.sleep(0.05)
-    assert flag
-    await mod.stop()
-
-
-async def test_module_configures_before_script_starts(bus: EventBus) -> None:
-    order = []
-
-    def configure(ctx):
-        order.append("configure")
-
-    async def script(ctx):
-        order.append("run")
-
-    mod = AutomationModule(bus, configure=configure, script=script)
-    await mod.start()
-    assert order == ["configure"]
-    await asyncio.sleep(0)
-    assert order == ["configure", "run"]
-    await mod.stop()
-
-
-async def test_module_stop_cleans_up(bus: EventBus) -> None:
-    received = []
-
-    async def script(ctx):
-        async def cb(event):
-            received.append(event)
-
-        ctx.on(TrainConnected, cb)
-        await asyncio.sleep(100)
-
-    mod = AutomationModule(bus, script=script)
-    await mod.start()
-    await asyncio.sleep(0.05)
-    await mod.stop()
-    await bus.publish(TrainConnected(train_name="t1"))
-    await asyncio.sleep(0.05)
-    assert len(received) == 0
-
-
-async def test_module_stop_cleans_up_subscriptions_registered_during_cancellation(
-    bus: EventBus,
+async def test_missing_automation_file_has_guided_error(
+    bus: EventBus, tmp_path: Path
 ) -> None:
-    callback_calls: list[TrainConnected] = []
-    context: AutomationContext | None = None
-
-    async def callback(event: TrainConnected) -> None:
-        callback_calls.append(event)
-
-    async def script(ctx: AutomationContext) -> None:
-        nonlocal context
-        context = ctx
-        try:
-            await ctx.forever()
-        finally:
-            ctx.on(TrainConnected, callback)
-
-    mod = AutomationModule(bus, script=script)
-    await mod.start()
-    await asyncio.sleep(0)
-
-    await mod.stop()
-    await bus.publish(TrainConnected(train_name="t1"))
-
-    assert context is not None
-    assert context._subscriptions == []
-    assert callback_calls == []
-
-
-async def test_script_error_logged(bus: EventBus) -> None:
-    failed = []
-
-    async def bad_script(ctx):
-        raise ValueError("boom")
-
-    mod = AutomationModule(bus, script=bad_script, failure_callback=lambda: failed.append(True))
-    await mod.start()
-    await asyncio.sleep(0.05)
-    assert mod._task.done()
-    assert not mod.healthy
-    assert failed == [True]
-    await mod.stop()
-
-
-async def test_script_return_triggers_failure_callback(bus: EventBus) -> None:
-    failed = []
-
-    async def completed_script(ctx):
-        return
-
-    mod = AutomationModule(
-        bus, script=completed_script, failure_callback=lambda: failed.append(True)
+    module = AutomationModule(
+        bus,
+        path=tmp_path / "automations.json",
+        tagged_trains={"express"},
     )
-    await mod.start()
-    await asyncio.sleep(0)
 
-    assert not mod.healthy
-    assert failed == [True]
-    await mod.stop()
+    with pytest.raises(AutomationParseError, match="tools/data init"):
+        await module.start()

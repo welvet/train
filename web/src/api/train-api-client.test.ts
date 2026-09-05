@@ -159,8 +159,13 @@ class FakeEventSource {
 
 function stateEnvelope() {
   return {
-    version: 2 as const,
+    version: 3 as const,
     snapshot_at: 2,
+    automation: {
+      document: { version: 1, rules: [] },
+      paused: false,
+      statuses: [],
+    },
     state: {
       revision: 1,
       updated_at: 1,

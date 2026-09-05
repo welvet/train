@@ -9,9 +9,6 @@ from types import ModuleType
 TOOLS = Path(__file__).resolve().parents[2] / "tools"
 sys.path.insert(0, str(TOOLS))
 
-from _workspace import validate_automation  # noqa: E402
-
-
 def _load_tool(name: str) -> ModuleType:
     path = TOOLS / name
     loader = importlib.machinery.SourceFileLoader(f"test_tool_{name}", str(path))
@@ -29,11 +26,13 @@ def test_data_initializer_creates_isolated_workspace_scaffold(
 
     data_tool.init_workspace(tmp_path)
 
-    validate_automation(tmp_path)
     assert (tmp_path / "secrets.json").stat().st_mode & 0o777 == 0o600
     assert (tmp_path / "trains.json").read_text().strip() == '{\n  "trains": []\n}'
     deployment = (tmp_path / "deployment.json").read_text()
     assert '"remote_dir": "/train/deploy"' in deployment
+    assert (tmp_path / "automations.json").read_text() == (
+        '{\n  "version": 1,\n  "rules": []\n}\n'
+    )
 
 
 def test_generated_firmware_config_supports_multiple_devices() -> None:

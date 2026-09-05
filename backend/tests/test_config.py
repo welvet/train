@@ -7,7 +7,7 @@ import pytest
 
 from train.config import (
     ConfigError,
-    load_automation,
+    default_automation_path,
     load_runtime_config,
     validate_arduino_upload_config,
 )
@@ -76,6 +76,15 @@ def test_load_runtime_config_from_explicit_workspace(tmp_path: Path) -> None:
     }
 
 
+def test_automation_path_can_be_separate_from_immutable_runtime_data(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "persistent" / "automations.json"
+    monkeypatch.setenv("TRAIN_AUTOMATIONS_PATH", str(path))
+
+    assert default_automation_path() == path
+
+
 @pytest.mark.parametrize("field", ["id", "ble_address", "tag_id"])
 def test_duplicate_train_identity_is_rejected(tmp_path: Path, field: str) -> None:
     _write_config(tmp_path)
@@ -112,47 +121,6 @@ def test_duplicate_lego_hub_identity_is_rejected(tmp_path: Path) -> None:
 
     with pytest.raises(ConfigError, match="duplicate value"):
         load_runtime_config(tmp_path)
-
-
-def test_load_automation_entry_point(tmp_path: Path) -> None:
-    (tmp_path / "automation.py").write_text(
-        "def configure(ctx):\n    pass\n\nasync def run(ctx):\n    return ctx\n"
-    )
-
-    program = load_automation(tmp_path)
-
-    assert program.configure.__name__ == "configure"
-    assert program.run.__name__ == "run"
-
-
-def test_automation_requires_run_function(tmp_path: Path) -> None:
-    (tmp_path / "automation.py").write_text("def configure(ctx):\n    pass\n")
-
-    with pytest.raises(ConfigError, match="must export"):
-        load_automation(tmp_path)
-
-
-def test_automation_requires_synchronous_configuration(tmp_path: Path) -> None:
-    (tmp_path / "automation.py").write_text(
-        "async def configure(ctx):\n    pass\n\nasync def run(ctx):\n    pass\n"
-    )
-
-    with pytest.raises(ConfigError, match="synchronous"):
-        load_automation(tmp_path)
-
-
-@pytest.mark.parametrize(
-    "source",
-    [
-        "def configure():\n    pass\n\nasync def run(ctx):\n    pass\n",
-        "def configure(ctx):\n    pass\n\nasync def run():\n    pass\n",
-    ],
-)
-def test_automation_requires_context_argument(tmp_path: Path, source: str) -> None:
-    (tmp_path / "automation.py").write_text(source)
-
-    with pytest.raises(ConfigError, match="context argument"):
-        load_automation(tmp_path)
 
 
 def test_duplicate_hub_identity_is_rejected(tmp_path: Path) -> None:

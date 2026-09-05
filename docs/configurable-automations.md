@@ -1,7 +1,4 @@
-# Configurable automation design
-
-Status: proposed; this document does not change the current `automation.py`
-runtime.
+# Configurable automations
 
 ## Goal
 
@@ -16,7 +13,7 @@ The first version is deliberately small. It is for a LEGO railway, so it does
 not try to be a general workflow language or a railway interlocking system.
 There are no expressions, variables, loops, priorities, or arbitrary code.
 
-The proposed workspace file is `data/automations.json`. Like the other files
+The workspace file is `data/automations.json`. Like the other files
 under `data/`, it belongs to one installation and must remain outside Git.
 
 ## Complete document
@@ -199,10 +196,7 @@ fifth one after the fact.
 
 Counters belong to the node's path within a rule, not just to its displayed
 contents. They are runtime state and are not written back to JSON. They reset
-when the backend starts, when the rule is disabled and enabled again, or when
-that parsed rule definition changes. Formatting-only edits to the file do not
-reset counters. Moving or replacing a node does reset its counter, which is
-acceptable for this hobby installation.
+when the backend starts or a complete document is applied through the API.
 
 ## Execution model
 
@@ -261,10 +255,9 @@ failure.
 ## Validation and simple conflict handling
 
 The complete file is validated before it replaces the active configuration.
-An invalid edit leaves the previous valid configuration running. For a valid
-edit, unchanged rules and their counters stay alive. The engine first cancels
-and awaits executions for changed, removed, or newly disabled rules, resets
-their runtime state, and only then publishes the complete new configuration.
+An invalid edit leaves the previous valid configuration running. For every
+valid API update, the engine cancels and awaits all current executions, resets
+all runtime counters, and only then publishes the complete new configuration.
 Trigger admission is paused for this replacement; detections received during
 the short replacement window are not replayed. This prevents a run of the old
 tree from starting while its replacement is being installed, and prevents an
@@ -356,14 +349,14 @@ is `once`.
 
 ## Implementation boundary
 
-This proposal replaces the public programmable automation surface; it does not
-run alongside user-written `automation.py`. A later implementation should:
+This runtime replaces the old programmable automation surface; it does not run
+installation-written Python. The backend:
 
-1. load and validate `data/automations.json` against the installation topology;
-2. translate `TagDetected` events into root-node invocations;
-3. keep rule state, timers, and counters inside one internal automation engine;
-4. dispatch the existing acknowledged train and switch commands; and
-5. expose validated rule configuration and runtime status for a future UI.
+1. loads and validates `data/automations.json` against the installation topology;
+2. translates `TagDetected` events into root-node invocations;
+3. keeps rule state, timers, and counters inside one internal automation engine;
+4. dispatches the existing acknowledged train and switch commands; and
+5. exposes validated rule configuration and runtime status through the web API.
 
 Arbitrary event subscriptions, Python callbacks, speed ramps, and custom
 background tasks are intentionally outside version 1. New root or node

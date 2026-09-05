@@ -4,8 +4,13 @@ import { toSystemModel } from "./system-mapper";
 
 it("maps and sorts the backend state into the UI model", () => {
   const envelope: StateEnvelope = {
-    version: 2,
+    version: 3,
     snapshot_at: 13,
+    automation: {
+      document: { version: 1, rules: [] },
+      paused: false,
+      statuses: [],
+    },
     state: {
       revision: 7,
       updated_at: 12.5,

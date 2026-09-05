@@ -17,6 +17,7 @@ from automation_tree.model import (
 )
 
 Sleep = Callable[[float], Awaitable[None]]
+StatusChanged = Callable[[], None]
 
 
 @dataclass(slots=True)
@@ -52,11 +53,13 @@ class _ExecutionContext(FunctionContext):
 
     async def sleep(self, seconds: float) -> None:
         self._runtime.state = RuleState.WAITING
+        self._runner._notify_status_changed()
         try:
             await self._runner._sleep(seconds)
         finally:
             if self._runtime.task is asyncio.current_task():
                 self._runtime.state = RuleState.RUNNING
+                self._runner._notify_status_changed()
 
     def next_count(self, path: tuple[int, ...]) -> int:
         occurrence = self._runtime.counters.get(path, 0) + 1
@@ -73,10 +76,12 @@ class AutomationRunner:
         *,
         sleep: Sleep = asyncio.sleep,
         logger: logging.Logger | None = None,
+        status_changed: StatusChanged | None = None,
     ) -> None:
         self._functions = functions
         self._sleep = sleep
         self._log = logger or logging.getLogger("automation_tree")
+        self._status_changed = status_changed or (lambda: None)
         self._rules: dict[str, _RuntimeRule] = {}
         self._triggers: dict[Trigger, _RuntimeRule] = {}
         self._document = AutomationDocument(version=1, rules=())
@@ -105,8 +110,13 @@ class AutomationRunner:
             for rule in self._document.rules
         )
 
-    async def replace(self, document: AutomationDocument) -> None:
-        """Atomically replace configuration while preserving unchanged rules."""
+    async def replace(
+        self,
+        document: AutomationDocument,
+        *,
+        preserve_unchanged: bool = True,
+    ) -> None:
+        """Atomically replace configuration, optionally preserving unchanged rules."""
         self._ensure_open()
         self._replacement_generation += 1
         self._replacements_pending += 1
@@ -118,14 +128,19 @@ class AutomationRunner:
                 changing = [
                     runtime
                     for rule_id, runtime in self._rules.items()
-                    if definitions.get(rule_id) != runtime.definition
+                    if not preserve_unchanged
+                    or definitions.get(rule_id) != runtime.definition
                 ]
                 await self._cancel(changing)
 
                 rules: dict[str, _RuntimeRule] = {}
                 for definition in document.rules:
                     existing = self._rules.get(definition.id)
-                    if existing is not None and existing.definition == definition:
+                    if (
+                        preserve_unchanged
+                        and existing is not None
+                        and existing.definition == definition
+                    ):
                         rules[definition.id] = existing
                     else:
                         rules[definition.id] = _RuntimeRule(definition)
@@ -137,6 +152,7 @@ class AutomationRunner:
                     if runtime.definition.enabled
                 }
                 self._document = document
+                self._notify_status_changed()
         finally:
             self._replacements_pending -= 1
 
@@ -164,6 +180,7 @@ class AutomationRunner:
                 name=f"automation:{runtime.definition.id}",
             )
             runtime.task = task
+            self._notify_status_changed()
             return runtime.definition.id
 
     async def pause(self) -> None:
@@ -172,11 +189,13 @@ class AutomationRunner:
             self._ensure_open()
             self._paused = True
             await self._cancel(list(self._rules.values()))
+            self._notify_status_changed()
 
     async def resume(self) -> None:
         async with self._lock:
             self._ensure_open()
             self._paused = False
+            self._notify_status_changed()
 
     async def close(self) -> None:
         async with self._lock:
@@ -187,6 +206,7 @@ class AutomationRunner:
                 await self._cancel(list(self._rules.values()))
             finally:
                 self._triggers.clear()
+                self._notify_status_changed()
 
     async def wait_idle(self) -> None:
         """Wait for executions that are active at the time of each snapshot."""
@@ -233,6 +253,7 @@ class AutomationRunner:
                     if runtime.definition.enabled
                     else RuleState.DISABLED
                 )
+                self._notify_status_changed()
 
     async def _execute_children(
         self,
@@ -276,6 +297,12 @@ class AutomationRunner:
     def _ensure_open(self) -> None:
         if self._closed:
             raise RuntimeError("automation runner is closed")
+
+    def _notify_status_changed(self) -> None:
+        try:
+            self._status_changed()
+        except Exception:
+            self._log.exception("Automation status callback failed")
 
     def _validate_functions(self, document: AutomationDocument) -> None:
         missing = sorted({
