@@ -102,7 +102,9 @@ def validate_automation(root: Path, runtime=None) -> None:
                 arduino_hubs=resolved_runtime.arduino_hubs,
             ),
             tagged_trains={
-                train.train_id for train in resolved_runtime.trains if train.tag_id
+                train.train_id
+                for train in resolved_runtime.trains
+                if train.tag_ids
             },
         )
     except (AutomationParseError, ValueError) as exc:

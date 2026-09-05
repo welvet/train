@@ -20,8 +20,12 @@ def _write_config(root: Path) -> None:
     }))
     (root / "trains.json").write_text(json.dumps({
         "trains": [
-            {"id": "train_1", "ble_address": "AA:BB", "tag_id": "04:ab"},
-            {"id": "train_2", "ble_address": "CC:DD", "tag_id": ""},
+            {
+                "id": "train_1",
+                "ble_address": "AA:BB",
+                "tag_ids": ["04:ab", "04:cd"],
+            },
+            {"id": "train_2", "ble_address": "CC:DD", "tag_ids": []},
         ]
     }))
     (root / "arduinos.json").write_text(json.dumps({
@@ -67,7 +71,12 @@ def test_load_runtime_config_from_explicit_workspace(tmp_path: Path) -> None:
         "train_1",
         "train_2",
     ]
-    assert config.train_tag_map == {"04:AB": "train_1"}
+    assert config.trains[0].tag_ids == ("04:AB", "04:CD")
+    assert config.trains[1].tag_ids == ()
+    assert config.train_tag_map == {
+        "04:AB": "train_1",
+        "04:CD": "train_1",
+    }
     assert [device.hub_id for device in config.arduinos] == ["hub_1", "hub_2"]
     assert config.arduino_hubs["hub_1"] == {
         "device_id": "arduino_1",
@@ -85,7 +94,7 @@ def test_automation_path_can_be_separate_from_immutable_runtime_data(
     assert default_automation_path() == path
 
 
-@pytest.mark.parametrize("field", ["id", "ble_address", "tag_id"])
+@pytest.mark.parametrize("field", ["id", "ble_address"])
 def test_duplicate_train_identity_is_rejected(tmp_path: Path, field: str) -> None:
     _write_config(tmp_path)
     trains = json.loads((tmp_path / "trains.json").read_text())
@@ -93,6 +102,42 @@ def test_duplicate_train_identity_is_rejected(tmp_path: Path, field: str) -> Non
     (tmp_path / "trains.json").write_text(json.dumps(trains))
 
     with pytest.raises(ConfigError, match="duplicate value"):
+        load_runtime_config(tmp_path)
+
+
+def test_duplicate_tag_id_across_trains_is_rejected(tmp_path: Path) -> None:
+    _write_config(tmp_path)
+    trains = json.loads((tmp_path / "trains.json").read_text())
+    trains["trains"][1]["tag_ids"] = [" 04:CD "]
+    (tmp_path / "trains.json").write_text(json.dumps(trains))
+
+    with pytest.raises(ConfigError, match="duplicate value"):
+        load_runtime_config(tmp_path)
+
+
+def test_duplicate_tag_id_within_train_is_rejected(tmp_path: Path) -> None:
+    _write_config(tmp_path)
+    trains = json.loads((tmp_path / "trains.json").read_text())
+    trains["trains"][0]["tag_ids"] = ["04:AB", "04:ab"]
+    (tmp_path / "trains.json").write_text(json.dumps(trains))
+
+    with pytest.raises(ConfigError, match="duplicate value"):
+        load_runtime_config(tmp_path)
+
+
+def test_duplicate_legacy_tag_id_keeps_legacy_error_path(tmp_path: Path) -> None:
+    _write_config(tmp_path)
+    trains = json.loads((tmp_path / "trains.json").read_text())
+    for train in trains["trains"]:
+        train.pop("tag_ids")
+    trains["trains"][0]["tag_id"] = "04:AB"
+    trains["trains"][1]["tag_id"] = "04:ab"
+    (tmp_path / "trains.json").write_text(json.dumps(trains))
+
+    with pytest.raises(
+        ConfigError,
+        match=r"trains\[1\]\.tag_id: duplicate value",
+    ):
         load_runtime_config(tmp_path)
 
 
@@ -143,14 +188,72 @@ def test_duplicate_hardware_pin_is_rejected(tmp_path: Path) -> None:
         validate_arduino_upload_config(tmp_path)
 
 
-@pytest.mark.parametrize("tag_id", [None, True, 123])
-def test_train_tag_id_must_be_a_string(tmp_path: Path, tag_id: object) -> None:
+@pytest.mark.parametrize("tag_ids", [None, True, 123, "04:AB"])
+def test_train_tag_ids_must_be_a_list(tmp_path: Path, tag_ids: object) -> None:
     _write_config(tmp_path)
     trains = json.loads((tmp_path / "trains.json").read_text())
+    trains["trains"][0]["tag_ids"] = tag_ids
+    (tmp_path / "trains.json").write_text(json.dumps(trains))
+
+    with pytest.raises(ConfigError, match="tag_ids must be a list"):
+        load_runtime_config(tmp_path)
+
+
+@pytest.mark.parametrize("tag_id", [None, True, 123, "", "   "])
+def test_train_tag_ids_must_contain_non_empty_strings(
+    tmp_path: Path, tag_id: object
+) -> None:
+    _write_config(tmp_path)
+    trains = json.loads((tmp_path / "trains.json").read_text())
+    trains["trains"][0]["tag_ids"] = [tag_id]
+    (tmp_path / "trains.json").write_text(json.dumps(trains))
+
+    with pytest.raises(
+        ConfigError,
+        match=r"tag_ids\[0\] must be a non-empty string",
+    ):
+        load_runtime_config(tmp_path)
+
+
+def test_legacy_train_tag_id_remains_supported(tmp_path: Path) -> None:
+    _write_config(tmp_path)
+    trains = json.loads((tmp_path / "trains.json").read_text())
+    trains["trains"][0].pop("tag_ids")
+    trains["trains"][0]["tag_id"] = " 04:ef "
+    trains["trains"][1].pop("tag_ids")
+    trains["trains"][1]["tag_id"] = ""
+    (tmp_path / "trains.json").write_text(json.dumps(trains))
+
+    config = load_runtime_config(tmp_path)
+
+    assert config.trains[0].tag_ids == ("04:EF",)
+    assert config.trains[1].tag_ids == ()
+
+
+@pytest.mark.parametrize("tag_id", [None, True, 123])
+def test_legacy_train_tag_id_must_be_a_string(
+    tmp_path: Path, tag_id: object
+) -> None:
+    _write_config(tmp_path)
+    trains = json.loads((tmp_path / "trains.json").read_text())
+    trains["trains"][0].pop("tag_ids")
     trains["trains"][0]["tag_id"] = tag_id
     (tmp_path / "trains.json").write_text(json.dumps(trains))
 
     with pytest.raises(ConfigError, match="tag_id must be a string"):
+        load_runtime_config(tmp_path)
+
+
+def test_train_must_not_mix_legacy_and_plural_tag_fields(tmp_path: Path) -> None:
+    _write_config(tmp_path)
+    trains = json.loads((tmp_path / "trains.json").read_text())
+    trains["trains"][0]["tag_id"] = "04:EF"
+    (tmp_path / "trains.json").write_text(json.dumps(trains))
+
+    with pytest.raises(
+        ConfigError,
+        match="must not define both tag_id and tag_ids",
+    ):
         load_runtime_config(tmp_path)
 
 

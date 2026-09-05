@@ -94,7 +94,7 @@ describe("TrainApiClient", () => {
       vi.fn().mockResolvedValue(
         new Response(
           JSON.stringify({
-            error: "train has no tag_id: express",
+            error: "train has no configured tag: express",
             path: "$.rules[0].root.train_id",
           }),
           {
@@ -108,7 +108,7 @@ describe("TrainApiClient", () => {
     await expect(
       new TrainApiClient().replaceAutomation({ version: 1, rules: [] }),
     ).rejects.toMatchObject({
-      message: "$.rules[0].root.train_id: train has no tag_id: express",
+      message: "$.rules[0].root.train_id: train has no configured tag: express",
       status: 400,
     });
   });

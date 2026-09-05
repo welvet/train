@@ -26,7 +26,7 @@ def main() -> None:
     automation_module = app.add_module(
         AutomationModule,
         path=default_automation_path(),
-        tagged_trains={train.train_id for train in config.trains if train.tag_id},
+        tagged_trains={train.train_id for train in config.trains if train.tag_ids},
     )
     app.add_module(
         LegoBleModule,

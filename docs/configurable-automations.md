@@ -267,7 +267,8 @@ Validation checks that:
 
 - rule IDs are non-empty and unique;
 - every train, hub, detector, and switch exists in `trains.json` or
-  `arduinos.json`, and every train used by a root has an NFC `tag_id`;
+  `arduinos.json`, and every train used by a root has at least one configured
+  NFC tag UID;
 - only one rule per detector/train tuple is enabled;
 - node fields and values follow the constraints above;
 - every rule has exactly one `train_detected` root, and `train_detected` does

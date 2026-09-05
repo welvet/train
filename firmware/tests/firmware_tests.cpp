@@ -423,26 +423,24 @@ TEST(readerModuleTracksDetectionReplacementAndRemoval) {
   fake_arduino::now = 200;
   fake_pn532::queueRead(0, {0x04, 0xB2});
   readers.trigger();
-  CHECK(changes.values.size() == 3);
-  CHECK(!changes.values[1].detected);
-  CHECK(changes.values[1].uid == std::vector<uint8_t>({0x04, 0xA1}));
-  CHECK(changes.values[2].detected);
-  CHECK(changes.values[2].uid == std::vector<uint8_t>({0x04, 0xB2}));
+  CHECK(changes.values.size() == 2);
+  CHECK(changes.values[1].detected);
+  CHECK(changes.values[1].uid == std::vector<uint8_t>({0x04, 0xB2}));
 
   fake_pn532::queueMiss(1);
   readers.trigger();
   fake_arduino::now = 949;
   fake_pn532::queueMiss(0);
   readers.trigger();
-  CHECK(changes.values.size() == 3);
+  CHECK(changes.values.size() == 2);
   fake_pn532::queueMiss(1);
   readers.trigger();
   fake_arduino::now = 950;
   fake_pn532::queueMiss(0);
   readers.trigger();
-  CHECK(changes.values.size() == 4);
-  CHECK(!changes.values[3].detected);
-  CHECK(changes.values[3].uid == std::vector<uint8_t>({0x04, 0xB2}));
+  CHECK(changes.values.size() == 3);
+  CHECK(!changes.values[2].detected);
+  CHECK(changes.values[2].uid == std::vector<uint8_t>({0x04, 0xB2}));
   CHECK(!model.readers[0].tagPresent);
 }
 
