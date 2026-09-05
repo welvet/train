@@ -69,18 +69,25 @@ class WebApiController:
         train_name: str,
         speed: int,
     ) -> TrainSpeedChanged:
+        command = SetTrainSpeed(train_name=train_name, speed=speed)
         future: asyncio.Future[TrainSpeedChanged] = (
             asyncio.get_running_loop().create_future()
         )
 
         async def on_response(event: TrainSpeedChanged) -> None:
-            if event.train_name == train_name and not future.done():
+            if event.request_id == command.request_id and not future.done():
                 future.set_result(event)
+
+        async def dispatch() -> TrainSpeedChanged:
+            await self._bus.publish(command)
+            return await future
 
         self._bus.subscribe(TrainSpeedChanged, on_response)
         try:
-            await self._bus.publish(SetTrainSpeed(train_name=train_name, speed=speed))
-            return await asyncio.wait_for(future, timeout=self._response_timeout)
+            return await asyncio.wait_for(
+                dispatch(),
+                timeout=self._response_timeout,
+            )
         finally:
             self._bus.unsubscribe(TrainSpeedChanged, on_response)
 
@@ -90,26 +97,29 @@ class WebApiController:
         switch_name: str,
         target: str | int,
     ) -> SwitchPositionChanged:
+        command = SetSwitchPosition(
+            hub_name=hub_name,
+            switch_name=switch_name,
+            target=target,
+        )
         future: asyncio.Future[SwitchPositionChanged] = (
             asyncio.get_running_loop().create_future()
         )
 
         async def on_response(event: SwitchPositionChanged) -> None:
-            if (
-                event.hub_name == hub_name
-                and event.switch_name == switch_name
-                and not future.done()
-            ):
+            if event.request_id == command.request_id and not future.done():
                 future.set_result(event)
+
+        async def dispatch() -> SwitchPositionChanged:
+            await self._bus.publish(command)
+            return await future
 
         self._bus.subscribe(SwitchPositionChanged, on_response)
         try:
-            await self._bus.publish(SetSwitchPosition(
-                hub_name=hub_name,
-                switch_name=switch_name,
-                target=target,
-            ))
-            return await asyncio.wait_for(future, timeout=self._response_timeout)
+            return await asyncio.wait_for(
+                dispatch(),
+                timeout=self._response_timeout,
+            )
         finally:
             self._bus.unsubscribe(SwitchPositionChanged, on_response)
 

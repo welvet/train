@@ -43,6 +43,7 @@ async def test_set_speed_success(bus: EventBus, client: TestClient) -> None:
     async def fake_ble(event: SetTrainSpeed) -> None:
         await bus.publish(TrainSpeedChanged(
             train_name=event.train_name, speed=event.speed, success=True,
+            request_id=event.request_id,
         ))
 
     bus.subscribe(SetTrainSpeed, fake_ble)
@@ -85,6 +86,7 @@ async def test_set_speed_failure(bus: EventBus, client: TestClient) -> None:
     async def fake_ble(event: SetTrainSpeed) -> None:
         await bus.publish(TrainSpeedChanged(
             train_name=event.train_name, speed=event.speed, success=False,
+            request_id=event.request_id,
         ))
 
     bus.subscribe(SetTrainSpeed, fake_ble)
@@ -147,16 +149,6 @@ async def test_get_train_info(bus: EventBus, client: TestClient) -> None:
     assert body["speed"] == 75
     assert body["battery_pct"] == 46
     assert body["voltage"] == 6.4
-
-
-async def test_get_train_speed_resets_on_disconnect(bus: EventBus, client: TestClient) -> None:
-    await bus.publish(TrainConnected(train_name="arctic_express", ble_address="AA:BB"))
-    await bus.publish(TrainSpeedChanged(train_name="arctic_express", speed=50, success=True))
-
-    resp = await client.get("/trains/arctic_express")
-    body = await resp.json()
-    assert body["speed"] == 50
-    assert body["connected"] is True
 
 
 # --- Hub endpoints ---
@@ -247,7 +239,7 @@ async def test_set_switch_position_success(bus: EventBus, client: TestClient) ->
         angle = event.target if isinstance(event.target, int) else 58
         await bus.publish(SwitchPositionChanged(
             hub_name=event.hub_name, switch_name=event.switch_name,
-            angle=angle, ok=True,
+            angle=angle, ok=True, request_id=event.request_id,
         ))
 
     bus.subscribe(SetSwitchPosition, fake_hub)

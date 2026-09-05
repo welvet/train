@@ -42,12 +42,18 @@ def test_parse_hello_into_typed_message() -> None:
             TagChanged("D1", "04:AA", False),
         ),
         (
-            {"event": "move_ack", "switch": "S1", "angle": 100, "ok": True},
-            MoveAcknowledged("S1", 100, True),
+            {
+                "event": "move_ack",
+                "switch": "S1",
+                "angle": 100,
+                "ok": True,
+                "request_id": "request-1",
+            },
+            MoveAcknowledged("S1", 100, True, "request-1"),
         ),
         (
             {"event": "move_ack", "switch": "S1", "angle": 181, "ok": False},
-            MoveAcknowledged("S1", 181, False),
+            MoveAcknowledged("S1", 181, False, ""),
         ),
         ({"event": "pong"}, Pong()),
     ],
@@ -93,11 +99,12 @@ def test_invalid_messages_are_ignored(line: bytes) -> None:
 
 
 def test_encode_move_command() -> None:
-    encoded = encode_move_command("S1", 100)
+    encoded = encode_move_command("S1", 100, "request-1")
 
     assert encoded.endswith(b"\n")
     assert json.loads(encoded) == {
         "cmd": "move",
         "switch": "S1",
         "angle": 100,
+        "request_id": "request-1",
     }

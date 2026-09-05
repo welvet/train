@@ -28,8 +28,13 @@ class HubConnection:
     def bind(self, hub_name: str) -> None:
         self.hub_name = hub_name
 
-    async def move_switch(self, switch_name: str, angle: int) -> None:
-        self._writer.write(encode_move_command(switch_name, angle))
+    async def move_switch(
+        self,
+        switch_name: str,
+        angle: int,
+        request_id: str,
+    ) -> None:
+        self._writer.write(encode_move_command(switch_name, angle, request_id))
         await self._writer.drain()
 
     def close(self) -> None:

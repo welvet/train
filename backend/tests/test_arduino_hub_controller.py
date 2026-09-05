@@ -8,13 +8,18 @@ class FakeHubClient:
     def __init__(self) -> None:
         self.hub_name: str | None = None
         self.closed = False
-        self.moves: list[tuple[str, int]] = []
+        self.moves: list[tuple[str, int, str]] = []
 
     def bind(self, hub_name: str) -> None:
         self.hub_name = hub_name
 
-    async def move_switch(self, switch_name: str, angle: int) -> None:
-        self.moves.append((switch_name, angle))
+    async def move_switch(
+        self,
+        switch_name: str,
+        angle: int,
+        request_id: str,
+    ) -> None:
+        self.moves.append((switch_name, angle, request_id))
 
     def close(self) -> None:
         self.closed = True

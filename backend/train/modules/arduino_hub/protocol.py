@@ -31,6 +31,7 @@ class MoveAcknowledged:
     switch_name: str
     angle: int
     ok: bool
+    request_id: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,11 +81,13 @@ def parse_message(line: bytes) -> InboundMessage | None:
         switch_name = _required_string(payload, "switch")
         angle = payload.get("angle", 0)
         ok = payload.get("ok", False)
+        request_id = payload.get("request_id", "")
         if (
             switch_name is None
             or not isinstance(angle, int)
             or isinstance(angle, bool)
             or not isinstance(ok, bool)
+            or not isinstance(request_id, str)
             or (ok and not 0 <= angle <= 180)
         ):
             return None
@@ -92,6 +95,7 @@ def parse_message(line: bytes) -> InboundMessage | None:
             switch_name=switch_name,
             angle=angle,
             ok=ok,
+            request_id=request_id,
         )
 
     if event == "pong":
@@ -99,9 +103,15 @@ def parse_message(line: bytes) -> InboundMessage | None:
     return None
 
 
-def encode_move_command(switch_name: str, angle: int) -> bytes:
+def encode_move_command(switch_name: str, angle: int, request_id: str) -> bytes:
     return (
-        json.dumps({"cmd": "move", "switch": switch_name, "angle": angle}) + "\n"
+        json.dumps({
+            "cmd": "move",
+            "switch": switch_name,
+            "angle": angle,
+            "request_id": request_id,
+        })
+        + "\n"
     ).encode()
 
 

@@ -37,7 +37,7 @@ void SwitchModule::move(const MoveSwitchRequestedEvent& request) {
     model_.switches[index].active = true;
     model_.switches[index].startedAt = millis();
   }
-  bus_.publish(SwitchMovedEvent(index, angle, ok));
+  bus_.publish(SwitchMovedEvent(index, angle, ok, request.requestId));
 }
 
 int SwitchModule::findSwitch(const char* id) {

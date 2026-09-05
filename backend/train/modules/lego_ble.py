@@ -148,17 +148,32 @@ class LegoBleModule(Module):
         client = self._clients.get(event.train_name)
         if client is None or not client.is_connected:
             await self.bus.publish(
-                TrainSpeedChanged(train_name=event.train_name, speed=event.speed, success=False)
+                TrainSpeedChanged(
+                    train_name=event.train_name,
+                    speed=event.speed,
+                    success=False,
+                    request_id=event.request_id,
+                )
             )
             return
         try:
             command = _build_speed_command(MOTOR_PORT, event.speed)
             await client.write_gatt_char(HUB_CHARACTERISTIC_UUID, command)
             await self.bus.publish(
-                TrainSpeedChanged(train_name=event.train_name, speed=event.speed, success=True)
+                TrainSpeedChanged(
+                    train_name=event.train_name,
+                    speed=event.speed,
+                    success=True,
+                    request_id=event.request_id,
+                )
             )
         except Exception:
             self._log.error("Failed to set speed for %s", event.train_name, exc_info=True)
             await self.bus.publish(
-                TrainSpeedChanged(train_name=event.train_name, speed=event.speed, success=False)
+                TrainSpeedChanged(
+                    train_name=event.train_name,
+                    speed=event.speed,
+                    success=False,
+                    request_id=event.request_id,
+                )
             )
