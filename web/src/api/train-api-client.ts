@@ -109,6 +109,7 @@ export class TrainApiClient {
       headers: {
         Accept: "application/json",
         "Content-Type": "application/json",
+        "X-Train-Restart-After-Save": "true",
       },
       body: JSON.stringify(update),
     });
@@ -361,7 +362,6 @@ function isArduinoDevice(value: unknown): boolean {
     isBoundedInteger(value.servo_settle_ms, 1, 0xffffffff) &&
     isBoundedInteger(value.reconnect_ms, 1, 0xffffffff) &&
     typeof value.event_logger_enabled === "boolean" &&
-    typeof value.allow_legacy_hello === "boolean" &&
     Array.isArray(value.switches) &&
     value.switches.length <= 8 &&
     value.switches.every(isArduinoSwitch) &&

@@ -118,12 +118,6 @@ export function ArduinoConfigurationSection({
         </Group>
       </Group>
 
-      <Alert color="blue" title="Activation depends on the field">
-        Topology changes require a backend restart. Device identity and connection
-        settings require local synchronization and firmware upload. Port and FQBN
-        affect only the canonical provisioning workstation. Device identities also
-        key local Wi-Fi secrets, which are never exposed here.
-      </Alert>
       {saveMutation.error && (
         <Alert color="red" title="Could not save Arduino configuration">
           {errorMessage(saveMutation.error)}
@@ -187,18 +181,6 @@ export function ArduinoConfigurationSection({
                   draft,
                   deviceId,
                   { ...device, servo_settle_ms: numeric(value) },
-                  updateDraft,
-                )}
-              />
-              <Checkbox
-                mt="xl"
-                label="Allow legacy hello"
-                checked={device.allow_legacy_hello}
-                disabled={saveMutation.isPending}
-                onChange={(event) => updateDevice(
-                  draft,
-                  deviceId,
-                  { ...device, allow_legacy_hello: event.currentTarget.checked },
                   updateDraft,
                 )}
               />
@@ -314,10 +296,6 @@ export function ArduinoConfigurationSection({
         </Card>
       ))}
 
-      <Alert color="yellow" title="Device removal decommissions hardware">
-        A removed board will be rejected when it reconnects until its device is
-        restored or the board is reprovisioned.
-      </Alert>
       <Group justify="flex-end">
         <Button
           variant="default"
@@ -338,7 +316,7 @@ export function ArduinoConfigurationSection({
             }
           }}
         >
-          Save Arduino configuration
+          Save Arduino configuration and restart
         </Button>
       </Group>
     </Stack>
@@ -541,7 +519,6 @@ function newDevice(
     servo_settle_ms: 500,
     reconnect_ms: 2000,
     event_logger_enabled: false,
-    allow_legacy_hello: true,
     switches: [],
     readers: [],
   }];

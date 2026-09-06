@@ -60,7 +60,6 @@ class ArduinoDeviceConfig:
     servo_settle_ms: int
     switches: tuple[ArduinoSwitchConfig, ...]
     readers: tuple[ArduinoReaderConfig, ...]
-    allow_legacy_hello: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,7 +103,6 @@ class RuntimeConfig:
                     }
                     for reader in device.readers
                 },
-                "allow_legacy_hello": device.allow_legacy_hello,
             }
             for device in self.arduinos
         }
@@ -278,7 +276,6 @@ def parse_arduinos_document(
             "servo_settle_ms",
             "reconnect_ms",
             "event_logger_enabled",
-            "allow_legacy_hello",
             "switches",
             "readers",
         }
@@ -293,9 +290,6 @@ def parse_arduinos_document(
         servo_settle_ms = _bounded_int(
             value, "servo_settle_ms", source, maximum=0xFFFFFFFF
         )
-        allow_legacy_hello = value.get("allow_legacy_hello", True)
-        if not isinstance(allow_legacy_hello, bool):
-            raise ConfigError(f"{source}.allow_legacy_hello must be a boolean")
         component_ids: set[str] = set()
         pins: set[int] = set()
         switches: list[ArduinoSwitchConfig] = []
@@ -368,7 +362,6 @@ def parse_arduinos_document(
             servo_settle_ms,
             tuple(switches),
             tuple(readers),
-            allow_legacy_hello,
         ))
 
     return tuple(devices)
@@ -405,7 +398,6 @@ def normalized_arduinos_document(
             "servo_settle_ms": device.servo_settle_ms,
             "reconnect_ms": reconnect_ms,
             "event_logger_enabled": event_logger_enabled,
-            "allow_legacy_hello": device.allow_legacy_hello,
             "switches": [
                 {
                     "id": switch.switch_id,

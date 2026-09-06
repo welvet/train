@@ -126,8 +126,11 @@ export function ConfigurationPage() {
       </Group>
 
       {stored.restart_required && (
-        <Alert color="blue" title="Restart required">
-          Saved train changes take effect the next time the backend starts.
+        <Alert color="blue" title="Saving restarts the backend">
+          Train and Arduino topology changes activate automatically after saving.
+          Device identity and connection changes also require local synchronization
+          and firmware upload; port and FQBN only affect provisioning, Wi-Fi secrets
+          stay local, and removed boards are rejected until restored or reprovisioned.
         </Alert>
       )}
       {saveMutation.error && (
@@ -240,7 +243,7 @@ export function ConfigurationPage() {
             }
           }}
         >
-          Save configuration
+          Save and restart
         </Button>
       </Group>
 

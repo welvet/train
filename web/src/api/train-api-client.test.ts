@@ -109,6 +109,14 @@ describe("TrainApiClient", () => {
     await new TrainApiClient().replaceConfiguration(update);
 
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual(update);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/configuration",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          "X-Train-Restart-After-Save": "true",
+        }),
+      }),
+    );
   });
 
   it("keeps configuration updates document-exclusive at compile time", () => {
@@ -464,7 +472,6 @@ function configurationSnapshot(): ConfigurationSnapshot {
               servo_settle_ms: 500,
               reconnect_ms: 2000,
               event_logger_enabled: false,
-              allow_legacy_hello: true,
               switches: [],
               readers: [],
             },

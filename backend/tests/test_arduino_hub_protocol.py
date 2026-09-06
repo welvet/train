@@ -17,12 +17,26 @@ from train.modules.arduino_hub.protocol import (
 
 
 def test_parse_hello_into_typed_message() -> None:
+    applied = {
+        "schema": 1,
+        "hub": "HUB_A",
+        "servo_settle_ms": 500,
+        "switches": [{"id": "S1", "pin": 9, "straight": 60, "diverge": 120}],
+        "readers": [{
+            "id": "D1",
+            "ss_pin": 4,
+            "read_timeout_ms": 250,
+            "removal_delay_ms": 750,
+        }],
+    }
     message = parse_message(json.dumps({
         "event": "hello",
         "hub": "HUB_A",
         "switches": ["S1"],
         "detectors": ["D1"],
         "detected_tags": [{"detector": "D1", "tag_id": "04:AA"}],
+        "revision": "0" * 64,
+        "applied": applied,
     }).encode())
 
     assert message == Hello(
@@ -30,7 +44,38 @@ def test_parse_hello_into_typed_message() -> None:
         switches=("S1",),
         detectors=("D1",),
         detected_tags=(DetectedTag("D1", "04:AA"),),
+        revision="0" * 64,
+        applied=applied,
     )
+
+
+@pytest.mark.parametrize(
+    "omitted_field",
+    ["revision", "applied"],
+)
+def test_parse_hello_requires_configuration_acknowledgement(
+    omitted_field: str,
+) -> None:
+    payload = {
+        "event": "hello",
+        "hub": "HUB_A",
+        "switches": ["S1"],
+        "detectors": [],
+        "detected_tags": [],
+        "revision": "0" * 64,
+        "applied": {
+            "schema": 1,
+            "hub": "HUB_A",
+            "servo_settle_ms": 500,
+            "switches": [
+                {"id": "S1", "pin": 9, "straight": 60, "diverge": 120}
+            ],
+            "readers": [],
+        },
+    }
+    payload.pop(omitted_field)
+
+    assert parse_message(json.dumps(payload).encode()) is None
 
 
 def test_parse_configuration_request() -> None:

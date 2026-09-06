@@ -132,7 +132,9 @@ async def test_openapi_exposes_state_and_public_event_contract(
 
 async def test_configuration_endpoint_reads_and_replaces_document(
     bus: EventBus,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(web_transport, "CONFIGURATION_RESTART_DELAY", 0.01)
     current = {
         "version": 1,
         "documents": {
@@ -144,6 +146,7 @@ async def test_configuration_endpoint_reads_and_replaces_document(
         },
     }
     updates: list[dict[str, object]] = []
+    restarted = asyncio.Event()
 
     async def update(text: str) -> dict[str, object]:
         updates.append(json.loads(text))
@@ -155,6 +158,7 @@ async def test_configuration_endpoint_reads_and_replaces_document(
         port=0,
         configuration_snapshot=lambda: current,
         configuration_update=update,
+        configuration_restart=restarted.set,
     )
     await module.start()
     assert module._app is not None
@@ -164,6 +168,8 @@ async def test_configuration_endpoint_reads_and_replaces_document(
         response = await client.get("/api/configuration")
         assert response.status == 200
         assert await response.json() == current
+        await asyncio.sleep(web_transport.CONFIGURATION_RESTART_DELAY * 2)
+        assert not restarted.is_set()
 
         replacement = {
             "version": 1,
@@ -179,6 +185,18 @@ async def test_configuration_endpoint_reads_and_replaces_document(
         assert response.status == 200
         assert await response.json() == current
         assert updates == [replacement]
+        await asyncio.sleep(web_transport.CONFIGURATION_RESTART_DELAY * 2)
+        assert not restarted.is_set()
+
+        response = await client.put(
+            "/api/configuration",
+            json=replacement,
+            headers={web_transport.CONFIGURATION_RESTART_HEADER: "true"},
+        )
+        assert response.status == 200
+        assert await response.json() == current
+        assert updates == [replacement, replacement]
+        await asyncio.wait_for(restarted.wait(), timeout=1)
     finally:
         await client.close()
         await module.stop()
@@ -195,7 +213,11 @@ async def test_configuration_endpoint_reports_structured_errors(
     bus: EventBus,
     error: ConfigurationError,
     status: int,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(web_transport, "CONFIGURATION_RESTART_DELAY", 0.01)
+    restarted = asyncio.Event()
+
     async def reject(text: str) -> dict[str, object]:
         raise error
 
@@ -205,18 +227,25 @@ async def test_configuration_endpoint_reports_structured_errors(
         port=0,
         configuration_snapshot=lambda: {},
         configuration_update=reject,
+        configuration_restart=restarted.set,
     )
     await module.start()
     assert module._app is not None
     client = TestClient(TestServer(module._app))
     await client.start_server()
     try:
-        response = await client.put("/api/configuration", data="{}")
+        response = await client.put(
+            "/api/configuration",
+            data="{}",
+            headers={web_transport.CONFIGURATION_RESTART_HEADER: "true"},
+        )
         assert response.status == status
         assert await response.json() == {
             "error": error.message,
             "path": error.path,
         }
+        await asyncio.sleep(web_transport.CONFIGURATION_RESTART_DELAY * 2)
+        assert not restarted.is_set()
     finally:
         await client.close()
         await module.stop()

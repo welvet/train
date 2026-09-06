@@ -94,7 +94,6 @@ export interface components {
             [key: string]: unknown;
         };
         ArduinoDeviceConfiguration: {
-            allow_legacy_hello: boolean;
             backend_host: string;
             backend_port: number;
             baudrate: number;
@@ -392,7 +391,10 @@ export interface operations {
     replaceConfiguration: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Restart the supervised backend after the saved response is sent */
+                "X-Train-Restart-After-Save"?: boolean;
+            };
             path?: never;
             cookie?: never;
         };

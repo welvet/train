@@ -84,6 +84,15 @@ Inspect state before deciding whether to issue another command.
 Events that report facts, such as connections, telemetry, detections, and
 hardware acknowledgements, are internal-only and are rejected by this endpoint.
 
+## Edit configuration
+
+`GET /api/configuration` returns the editable train and Arduino documents.
+The web client marks its `PUT /api/configuration` with
+`X-Train-Restart-After-Save: true`; after a successful marked request, the backend
+sends the saved snapshot and exits cleanly so the external `server-loop` restarts
+it with the new values. Unmarked updates, including deployment synchronization,
+persist without interrupting the backend.
+
 ## Generated contract
 
 `GET /api/openapi.json` returns the versioned OpenAPI 3.1 contract for the state

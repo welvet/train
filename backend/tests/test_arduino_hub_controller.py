@@ -57,6 +57,43 @@ class FakeHubClient:
         self.closed = True
 
 
+def _hello(
+    *,
+    detectors: tuple[str, ...] = (),
+    detected_tags: tuple[DetectedTag, ...] = (),
+) -> Hello:
+    payload: dict[str, object] = {
+        "schema": 1,
+        "hub": "HUB_A",
+        "servo_settle_ms": 500,
+        "switches": [{"id": "S1", "pin": 9, "straight": 58, "diverge": 100}],
+        "readers": [
+            {
+                "id": detector,
+                "ss_pin": 4 + index,
+                "read_timeout_ms": 250,
+                "removal_delay_ms": 750,
+            }
+            for index, detector in enumerate(detectors)
+        ],
+    }
+    return Hello(
+        "HUB_A",
+        ("S1",),
+        detectors,
+        detected_tags,
+        "0" * 64,
+        payload,
+    )
+
+
+def _provision(client: FakeHubClient, hello: Hello) -> None:
+    client.phase = "config_sent"
+    client.configuration_hub = hello.hub_name
+    client.configuration_revision = hello.revision
+    client.configuration_payload = hello.applied
+
+
 async def test_superseded_client_cannot_publish_hub_events() -> None:
     bus = EventBus()
     events: list[Event] = []
@@ -70,9 +107,11 @@ async def test_superseded_client_cannot_publish_hub_events() -> None:
         train_tags=TrainTagRegistry({"04:AA": "arctic_express"}),
         hub_config={"HUB_A": {"switches": {"S1": {}}, "detectors": ("D1",)}},
     )
-    hello = Hello("HUB_A", ("S1",), ("D1",), ())
+    hello = _hello(detectors=("D1",))
     old_client = FakeHubClient()
     current_client = FakeHubClient()
+    _provision(old_client, hello)
+    _provision(current_client, hello)
 
     assert await controller.handle_message(old_client, hello)
     assert await controller.handle_message(current_client, hello)
@@ -103,9 +142,11 @@ async def test_superseded_client_cannot_reclaim_hub_identity() -> None:
         train_tags=TrainTagRegistry({"04:AA": "arctic_express"}),
         hub_config={"HUB_A": {"switches": {"S1": {}}, "detectors": ("D1",)}},
     )
-    hello = Hello("HUB_A", ("S1",), ("D1",), ())
+    hello = _hello(detectors=("D1",))
     old_client = FakeHubClient()
     current_client = FakeHubClient()
+    _provision(old_client, hello)
+    _provision(current_client, hello)
 
     assert await controller.handle_message(old_client, hello)
     assert await controller.handle_message(current_client, hello)
@@ -113,11 +154,9 @@ async def test_superseded_client_cannot_reclaim_hub_identity() -> None:
 
     keep_open = await controller.handle_message(
         old_client,
-        Hello(
-            "HUB_A",
-            ("S1",),
-            ("D1",),
-            (DetectedTag("D1", "04:AA"),),
+        _hello(
+            detectors=("D1",),
+            detected_tags=(DetectedTag("D1", "04:AA"),),
         ),
     )
 
@@ -142,7 +181,9 @@ async def test_integer_target_cannot_bypass_configured_switch_validation() -> No
         hub_config={"HUB_A": {"switches": {"S1": {}}, "detectors": ()}},
     )
     client = FakeHubClient()
-    await controller.handle_message(client, Hello("HUB_A", ("S1",), (), ()))
+    hello = _hello()
+    _provision(client, hello)
+    await controller.handle_message(client, hello)
     events.clear()
     command = SetSwitchPosition(
         hub_name="HUB_A", switch_name="missing", target=90
@@ -173,7 +214,9 @@ async def test_out_of_range_integer_switch_target_is_rejected() -> None:
         hub_config={"HUB_A": {"switches": {"S1": {}}, "detectors": ()}},
     )
     client = FakeHubClient()
-    await controller.handle_message(client, Hello("HUB_A", ("S1",), (), ()))
+    hello = _hello()
+    _provision(client, hello)
+    await controller.handle_message(client, hello)
     events.clear()
 
     await controller.set_switch(SetSwitchPosition(
@@ -216,6 +259,16 @@ async def test_registered_runtime_client_cannot_change_applied_configuration() -
         client,
         Hello("HUB_A", ("S1",), (), (), "0" * 64, changed),
     )
+
+
+async def test_hello_before_configuration_is_rejected() -> None:
+    controller = ArduinoHubController(
+        EventBus(),
+        train_tags=TrainTagRegistry(),
+        hub_config={"HUB_A": {"switches": {"S1": {}}, "detectors": ()}},
+    )
+
+    assert not await controller.handle_message(FakeHubClient(), _hello())
 
 
 async def test_configuration_rejection_must_match_pending_device(caplog) -> None:

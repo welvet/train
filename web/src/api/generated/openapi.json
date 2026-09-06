@@ -16,9 +16,6 @@
       "ArduinoDeviceConfiguration": {
         "additionalProperties": false,
         "properties": {
-          "allow_legacy_hello": {
-            "type": "boolean"
-          },
           "backend_host": {
             "minLength": 1,
             "type": "string"
@@ -85,7 +82,6 @@
           "servo_settle_ms",
           "reconnect_ms",
           "event_logger_enabled",
-          "allow_legacy_hello",
           "switches",
           "readers"
         ],
@@ -919,6 +915,18 @@
       },
       "put": {
         "operationId": "replaceConfiguration",
+        "parameters": [
+          {
+            "description": "Restart the supervised backend after the saved response is sent",
+            "in": "header",
+            "name": "X-Train-Restart-After-Save",
+            "required": false,
+            "schema": {
+              "default": false,
+              "type": "boolean"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {

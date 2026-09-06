@@ -42,7 +42,7 @@ it("loads, edits, and saves trains as one configuration update", async () => {
     target: { value: "CC:DD" },
   });
   expect(screen.getByText("Unsaved")).toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: "Save configuration" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save and restart" }));
 
   await waitFor(() =>
     expect(fetchMock).toHaveBeenCalledWith(
@@ -137,7 +137,7 @@ it("keeps the original revision when a dirty draft outlives a refresh", async ()
       },
     },
   });
-  fireEvent.click(screen.getByRole("button", { name: "Save configuration" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save and restart" }));
 
   await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
   const body = JSON.parse(String(fetchMock.mock.calls[1][1]?.body));

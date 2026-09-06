@@ -208,37 +208,16 @@ class ArduinoHubController:
             ):
                 self._log.warning("Rejecting mismatched configuration acknowledgement")
                 return False
-        elif client.phase == "new":
-            if hello.revision is not None:
-                self._log.warning("Rejecting unsolicited revision-bound hello")
-                return False
-            configured = self._hub_config.get(hello.hub_name)
-            if configured is None or not configured.get("allow_legacy_hello", True):
-                self._log.warning("Rejecting disabled legacy hello")
-                return False
-            current = self._clients.get(hello.hub_name)
-            if current is not None and current.configuration_revision is not None:
-                self._log.warning(
-                    "Rejecting legacy takeover of provisioned hub %s",
-                    hello.hub_name,
-                )
-                return False
-            self._log.warning(
-                "Accepting legacy hello from %s without revision binding",
-                hello.hub_name,
-            )
         elif client.phase == "registered":
             if (
                 hello.hub_name != client.hub_name
                 or hello.revision != client.configuration_revision
-                or (
-                    client.configuration_revision is not None
-                    and hello.applied != client.configuration_payload
-                )
+                or hello.applied != client.configuration_payload
             ):
                 self._log.warning("Rejecting changed hello on registered connection")
                 return False
         else:
+            self._log.warning("Rejecting hello before configuration")
             return False
         if client.hub_name is not None and client.hub_name != hello.hub_name:
             self._log.warning(

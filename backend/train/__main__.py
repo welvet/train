@@ -107,6 +107,7 @@ def main() -> None:
         automation_unsubscribe=automation_module.unsubscribe_changes,
         configuration_snapshot=configuration.snapshot,
         configuration_update=update_configuration,
+        configuration_restart=app.request_shutdown,
     )
     asyncio.run(app.run())
 
