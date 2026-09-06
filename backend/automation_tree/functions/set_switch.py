@@ -19,6 +19,7 @@ from automation_tree.validation import require_non_empty_string
 class SwitchPosition(str, Enum):
     STRAIGHT = "straight"
     DIVERGE = "diverge"
+    FLIP = "flip"
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,7 +47,7 @@ class SetSwitchFunction(NodeFunction):
         except (TypeError, ValueError) as exc:
             raise AutomationParseError(
                 f"{path}.position",
-                "must be straight or diverge",
+                "must be straight, diverge, or flip",
             ) from exc
         return SetSwitchConfig(
             hub_id=require_non_empty_string(value["hub_id"], f"{path}.hub_id"),

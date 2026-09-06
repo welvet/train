@@ -87,6 +87,7 @@ class ArduinoHubController:
             if "device_id" in config
         }
         self._clients: dict[str, HubClient] = {}
+        self._acknowledged_switch_angles: dict[tuple[str, str], int] = {}
         self._registration_locks: dict[str, asyncio.Lock] = {
             hub_name: asyncio.Lock() for hub_name in hub_config
         }
@@ -313,6 +314,10 @@ class ArduinoHubController:
         hub_name: str,
         message: MoveAcknowledged,
     ) -> None:
+        if message.ok:
+            self._acknowledged_switch_angles[
+                (hub_name, message.switch_name)
+            ] = message.angle
         await self._bus.publish(SwitchPositionChanged(
             hub_name=hub_name,
             switch_name=message.switch_name,
@@ -337,6 +342,20 @@ class ArduinoHubController:
         switch = hub["switches"].get(event.switch_name)
         if switch is None:
             return None
+        if event.target == "flip":
+            straight = switch.get("straight")
+            diverge = switch.get("diverge")
+            if not all(
+                isinstance(angle, int) and not isinstance(angle, bool)
+                for angle in (straight, diverge)
+            ):
+                return None
+            current = self._acknowledged_switch_angles.get(
+                (event.hub_name, event.switch_name)
+            )
+            # Treat an unknown/non-endpoint angle as straight, so the first
+            # flip has a deterministic and visible result.
+            return straight if current == diverge else diverge
         if (
             isinstance(event.target, int)
             and not isinstance(event.target, bool)

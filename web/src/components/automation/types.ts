@@ -1,4 +1,4 @@
-export type SwitchPosition = "straight" | "diverge";
+export type SwitchPosition = "straight" | "diverge" | "flip";
 
 export interface SetTrainSpeedNode {
   readonly type: "set_train_speed";

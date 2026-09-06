@@ -112,7 +112,7 @@ terminal hardware nodes are leaves and require an empty `children` array.
 | --- | --- | --- | --- |
 | `train_detected` | root | `hub_id`, `detector_id`, `train_id`, `children` | Runs its children when the configured detector sees the configured train. |
 | `set_train_speed` | terminal | `speed`, `children` | Sets the train from the root to a signed speed from `-100` to `100`. Zero stops it. |
-| `set_switch` | terminal | `hub_id`, `switch_id`, `position`, `children` | Moves a configured switch to `straight` or `diverge`. |
+| `set_switch` | terminal | `hub_id`, `switch_id`, `position`, `children` | Moves a configured switch to `straight` or `diverge`, or `flip`s its last-known position. |
 | `wait` | control | `seconds`, `children` | Waits, then runs its children in order. |
 | `on_count` | conditional | `count`, `children` | Runs its children on every configured occurrence. |
 
@@ -142,12 +142,18 @@ prevents an accidental edit from driving an unrelated train.
 }
 ```
 
-Version 1 exposes the configured `straight` and `diverge` positions, not raw
-servo angles. A successful command means the Arduino accepted the target; the
-switch has no physical position sensor. Each hardware command is awaited before
-the next sibling starts. A tree which will move a train across a switch must
-put a suitable `wait` node after `set_switch` and enclose the movement actions
-under that wait.
+Version 1 exposes the configured `straight`, `diverge`, and `flip` positions,
+not raw servo angles. `flip` resolves from the last position acknowledged by
+the Arduino. If that position is unknown or is not one of the two configured
+endpoints, automation assumes it was straight and moves it to diverge. This
+option belongs to the automation document; the public manual-control event
+continues to accept explicit positions and raw angles only.
+
+A successful command means the Arduino accepted the target; the switch has no
+physical position sensor. Each hardware command is awaited before the next
+sibling starts. A tree which will move a train across a switch must put a
+suitable `wait` node after `set_switch` and enclose the movement actions under
+that wait.
 
 ### Wait
 

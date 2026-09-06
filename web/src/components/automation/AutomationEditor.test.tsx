@@ -87,7 +87,7 @@ it("builds a rule through compact picture controls", () => {
   fireEvent.click(screen.getByRole("button", { name: "Add wait step" }));
   fireEvent.click(screen.getByRole("button", { name: "Wait 5 seconds" }));
   fireEvent.click(screen.getAllByRole("button", { name: "Add switch step" })[0]);
-  fireEvent.click(screen.getByRole("button", { name: "Set switch to turn" }));
+  fireEvent.click(screen.getByRole("button", { name: "Flip switch position" }));
 
   expect(getDocument().rules[0].root.children).toMatchObject([
     { type: "set_train_speed", speed: 50 },
@@ -95,7 +95,7 @@ it("builds a rule through compact picture controls", () => {
       type: "wait",
       seconds: 5,
       children: [
-        { type: "set_switch", switch_id: "S1", position: "diverge" },
+        { type: "set_switch", switch_id: "S1", position: "flip" },
       ],
     },
   ]);

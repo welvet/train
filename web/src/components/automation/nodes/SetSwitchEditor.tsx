@@ -60,7 +60,7 @@ export function SetSwitchEditor({
       )}
       <fieldset className={classes.choiceFieldset}>
         <VisuallyHidden component="legend">Choose a switch direction</VisuallyHidden>
-        <SimpleGrid cols={2} spacing="xs">
+        <SimpleGrid cols={3} spacing="xs">
           <Button
             variant={node.position === "straight" ? "filled" : "light"}
             size="md"
@@ -82,6 +82,17 @@ export function SetSwitchEditor({
           >
             <span aria-hidden>↗️</span>
             <span>Turn</span>
+          </Button>
+          <Button
+            variant={node.position === "flip" ? "filled" : "light"}
+            size="md"
+            className={classes.choiceButton}
+            onClick={() => onChange({ ...node, position: "flip" })}
+            aria-label="Flip switch position"
+            aria-pressed={node.position === "flip"}
+          >
+            <span aria-hidden>🔄</span>
+            <span>Flip</span>
           </Button>
         </SimpleGrid>
       </fieldset>
