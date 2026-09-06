@@ -128,6 +128,26 @@ async def test_module_runs_matching_tree_with_acknowledged_commands(
         await module.stop()
 
 
+async def test_module_dispatches_flip_switch_target(
+    bus: EventBus, tmp_path: Path
+) -> None:
+    path = tmp_path / "automations.json"
+    _write(path, _document(_switch("flip")))
+    _, switches = await _acknowledge_commands(bus)
+    module = AutomationModule(bus, path=path, tagged_trains={"express"})
+    await module.start()
+
+    try:
+        await bus.publish(TagDetected(
+            hub_name="yard", detector_name="D1", train_id="express"
+        ))
+        await module._runner.wait_idle()
+
+        assert [item.target for item in switches] == ["flip"]
+    finally:
+        await module.stop()
+
+
 async def test_replacement_cancels_old_tree_and_persists_new_document(
     bus: EventBus, tmp_path: Path
 ) -> None:

@@ -121,8 +121,12 @@ function parseNode(
     case "set_switch": {
       exactKeys(value, ["type", "hub_id", "switch_id", "position", "children"], path);
       emptyChildren(value.children, path);
-      if (value.position !== "straight" && value.position !== "diverge") {
-        throw new Error(`${path} position must be straight or diverge.`);
+      if (
+        value.position !== "straight" &&
+        value.position !== "diverge" &&
+        value.position !== "flip"
+      ) {
+        throw new Error(`${path} position must be straight, diverge, or flip.`);
       }
       return {
         type: "set_switch",

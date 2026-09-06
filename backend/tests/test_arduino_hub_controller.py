@@ -1,5 +1,7 @@
 import logging
 
+import pytest
+
 from train.core.event_bus import EventBus
 from train.domain import (
     Event,
@@ -14,6 +16,7 @@ from train.modules.arduino_hub.protocol import (
     ConfigRejected,
     DetectedTag,
     Hello,
+    MoveAcknowledged,
     TagChanged,
 )
 
@@ -229,6 +232,53 @@ async def test_out_of_range_integer_switch_target_is_rejected() -> None:
     ]
     assert len(responses) == 1
     assert responses[0].ok is False
+
+
+@pytest.mark.parametrize(
+    ("straight", "diverge", "current_angle", "expected_angle"),
+    [
+        (58, 100, None, 100),
+        (58, 100, 58, 100),
+        (58, 100, 100, 58),
+        (58, 100, 75, 100),
+        (58, 0, None, 0),
+        (58, 0, 0, 58),
+    ],
+)
+async def test_flip_switch_uses_previous_position_or_assumes_straight(
+    straight: int,
+    diverge: int,
+    current_angle: int | None,
+    expected_angle: int,
+) -> None:
+    bus = EventBus()
+    controller = ArduinoHubController(
+        bus,
+        train_tags=TrainTagRegistry(),
+        hub_config={
+            "HUB_A": {
+                "switches": {
+                    "S1": {"straight": straight, "diverge": diverge},
+                },
+                "detectors": (),
+            }
+        },
+    )
+    client = FakeHubClient()
+    hello = _hello()
+    _provision(client, hello)
+    await controller.handle_message(client, hello)
+    if current_angle is not None:
+        await controller.handle_message(
+            client,
+            MoveAcknowledged("S1", current_angle, True, "previous-request"),
+        )
+
+    await controller.set_switch(SetSwitchPosition(
+        hub_name="HUB_A", switch_name="S1", target="flip"
+    ))
+
+    assert [move[1] for move in client.moves] == [expected_angle]
 
 
 async def test_registered_runtime_client_cannot_change_applied_configuration() -> None:

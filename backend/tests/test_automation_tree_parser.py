@@ -322,8 +322,27 @@ def test_rejects_invalid_switch_position(
         "position": position,
         "children": [],
     }
-    with pytest.raises(AutomationParseError, match=r"must be straight or diverge"):
+    with pytest.raises(
+        AutomationParseError,
+        match=r"must be straight, diverge, or flip",
+    ):
         parser.parse(_document(_rule(node)))
+
+
+def test_accepts_flip_switch_position(parser: AutomationParser) -> None:
+    node = {
+        "type": "set_switch",
+        "hub_id": "hub",
+        "switch_id": "S1",
+        "position": "flip",
+        "children": [],
+    }
+
+    document = parser.parse(_document(_rule(node)))
+
+    switch = document.rules[0].children[0]
+    assert isinstance(switch.config, SetSwitchConfig)
+    assert switch.config.position.value == "flip"
 
 
 class _CustomFunction(NodeFunction):
