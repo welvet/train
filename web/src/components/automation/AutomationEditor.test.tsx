@@ -190,6 +190,95 @@ it("never downgrades a version 2 document during ordinary edits", () => {
   expect(getV2().version).toBe(2);
 });
 
+it("never downgrades a version 3 document during ordinary edits", () => {
+  const v3Document: AutomationDocument = {
+    version: 3,
+    rules: [
+      {
+        id: "v3",
+        enabled: true,
+        root: {
+          type: "train_detected",
+          hub_id: "yard",
+          detector_id: "D1",
+          train_id: "express",
+          children: [{ type: "set_train_speed", speed: 10, children: [] }],
+        },
+      },
+    ],
+  };
+  const getV3 = renderEditor(v3Document);
+  fireEvent.change(screen.getByRole("textbox", { name: "Train speed (%)" }), {
+    target: { value: "13" },
+  });
+  expect(getV3().version).toBe(3);
+});
+
+it("warns when concurrent paths in one rule control the same target", () => {
+  renderEditor({
+    version: 3,
+    rules: [
+      {
+        id: "parallel_speed",
+        enabled: true,
+        root: {
+          type: "train_detected",
+          hub_id: "yard",
+          detector_id: "D1",
+          train_id: "express",
+          children: [
+            {
+              type: "wait",
+              seconds: 1,
+              children: [{ type: "set_train_speed", speed: 10, children: [] }],
+            },
+            {
+              type: "on_count",
+              count: 2,
+              children: [{ type: "set_train_speed", speed: 20, children: [] }],
+            },
+          ],
+        },
+      },
+    ],
+  });
+
+  expect(
+    screen.getByText("Train express is changed by concurrent paths in this rule."),
+  ).toBeVisible();
+});
+
+it("does not warn across mutually exclusive count branches", () => {
+  const document = countBranchDocumentForEditor();
+  renderEditor(document);
+
+  expect(screen.queryByText(/concurrent paths in this rule/)).not.toBeInTheDocument();
+});
+
+it("compares either count branch with a concurrent outside path", () => {
+  const document = countBranchDocumentForEditor();
+  const rule = document.rules[0];
+  renderEditor({
+    ...document,
+    rules: [
+      {
+        ...rule,
+        root: {
+          ...rule.root,
+          children: [
+            ...rule.root.children,
+            { type: "set_train_speed", speed: 30, children: [] },
+          ],
+        },
+      },
+    ],
+  });
+
+  expect(
+    screen.getByText("Train express is changed by concurrent paths in this rule."),
+  ).toBeVisible();
+});
+
 it("keeps version 2 after the last count branch is removed", () => {
   const getDocument = renderEditor();
   fireEvent.click(screen.getByRole("button", { name: "Create automation for yard / D1" }));
@@ -456,6 +545,13 @@ it("distinguishes switches with the same id on different hubs", () => {
                 position: "straight",
                 children: [],
               },
+              {
+                type: "set_switch",
+                hub_id: "depot",
+                switch_id: "S1",
+                position: "diverge",
+                children: [],
+              },
             ],
           },
         },
@@ -470,6 +566,43 @@ it("distinguishes switches with the same id on different hubs", () => {
     },
   );
 
-  expect(screen.getByRole("option", { name: "🚦 yard / S1" })).toBeInTheDocument();
-  expect(screen.getByRole("option", { name: "🚦 depot / S1" })).toBeInTheDocument();
+  expect(screen.getAllByRole("option", { name: "🚦 yard / S1" })).toHaveLength(2);
+  expect(screen.getAllByRole("option", { name: "🚦 depot / S1" })).toHaveLength(2);
+  expect(screen.queryByText(/concurrent paths in this rule/)).not.toBeInTheDocument();
 });
+
+function countBranchDocumentForEditor(): AutomationDocument {
+  return {
+    version: 3,
+    rules: [
+      {
+        id: "exclusive_speed",
+        enabled: true,
+        root: {
+          type: "train_detected",
+          hub_id: "yard",
+          detector_id: "D1",
+          train_id: "express",
+          children: [
+            {
+              type: "if_count",
+              count: 2,
+              children: [
+                {
+                  type: "branch",
+                  when: "match",
+                  children: [{ type: "set_train_speed", speed: 20, children: [] }],
+                },
+                {
+                  type: "branch",
+                  when: "otherwise",
+                  children: [{ type: "set_train_speed", speed: 10, children: [] }],
+                },
+              ],
+            },
+          ],
+        },
+      },
+    ],
+  };
+}

@@ -63,7 +63,7 @@ export interface AutomationRule {
 }
 
 export interface AutomationDocument {
-  readonly version: 1 | 2;
+  readonly version: 1 | 2 | 3;
   readonly rules: readonly AutomationRule[];
 }
 

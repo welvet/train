@@ -50,7 +50,7 @@ def init_workspace(root: Path) -> None:
         },
     }
     secrets = {"devices": {}, "deployment": {"ftp_password": ""}}
-    automations = {"version": 1, "rules": []}
+    automations = {"version": 3, "rules": []}
 
     for name, value in (
         ("backend.json", backend),

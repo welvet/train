@@ -20,6 +20,7 @@ import {
 } from "./automation-validation";
 import type {
   AutomationDocument,
+  AutomationNode,
   AutomationRule,
   AutomationTopology,
 } from "./types";
@@ -61,7 +62,12 @@ export function AutomationEditor({
   const setDocument = (next: AutomationDocument) => {
     onDocumentChange({
       ...next,
-      version: next.version === 2 || containsIfCount(next) ? 2 : 1,
+      version:
+        next.version === 3
+          ? 3
+          : next.version === 2 || containsIfCount(next)
+            ? 2
+            : 1,
     });
   };
 
@@ -114,8 +120,8 @@ export function AutomationEditor({
           <Alert color="red" title="Needs a fix" mt="sm">{localValidationError}</Alert>
         )}
         {conflicts.map((warning) => (
-          <Alert color="yellow" title="Same track control" mt="sm" key={warning.target}>
-            {warning.target} is changed by more than one rule.
+          <Alert color="yellow" title="Same track control" mt="sm" key={warning.key}>
+            {warning.message}
           </Alert>
         ))}
 
@@ -263,18 +269,96 @@ function uniqueRuleId(document: AutomationDocument, base: string) {
 }
 
 function sharedTargetWarnings(document: AutomationDocument) {
-  const targets = new Map<string, string[]>();
+  const ruleTargets = new Map<string, { label: string; ruleIds: string[] }>();
+  const warnings: Array<{
+    key: string;
+    message: string;
+    ruleIds: string[];
+  }> = [];
   for (const rule of document.rules.filter((item) => item.enabled)) {
-    const ruleTargets = new Set<string>();
-    visitAutomationNodes(rule.root.children, (node) => {
-      if (node.type === "set_train_speed") ruleTargets.add(`Train ${rule.root.train_id}`);
-      if (node.type === "set_switch") ruleTargets.add(`Switch ${node.switch_id}`);
-    });
-    for (const target of ruleTargets) targets.set(target, [...(targets.get(target) ?? []), rule.id]);
+    const analysis = analyzeConcurrentTargets(rule.root.children, rule.root.train_id);
+    for (const [target, label] of analysis.conflicts) {
+      warnings.push({
+        key: `concurrent:${rule.id}:${target}`,
+        message: `${label} is changed by concurrent paths in this rule.`,
+        ruleIds: [rule.id],
+      });
+    }
+    for (const [target, label] of analysis.targets) {
+      const existing = ruleTargets.get(target);
+      ruleTargets.set(target, {
+        label,
+        ruleIds: [...(existing?.ruleIds ?? []), rule.id],
+      });
+    }
   }
-  return [...targets.entries()]
-    .filter(([, ruleIds]) => ruleIds.length > 1)
-    .map(([target, ruleIds]) => ({ target, ruleIds }));
+  for (const [target, { label, ruleIds }] of ruleTargets) {
+    if (ruleIds.length > 1) {
+      warnings.push({
+        key: `rules:${target}`,
+        message: `${label} is changed by more than one rule.`,
+        ruleIds,
+      });
+    }
+  }
+  return warnings;
+}
+
+interface TargetAnalysis {
+  targets: Map<string, string>;
+  conflicts: Map<string, string>;
+}
+
+function analyzeConcurrentTargets(
+  nodes: readonly AutomationNode[],
+  trainId: string,
+): TargetAnalysis {
+  const targets = new Map<string, string>();
+  const conflicts = new Map<string, string>();
+  for (const node of nodes) {
+    const child = analyzeTargetNode(node, trainId);
+    for (const [target, label] of child.conflicts) conflicts.set(target, label);
+    for (const [target, label] of child.targets) {
+      if (targets.has(target)) conflicts.set(target, label);
+      targets.set(target, label);
+    }
+  }
+  return { targets, conflicts };
+}
+
+function analyzeTargetNode(
+  node: AutomationNode,
+  trainId: string,
+): TargetAnalysis {
+  if (node.type === "set_train_speed") {
+    return targetAnalysis(`train\u0000${trainId}`, `Train ${trainId}`);
+  }
+  if (node.type === "set_switch") {
+    return targetAnalysis(
+      `switch\u0000${node.hub_id}\u0000${node.switch_id}`,
+      `Switch ${node.hub_id} / ${node.switch_id}`,
+    );
+  }
+  if (node.type === "if_count") {
+    const alternatives = node.children.map((branch) =>
+      analyzeConcurrentTargets(branch.children, trainId),
+    );
+    const targets = new Map<string, string>();
+    const conflicts = new Map<string, string>();
+    for (const alternative of alternatives) {
+      for (const [target, label] of alternative.targets) targets.set(target, label);
+      for (const [target, label] of alternative.conflicts) conflicts.set(target, label);
+    }
+    return { targets, conflicts };
+  }
+  return analyzeConcurrentTargets(node.children, trainId);
+}
+
+function targetAnalysis(target: string, label: string): TargetAnalysis {
+  return {
+    targets: new Map([[target, label]]),
+    conflicts: new Map(),
+  };
 }
 
 function containsIfCount(document: AutomationDocument): boolean {

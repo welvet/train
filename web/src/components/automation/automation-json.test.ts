@@ -1,4 +1,8 @@
-import { parseAutomation, serializeAutomation } from "./automation-json";
+import {
+  currentAutomationDocument,
+  parseAutomation,
+  serializeAutomation,
+} from "./automation-json";
 
 it("serializes and parses a nested detector automation", () => {
   const document = parseAutomation(
@@ -82,6 +86,15 @@ it("supports an empty document", () => {
   const empty = parseAutomation('{"version":1,"rules":[]}');
   expect(empty).toEqual({ version: 1, rules: [] });
   expect(JSON.parse(serializeAutomation(empty))).toEqual({ version: 1, rules: [] });
+});
+
+it("reads version 3 and upgrades legacy documents without mutating them", () => {
+  const legacy = parseAutomation('{"version":1,"rules":[]}');
+  const upgraded = currentAutomationDocument(legacy);
+
+  expect(legacy.version).toBe(1);
+  expect(upgraded).toEqual({ version: 3, rules: [] });
+  expect(parseAutomation(serializeAutomation(upgraded))).toEqual(upgraded);
 });
 
 it("rejects the removed count mode field", () => {

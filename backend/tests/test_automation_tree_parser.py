@@ -161,7 +161,7 @@ def test_parse_json_rejects_non_standard_json(
         ({"version": 1}, r"\$: missing required field: rules"),
         ({"version": 1, "rules": [], "extra": True}, r"\$.extra: unknown"),
         ({"version": True, "rules": []}, r"\$.version: must be an integer"),
-        ({"version": 3, "rules": []}, r"unsupported version: 3"),
+        ({"version": 4, "rules": []}, r"unsupported version: 4"),
         ({"version": 1, "rules": {}}, r"\$.rules: must be an array"),
     ],
 )

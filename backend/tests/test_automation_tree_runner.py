@@ -37,7 +37,9 @@ class _Actions:
     def __init__(self) -> None:
         self.calls: list[tuple[object, ...]] = []
         self.block_speed: asyncio.Event | None = None
+        self.block_switch: asyncio.Event | None = None
         self.speed_started = asyncio.Event()
+        self.switch_started = asyncio.Event()
         self.fail_speed: Exception | None = None
 
     async def set_speed(
@@ -64,6 +66,9 @@ class _Actions:
             config.switch_id,
             config.position.value,
         ))
+        self.switch_started.set()
+        if self.block_switch is not None:
+            await self.block_switch.wait()
 
 
 def _document(
@@ -71,7 +76,7 @@ def _document(
     enabled: bool = True,
     rule_id: str = "departure",
     detector_id: str = "station",
-    version: int = 1,
+    version: int = 3,
 ) -> dict[str, object]:
     return {
         "version": version,
@@ -149,8 +154,31 @@ async def _run_once(runner: AutomationRunner) -> str | None:
     return admitted
 
 
-async def test_executes_children_in_order_and_passes_root_context() -> None:
+async def _wait_for_call_count(actions: _Actions, count: int) -> None:
+    while len(actions.calls) < count:
+        await asyncio.sleep(0)
+
+
+@pytest.mark.parametrize("version", [1, 2])
+async def test_runner_rejects_legacy_document_versions(version: int) -> None:
     actions = _Actions()
+    runner = AutomationRunner(_functions(actions))
+    document = _parser(actions).parse(_document(_speed(10), version=version))
+
+    with pytest.raises(
+        ValueError,
+        match=f"automation runner requires document version 3, got {version}",
+    ):
+        await runner.replace(document)
+
+    assert runner.document.version == 3
+    assert await runner.trigger(TRIGGER) is None
+
+
+async def test_starts_root_children_concurrently_and_passes_root_context() -> None:
+    actions = _Actions()
+    actions.block_speed = asyncio.Event()
+    actions.block_switch = asyncio.Event()
     parser = _parser(actions)
     runner = AutomationRunner(_functions(actions))
     await runner.replace(parser.parse(_document(
@@ -164,11 +192,16 @@ async def test_executes_children_in_order_and_passes_root_context() -> None:
         _speed(45),
     )))
 
-    assert await _run_once(runner) == "departure"
-    assert actions.calls == [
+    assert await runner.trigger(TRIGGER) == "departure"
+    await asyncio.wait_for(actions.speed_started.wait(), timeout=1)
+    await asyncio.wait_for(actions.switch_started.wait(), timeout=1)
+    assert set(actions.calls) == {
         ("switch", "departure", "hub", "S1", "straight"),
         ("speed", "departure", TRIGGER, 45),
-    ]
+    }
+    actions.block_speed.set()
+    actions.block_switch.set()
+    await runner.wait_idle()
 
 
 async def test_trigger_returns_without_waiting_for_execution() -> None:
@@ -231,11 +264,11 @@ async def test_different_rules_run_concurrently() -> None:
         _speed(20), rule_id="other", detector_id="yard"
     )["rules"][0]
     runner = AutomationRunner(_functions(actions))
-    await runner.replace(parser.parse({"version": 1, "rules": [first, second]}))
+    await runner.replace(parser.parse({"version": 3, "rules": [first, second]}))
 
     assert await runner.trigger(TRIGGER) == "departure"
     assert await runner.trigger(Trigger("hub", "yard", "red")) == "other"
-    await asyncio.sleep(0)
+    await asyncio.wait_for(_wait_for_call_count(actions, 2), timeout=1)
     assert len(actions.calls) == 2
     actions.block_speed.set()
     await runner.wait_idle()
@@ -266,6 +299,43 @@ async def test_wait_marks_rule_waiting_and_delays_children() -> None:
     assert runner.statuses()[0].state is RuleState.IDLE
 
 
+async def test_sibling_waits_overlap_and_waiting_lasts_until_all_finish() -> None:
+    actions = _Actions()
+    releases = {2.0: asyncio.Event(), 3.0: asyncio.Event()}
+    started: set[float] = set()
+    both_started = asyncio.Event()
+
+    async def sleep(seconds: float) -> None:
+        started.add(seconds)
+        if started == {2.0, 3.0}:
+            both_started.set()
+        await releases[seconds].wait()
+
+    runner = AutomationRunner(_functions(actions), sleep=sleep)
+    await runner.replace(_parser(actions).parse(_document(
+        _count(
+            1,
+            _wait(2, _speed(20)),
+            _wait(3, _speed(30)),
+        )
+    )))
+
+    await runner.trigger(TRIGGER)
+    await asyncio.wait_for(both_started.wait(), timeout=1)
+    assert runner.statuses()[0].state is RuleState.WAITING
+    assert actions.calls == []
+
+    releases[2.0].set()
+    await asyncio.wait_for(actions.speed_started.wait(), timeout=1)
+    assert [call[-1] for call in actions.calls] == [20]
+    assert runner.statuses()[0].state is RuleState.WAITING
+
+    releases[3.0].set()
+    await runner.wait_idle()
+    assert sorted(call[-1] for call in actions.calls) == [20, 30]
+    assert runner.statuses()[0].state is RuleState.IDLE
+
+
 async def test_occurrence_count_repeats() -> None:
     actions = _Actions()
     runner = AutomationRunner(_functions(actions))
@@ -284,7 +354,7 @@ async def test_if_count_selects_exactly_one_branch_per_visit() -> None:
     runner = AutomationRunner(_functions(actions))
     await runner.replace(_parser(actions).parse(_document(
         _if_count(5, match=(_speed(50),), otherwise=(_speed(10),)),
-        version=2,
+        version=3,
     )))
 
     for _ in range(10):
@@ -296,8 +366,9 @@ async def test_if_count_selects_exactly_one_branch_per_visit() -> None:
     ]
 
 
-async def test_if_count_branch_runs_multiple_children_in_order() -> None:
+async def test_if_count_branch_starts_selected_children_concurrently() -> None:
     actions = _Actions()
+    actions.block_speed = asyncio.Event()
     runner = AutomationRunner(_functions(actions))
     await runner.replace(_parser(actions).parse(_document(
         _if_count(
@@ -305,13 +376,14 @@ async def test_if_count_branch_runs_multiple_children_in_order() -> None:
             match=(_speed(20), _speed(21)),
             otherwise=(_speed(10), _speed(11)),
         ),
-        version=2,
+        version=3,
     )))
 
-    await _run_once(runner)
-    await _run_once(runner)
-
-    assert [call[-1] for call in actions.calls] == [10, 11, 20, 21]
+    await runner.trigger(TRIGGER)
+    await asyncio.wait_for(_wait_for_call_count(actions, 2), timeout=1)
+    assert sorted(call[-1] for call in actions.calls) == [10, 11]
+    actions.block_speed.set()
+    await runner.wait_idle()
 
 
 async def test_nested_if_count_counts_only_visits_that_reach_it() -> None:
@@ -322,7 +394,7 @@ async def test_nested_if_count_counts_only_visits_that_reach_it() -> None:
             2,
             _if_count(2, match=(_speed(20),), otherwise=(_speed(10),)),
         ),
-        version=2,
+        version=3,
     )))
 
     for _ in range(4):
@@ -337,7 +409,7 @@ async def test_if_count_consumes_occurrence_when_selected_branch_fails() -> None
     runner = AutomationRunner(_functions(actions))
     document = _parser(actions).parse(_document(
         _if_count(2, match=(_speed(20),), otherwise=(_speed(10),)),
-        version=2,
+        version=3,
     ))
     await runner.replace(document)
 
@@ -353,7 +425,7 @@ async def test_if_count_counter_resets_on_complete_replacement() -> None:
     runner = AutomationRunner(_functions(actions))
     document = _parser(actions).parse(_document(
         _if_count(2, match=(_speed(20),), otherwise=(_speed(10),)),
-        version=2,
+        version=3,
     ))
     await runner.replace(document)
     await _run_once(runner)
@@ -375,17 +447,40 @@ async def test_nested_counters_are_private_to_node_paths() -> None:
     for _ in range(6):
         await _run_once(runner)
 
-    assert [call[-1] for call in actions.calls] == [20, 30, 20, 20, 30]
+    assert sorted(call[-1] for call in actions.calls) == [20, 20, 20, 30, 30]
 
 
-async def test_failure_stops_remaining_tree_and_rule_recovers() -> None:
+async def test_failure_cancels_siblings_and_rule_recovers() -> None:
     actions = _Actions()
-    actions.fail_speed = RuntimeError("motor unavailable")
-    runner = AutomationRunner(_functions(actions))
-    await runner.replace(_parser(actions).parse(_document(_speed(10), _speed(20))))
+    sibling_started = asyncio.Event()
+    sibling_cancelled = asyncio.Event()
+    should_fail = True
+
+    async def set_speed(
+        context: FunctionContext,
+        config: SetTrainSpeedConfig,
+    ) -> None:
+        actions.calls.append(("speed", context.rule_id, context.trigger, config.speed))
+        if not should_fail:
+            return
+        if config.speed == 10:
+            await sibling_started.wait()
+            raise RuntimeError("motor unavailable")
+        sibling_started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            sibling_cancelled.set()
+
+    functions = _functions(actions)
+    functions.replace(SetTrainSpeedFunction(set_speed))
+    parser = AutomationParser(functions)
+    runner = AutomationRunner(functions)
+    await runner.replace(parser.parse(_document(_speed(10), _speed(20))))
 
     await _run_once(runner)
-    assert [call[-1] for call in actions.calls] == [10]
+    assert sorted(call[-1] for call in actions.calls) == [10, 20]
+    assert sibling_cancelled.is_set()
     status = runner.statuses()[0]
     assert status.state is RuleState.IDLE
     assert status.last_error == "motor unavailable"
@@ -393,9 +488,10 @@ async def test_failure_stops_remaining_tree_and_rule_recovers() -> None:
     assert status.failure.node_type == "set_train_speed"
     assert status.failure.node_path == (0,)
 
-    actions.fail_speed = None
+    should_fail = False
+    actions.calls.clear()
     await _run_once(runner)
-    assert [call[-1] for call in actions.calls] == [10, 10, 20]
+    assert sorted(call[-1] for call in actions.calls) == [10, 20]
     assert runner.statuses()[0].last_error is None
     assert runner.statuses()[0].failure is None
 
@@ -472,7 +568,7 @@ async def test_semantically_unchanged_replace_keeps_counters() -> None:
     parser = _parser(actions)
     runner = AutomationRunner(_functions(actions))
     first = parser.parse_json(
-        '{"version":1,"rules":[{"id":"departure","enabled":true,'
+        '{"version":3,"rules":[{"id":"departure","enabled":true,'
         '"root":{"type":"train_detected","hub_id":"hub",'
         '"detector_id":"station","train_id":"red","children":['
         '{"type":"on_count","count":2,"children":['
@@ -554,14 +650,14 @@ async def test_unchanged_active_rule_survives_other_rule_replacement() -> None:
         _speed(20), rule_id="other", detector_id="yard"
     )["rules"][0]
     runner = AutomationRunner(_functions(actions))
-    await runner.replace(parser.parse({"version": 1, "rules": [first, old_second]}))
+    await runner.replace(parser.parse({"version": 3, "rules": [first, old_second]}))
     await runner.trigger(TRIGGER)
     await asyncio.wait_for(actions.speed_started.wait(), timeout=1)
 
     new_second = _document(
         _speed(30), rule_id="other", detector_id="yard"
     )["rules"][0]
-    await runner.replace(parser.parse({"version": 1, "rules": [first, new_second]}))
+    await runner.replace(parser.parse({"version": 3, "rules": [first, new_second]}))
     assert runner.statuses()[0].state is RuleState.RUNNING
     actions.block_speed.set()
     await runner.wait_idle()

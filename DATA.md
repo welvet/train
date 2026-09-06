@@ -203,13 +203,14 @@ Stores the versioned configurable automation tree:
 
 ```json
 {
-  "version": 1,
+  "version": 3,
   "rules": []
 }
 ```
 
 The backend validates node structure and all train, hub, detector, and switch
-references at startup. The complete document is returned in `GET /api/state`
+references at startup. Valid version 1 and 2 documents are upgraded atomically
+to version 3 before activation. The complete document is returned in `GET /api/state`
 and can be replaced with `PUT /api/automation`. See
 [Configurable automations](docs/configurable-automations.md) for the format and
 runtime semantics.

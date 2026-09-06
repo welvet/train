@@ -12,6 +12,7 @@ from automation_tree.functions import (
 )
 from automation_tree.model import (
     AutomationDocument,
+    CURRENT_AUTOMATION_DOCUMENT_VERSION,
     Node,
     NodeFailure,
     Rule,
@@ -28,6 +29,7 @@ __all__ = [
     "AutomationParser",
     "AutomationRunner",
     "BranchFunction",
+    "CURRENT_AUTOMATION_DOCUMENT_VERSION",
     "DuplicateFunctionError",
     "FunctionRegistry",
     "IfCountFunction",

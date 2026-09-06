@@ -20,7 +20,7 @@ MAX_TREE_DEPTH = 64
 
 
 class AutomationParser:
-    """Strict parser for version 1 and 2 configurable automation documents."""
+    """Strict parser for version 1, 2, and 3 automation documents."""
 
     def __init__(
         self,
@@ -77,7 +77,7 @@ class AutomationParser:
             path="$",
         )
         version = require_int(document["version"], "$.version", minimum=1)
-        if version not in (1, 2):
+        if version not in (1, 2, 3):
             raise AutomationParseError("$.version", f"unsupported version: {version}")
         raw_rules = document["rules"]
         if not isinstance(raw_rules, list):

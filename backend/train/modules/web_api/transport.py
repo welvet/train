@@ -10,7 +10,10 @@ from pathlib import Path
 
 from aiohttp import web
 
-from automation_tree import AutomationParseError
+from automation_tree import (
+    AutomationParseError,
+    CURRENT_AUTOMATION_DOCUMENT_VERSION,
+)
 
 from train.configuration import ConfigurationConflict, ConfigurationError
 from train.core.event_bus import CommandFailed, CommandResourceNotFound, EventBus
@@ -317,7 +320,10 @@ class WebApiServer:
 
 def _empty_automation_snapshot() -> dict[str, object]:
     return {
-        "document": {"version": 1, "rules": []},
+        "document": {
+            "version": CURRENT_AUTOMATION_DOCUMENT_VERSION,
+            "rules": [],
+        },
         "eligible_train_ids": [],
         "paused": False,
         "statuses": [],

@@ -7,7 +7,7 @@ import logging
 import os
 import tempfile
 from collections.abc import Callable, Iterable, Mapping, Set
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 
 from automation_tree import (
@@ -16,6 +16,7 @@ from automation_tree import (
     AutomationParser,
     AutomationRunner,
     BranchFunction,
+    CURRENT_AUTOMATION_DOCUMENT_VERSION,
     FunctionRegistry,
     IfCountFunction,
     OnCountFunction,
@@ -48,6 +49,14 @@ from train.domain import (
 COMMAND_TIMEOUT = 3.0
 
 
+class _PersistenceRollbackError(RuntimeError):
+    pass
+
+
+class _ActivationRollbackError(RuntimeError):
+    pass
+
+
 class AutomationModule(Module):
     """Connect the configurable automation engine to the train runtime."""
 
@@ -69,21 +78,53 @@ class AutomationModule(Module):
             self._functions,
             status_changed=self._notify_changed,
         )
-        self._document_json: dict[str, object] = {"version": 1, "rules": []}
+        self._document_json: dict[str, object] = {
+            "version": CURRENT_AUTOMATION_DOCUMENT_VERSION,
+            "rules": [],
+        }
         self._replace_lock = asyncio.Lock()
+        self._replacements_pending = 0
         self._updates: set[asyncio.Task[dict[str, object]]] = set()
         self._started = False
+        self._terminal_error: BaseException | None = None
         self._change_handlers: set[Callable[[], None]] = set()
         self._log = logging.getLogger("train.automation")
 
     async def start(self) -> None:
-        document, document_json = load_automation_file(
-            self._path,
-            parser=self._parser,
-            state=self.bus.state,
-            tagged_trains=self._tagged_trains,
-        )
-        await self._runner.replace(document)
+        if self._terminal_error is not None:
+            raise RuntimeError("automation module is terminal") from self._terminal_error
+        try:
+            document, document_json, original_json = load_automation_file(
+                self._path,
+                parser=self._parser,
+                state=self.bus.state,
+                tagged_trains=self._tagged_trains,
+            )
+        except BaseException as exc:
+            self._terminal_error = exc
+            await self._runner.close()
+            raise
+        try:
+            await self._runner.replace(document)
+        except BaseException as activation_error:
+            failure: BaseException = activation_error
+            if original_json != document_json:
+                try:
+                    _persist_with_rollback(
+                        self._path,
+                        original_json,
+                        rollback_document=document_json,
+                    )
+                except BaseException as rollback_error:
+                    failure = _ActivationRollbackError(
+                        "automation startup activation failed and the original "
+                        f"document could not be restored: {rollback_error}"
+                    )
+            self._terminal_error = failure
+            await self._runner.close()
+            if failure is activation_error:
+                raise
+            raise failure from activation_error
         if self.bus.state.automation.halted:
             await self._runner.pause()
         self.bus.subscribe(TagDetected, self._on_tag_detected)
@@ -112,7 +153,7 @@ class AutomationModule(Module):
 
     @property
     def healthy(self) -> bool:
-        return self._started
+        return self._started and self._terminal_error is None
 
     def snapshot(self) -> dict[str, object]:
         return {
@@ -163,6 +204,10 @@ class AutomationModule(Module):
         """Validate, persist, and activate a complete replacement document."""
         if not self._started:
             raise RuntimeError("automation module is not running")
+        if self._terminal_error is not None:
+            raise RuntimeError(
+                "automation module is terminal"
+            ) from self._terminal_error
         document = self._parser.parse_json(text)
         validate_automation_topology(
             document,
@@ -172,11 +217,17 @@ class AutomationModule(Module):
         raw_document = json.loads(text)
         if not isinstance(raw_document, dict):
             raise AutomationParseError("$", "must be an object")
+        document, raw_document = _upgrade_document(document, raw_document)
 
-        update: asyncio.Task[dict[str, object]] = asyncio.create_task(
-            self._replace(document, raw_document),
-            name="automation-replacement",
-        )
+        self._replacements_pending += 1
+        try:
+            update: asyncio.Task[dict[str, object]] = asyncio.create_task(
+                self._replace_tracked(document, raw_document),
+                name="automation-replacement",
+            )
+        except BaseException:
+            self._replacements_pending -= 1
+            raise
         self._updates.add(update)
         update.add_done_callback(self._updates.discard)
         try:
@@ -186,36 +237,73 @@ class AutomationModule(Module):
             raise
         return update.result()
 
+    async def _replace_tracked(
+        self,
+        document: AutomationDocument,
+        raw_document: dict[str, object],
+    ) -> dict[str, object]:
+        try:
+            return await self._replace(document, raw_document)
+        finally:
+            self._replacements_pending -= 1
+
     async def _replace(
         self,
         document: AutomationDocument,
         raw_document: dict[str, object],
     ) -> dict[str, object]:
         async with self._replace_lock:
-            staged = _stage_document(self._path, raw_document)
+            if self._terminal_error is not None:
+                raise RuntimeError(
+                    "automation module is terminal"
+                ) from self._terminal_error
             previous = self._runner.document
             previous_json = self._document_json
             try:
-                _replace_document(staged, self._path)
+                _persist_with_rollback(
+                    self._path,
+                    raw_document,
+                    rollback_document=previous_json,
+                )
+            except _PersistenceRollbackError as exc:
+                await self._enter_terminal(exc)
+                raise
+            try:
+                await self._runner.replace(document, preserve_unchanged=False)
+            except BaseException as activation_error:
                 try:
-                    await self._runner.replace(document, preserve_unchanged=False)
-                except BaseException:
-                    rollback = _stage_document(self._path, previous_json)
-                    try:
-                        _replace_document(rollback, self._path)
-                    finally:
-                        rollback.unlink(missing_ok=True)
-                    await self._runner.replace(previous)
-                    raise
-                self._document_json = copy.deepcopy(raw_document)
-            finally:
-                staged.unlink(missing_ok=True)
+                    _persist_with_rollback(
+                        self._path,
+                        previous_json,
+                        rollback_document=raw_document,
+                    )
+                except BaseException as rollback_error:
+                    failure = _ActivationRollbackError(
+                        "automation activation failed and the previous persisted "
+                        f"document could not be restored: {rollback_error}"
+                    )
+                    await self._enter_terminal(failure)
+                    raise failure from activation_error
+                if self._runner.document != previous:
+                    failure = _ActivationRollbackError(
+                        "automation activation failed after changing the runner"
+                    )
+                    await self._enter_terminal(failure)
+                    raise failure from activation_error
+                raise
+            self._document_json = copy.deepcopy(raw_document)
             self._log.info(
                 "Applied automation document with %d rule(s)", len(document.rules)
             )
             return self.snapshot()
 
     async def _on_tag_detected(self, event: TagDetected) -> None:
+        if (
+            self._terminal_error is not None
+            or not self._started
+            or self._replacements_pending
+        ):
+            return
         await self._runner.trigger(Trigger(
             hub_id=event.hub_name,
             detector_id=event.detector_name,
@@ -223,12 +311,22 @@ class AutomationModule(Module):
         ))
 
     async def _on_halt(self, event: AutomationHalt) -> None:
-        await self._runner.pause()
-        self._log.info("Automation paused")
+        async with self._replace_lock:
+            if self._terminal_error is not None or not self._started:
+                return
+            await self._runner.pause()
+            self._log.info("Automation paused")
 
     async def _on_resume(self, event: AutomationResume) -> None:
-        await self._runner.resume()
-        self._log.info("Automation resumed")
+        async with self._replace_lock:
+            if self._terminal_error is not None or not self._started:
+                return
+            await self._runner.resume()
+            self._log.info("Automation resumed")
+
+    async def _enter_terminal(self, error: BaseException) -> None:
+        self._terminal_error = error
+        await self._runner.close()
 
     def _notify_changed(self) -> None:
         for handler in tuple(self._change_handlers):
@@ -281,7 +379,11 @@ def load_automation_file(
     parser: AutomationParser,
     state: SystemState,
     tagged_trains: Set[str],
-) -> tuple[AutomationDocument, dict[str, object]]:
+) -> tuple[
+    AutomationDocument,
+    dict[str, object],
+    dict[str, object],
+]:
     try:
         text = path.read_text()
     except FileNotFoundError as exc:
@@ -297,7 +399,14 @@ def load_automation_file(
     raw_document = json.loads(text)
     if not isinstance(raw_document, dict):
         raise AutomationParseError("$", "must be an object")
-    return document, raw_document
+    document, upgraded_document = _upgrade_document(document, raw_document)
+    if upgraded_document != raw_document:
+        _persist_with_rollback(
+            path,
+            upgraded_document,
+            rollback_document=raw_document,
+        )
+    return document, upgraded_document, raw_document
 
 
 def create_automation_parser(
@@ -390,6 +499,48 @@ def _stage_document(path: Path, document: Mapping[str, object]) -> Path:
         staged.unlink(missing_ok=True)
         raise
     return staged
+
+
+def _upgrade_document(
+    document: AutomationDocument,
+    raw_document: dict[str, object],
+) -> tuple[AutomationDocument, dict[str, object]]:
+    if document.version == CURRENT_AUTOMATION_DOCUMENT_VERSION:
+        return document, raw_document
+    upgraded = copy.deepcopy(raw_document)
+    upgraded["version"] = CURRENT_AUTOMATION_DOCUMENT_VERSION
+    return replace(
+        document,
+        version=CURRENT_AUTOMATION_DOCUMENT_VERSION,
+    ), upgraded
+
+
+def _persist_with_rollback(
+    path: Path,
+    document: Mapping[str, object],
+    *,
+    rollback_document: Mapping[str, object],
+) -> None:
+    staged = _stage_document(path, document)
+    try:
+        try:
+            _replace_document(staged, path)
+        except BaseException as persistence_error:
+            rollback: Path | None = None
+            try:
+                rollback = _stage_document(path, rollback_document)
+                _replace_document(rollback, path)
+            except BaseException as rollback_error:
+                raise _PersistenceRollbackError(
+                    "automation persistence failed and the previous document "
+                    f"could not be restored: {rollback_error}"
+                ) from persistence_error
+            finally:
+                if rollback is not None:
+                    rollback.unlink(missing_ok=True)
+            raise
+    finally:
+        staged.unlink(missing_ok=True)
 
 
 def _replace_document(staged: Path, destination: Path) -> None:

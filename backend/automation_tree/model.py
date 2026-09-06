@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
+CURRENT_AUTOMATION_DOCUMENT_VERSION = 3
+
 
 @dataclass(frozen=True, slots=True)
 class Trigger:
