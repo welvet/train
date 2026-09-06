@@ -1,9 +1,7 @@
-import { Button, SimpleGrid, VisuallyHidden } from "@mantine/core";
+import { NumberInput } from "@mantine/core";
+import { useState } from "react";
 
 import type { SetTrainSpeedNode } from "../types";
-import classes from "../automation.module.css";
-
-const STANDARD_SPEEDS = [-100, -50, 0, 50, 100] as const;
 
 export function SetTrainSpeedEditor({
   node,
@@ -12,29 +10,40 @@ export function SetTrainSpeedEditor({
   readonly node: SetTrainSpeedNode;
   readonly onChange: (node: SetTrainSpeedNode) => void;
 }) {
-  const speeds = STANDARD_SPEEDS.includes(node.speed as (typeof STANDARD_SPEEDS)[number])
-    ? STANDARD_SPEEDS
-    : [...STANDARD_SPEEDS, node.speed];
+  const [draft, setDraft] = useState<{ source: number; value: number | string }>({
+    source: node.speed,
+    value: node.speed,
+  });
+  const inputValue = draft.source === node.speed ? draft.value : node.speed;
+  const inputError = getSpeedError(inputValue);
 
   return (
-    <fieldset className={classes.choiceFieldset}>
-      <VisuallyHidden component="legend">Choose train speed</VisuallyHidden>
-      <SimpleGrid cols={{ base: 3, sm: speeds.length }} spacing="xs">
-        {speeds.map((speed) => (
-          <Button
-            key={speed}
-            variant={node.speed === speed ? "filled" : "light"}
-            size="md"
-            className={classes.choiceButton}
-            onClick={() => onChange({ ...node, speed })}
-            aria-label={speed === 0 ? "Stop train" : `Set train speed to ${speed}%`}
-            aria-pressed={node.speed === speed}
-          >
-            <span aria-hidden>{speed < 0 ? "◀️" : speed > 0 ? "▶️" : "⏹️"}</span>
-            <span>{speed === 0 ? "Stop" : `${Math.abs(speed)}%`}</span>
-          </Button>
-        ))}
-      </SimpleGrid>
-    </fieldset>
+    <NumberInput
+      label="Train speed (%)"
+      description="Whole number from -100 to 100; use 0 to stop"
+      value={inputValue}
+      min={-100}
+      max={100}
+      step={1}
+      clampBehavior="none"
+      error={inputError}
+      onChange={(speed) => {
+        setDraft({ source: node.speed, value: speed });
+        if (getSpeedError(speed)) return;
+        if (typeof speed !== "number") return;
+        onChange({ ...node, speed });
+      }}
+      onBlur={() => {
+        if (inputError) setDraft({ source: node.speed, value: node.speed });
+      }}
+    />
   );
+}
+
+function getSpeedError(value: number | string): string | undefined {
+  if (typeof value !== "number" || !Number.isInteger(value)) {
+    return "Enter a whole number from -100 to 100";
+  }
+  if (value < -100 || value > 100) return "Speed must be from -100 to 100";
+  return undefined;
 }
