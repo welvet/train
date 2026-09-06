@@ -329,7 +329,7 @@ TEST(eventLedStopsUsingSpiClockPinWhenReadersAreConfigured) {
   resetFakes();
   EventBus bus;
   ControllerModel model;
-  train::EventLedModule led(bus, model);
+  train::EventLedModule led(bus, model, true);
   CHECK(led.setup());
   model.readersUseSpi = true;
   bus.publish(train::ConfigurationChangedEvent());
@@ -360,6 +360,7 @@ TEST(protocolDisconnectsWhenConfigurationDoesNotArrive) {
   protocol.trigger();
   CHECK(disconnects.values ==
         std::vector<EventType>({EventType::DisconnectRequested}));
+  CHECK(fake_arduino::serialOutput.empty());
 }
 
 TEST(protocolRejectsNumericConfigurationBeforeNarrowing) {
@@ -427,6 +428,30 @@ TEST(protocolRejectsReaderTimeoutBeforeNarrowing) {
   JsonDocument rejection = parseJson(output.values.back());
   CHECK(rejection["event"] == "config_rejected");
   CHECK(rejection["reason"] == "invalid_configuration");
+}
+
+TEST(protocolRejectsReaderTimeoutTotalAboveHeartbeatBudget) {
+  EventBus bus;
+  ControllerModel model;
+  train::ProtocolModule protocol(bus, model);
+  JsonCollector output;
+  CHECK(protocol.setup());
+  CHECK(bus.subscribe(
+      train::eventMask(EventType::OutboundDocument),
+      &output,
+      JsonCollector::receive));
+
+  bus.publish(BackendConnectedEvent());
+  bus.publish(InboundLineEvent(
+      "{\"cmd\":\"configure\",\"schema\":1,\"hub\":\"yard\","
+      "\"servo_settle_ms\":500,\"switches\":[],\"readers\":["
+      "{\"id\":\"D1\",\"ss_pin\":4,\"read_timeout_ms\":600,"
+      "\"removal_delay_ms\":750},{\"id\":\"D2\",\"ss_pin\":5,"
+      "\"read_timeout_ms\":500,\"removal_delay_ms\":750}],"
+      "\"revision\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"}"));
+
+  CHECK(!model.configurationApplied);
+  CHECK(parseJson(output.values.back())["event"] == "config_rejected");
 }
 
 TEST(protocolSuppressesStaleTagEventsDuringConfigurationHandshake) {
@@ -631,37 +656,34 @@ TEST(readerModuleTracksDetectionReplacementAndRemoval) {
   CHECK(changes.values[0].detected);
   CHECK(changes.values[0].uid == std::vector<uint8_t>({0x04, 0xA1}));
 
-  fake_pn532::queueMiss(1);
-  readers.trigger();
   fake_arduino::now = 100;
   fake_pn532::queueRead(0, {0x04, 0xA1});
+  fake_pn532::queueMiss(1);
   readers.trigger();
   CHECK(changes.values.size() == 1);
 
-  fake_pn532::queueMiss(1);
-  readers.trigger();
   fake_arduino::now = 200;
   fake_pn532::queueRead(0, {0x04, 0xB2});
+  fake_pn532::queueMiss(1);
   readers.trigger();
   CHECK(changes.values.size() == 2);
   CHECK(changes.values[1].detected);
   CHECK(changes.values[1].uid == std::vector<uint8_t>({0x04, 0xB2}));
 
-  fake_pn532::queueMiss(1);
-  readers.trigger();
   fake_arduino::now = 949;
   fake_pn532::queueMiss(0);
-  readers.trigger();
-  CHECK(changes.values.size() == 2);
   fake_pn532::queueMiss(1);
   readers.trigger();
+  CHECK(changes.values.size() == 2);
   fake_arduino::now = 950;
   fake_pn532::queueMiss(0);
+  fake_pn532::queueMiss(1);
   readers.trigger();
   CHECK(changes.values.size() == 3);
   CHECK(!changes.values[2].detected);
   CHECK(changes.values[2].uid == std::vector<uint8_t>({0x04, 0xB2}));
   CHECK(!model.readers[0].tagPresent);
+  CHECK(fake_arduino::serialOutput.empty());
 }
 
 TEST(readerFailureDoesNotDisableOtherReaders) {
@@ -686,12 +708,68 @@ TEST(readerFailureDoesNotDisableOtherReaders) {
       &changes,
       TagCollector::receive));
 
-  readers.trigger();
   fake_pn532::queueRead(1, {0x01, 0x02, 0x03});
   readers.trigger();
   CHECK(changes.values.size() == 1);
   CHECK(changes.values[0].index == 1);
   CHECK(changes.values[0].detected);
+}
+
+TEST(readerModulePollsEveryOperationalReaderPerTrigger) {
+  resetFakes();
+  EventBus bus;
+  ControllerModel model;
+  configureTestModel(model);
+  train::ReaderModule readers(bus, model);
+
+  CHECK(readers.setup());
+  model.configurationPending = true;
+  bus.publish(train::ConfigurationChangedEvent());
+  readers.trigger();
+  readers.trigger();
+  readers.trigger();
+
+  fake_pn532::readTimeouts.clear();
+  fake_pn532::queueMiss(0);
+  fake_pn532::queueMiss(1);
+  readers.trigger();
+
+  CHECK(fake_pn532::readTimeouts == std::vector<uint16_t>({25, 25}));
+}
+
+TEST(readerBatchLeavesTimeToProcessHeartbeat) {
+  resetFakes();
+  EventBus bus;
+  ControllerModel model;
+  configureTestModel(model);
+  model.config.readers[0].readTimeoutMs = 500;
+  model.config.readers[1].readTimeoutMs = 500;
+  train::ReaderModule readers(bus, model);
+  train::ProtocolModule protocol(bus, model);
+  JsonCollector output;
+
+  CHECK(readers.setup());
+  CHECK(protocol.setup());
+  CHECK(bus.subscribe(
+      train::eventMask(EventType::OutboundDocument),
+      &output,
+      JsonCollector::receive));
+  model.configurationPending = true;
+  bus.publish(train::ConfigurationChangedEvent());
+  readers.trigger();
+  readers.trigger();
+  readers.trigger();
+  model.configurationApplied = true;
+
+  fake_pn532::advanceWorstCaseTime = true;
+  fake_pn532::queueMiss(0);
+  fake_pn532::queueMiss(1);
+  readers.trigger();
+  CHECK(fake_arduino::now == 2004);
+
+  bus.publish(InboundLineEvent("{\"cmd\":\"ping\"}"));
+  CHECK(fake_arduino::now < 3000);
+  CHECK(parseJson(output.values.back())["event"] == "pong");
 }
 
 TEST(transportConnectsFramesLinesAndSerializesDocuments) {
@@ -858,7 +936,7 @@ TEST(eventLedBlipsOnEveryEvent) {
   resetFakes();
   EventBus bus;
   ControllerModel model;
-  train::EventLedModule led(bus, model);
+  train::EventLedModule led(bus, model, true);
 
   CHECK(led.setup());
   CHECK(fake_arduino::pinModes.size() == 1);
@@ -888,6 +966,20 @@ TEST(eventLedBlipsOnEveryEvent) {
   fake_arduino::now = 275;
   led.trigger();
   CHECK(fake_arduino::pinWrites.back().value == HIGH);
+}
+
+TEST(eventLedDoesNothingWhenLoggingIsDisabled) {
+  resetFakes();
+  EventBus bus;
+  ControllerModel model;
+  train::EventLedModule led(bus, model, false);
+
+  CHECK(led.setup());
+  bus.publish(WifiConnectedEvent());
+  led.trigger();
+
+  CHECK(fake_arduino::pinModes.empty());
+  CHECK(fake_arduino::pinWrites.empty());
 }
 
 }  // namespace

@@ -15,8 +15,9 @@ void ReaderModule::trigger() {
     return;
   }
   if (!model_.configurationApplied || model_.config.readerCount == 0) return;
-  updateReader(nextReaderIndex_);
-  if (++nextReaderIndex_ >= model_.config.readerCount) nextReaderIndex_ = 0;
+  for (int index = 0; index < model_.config.readerCount; ++index) {
+    updateReader(index);
+  }
 }
 
 void ReaderModule::receive(void* context, const Event&) {
@@ -28,7 +29,6 @@ void ReaderModule::beginConfiguration() {
     readers_[index] = nullptr;
     model_.readers[index] = {};
   }
-  nextReaderIndex_ = 0;
   provisioningIndex_ = 0;
   if (model_.config.readerCount == 0) {
     model_.configurationPending = false;
@@ -61,8 +61,6 @@ void ReaderModule::provisionNextReader() {
   ReaderState& state = model_.readers[index];
   state.ready =
       readers_[index]->getFirmwareVersion() != 0 && readers_[index]->SAMConfig();
-  Serial.print(config.id);
-  Serial.println(state.ready ? " ready" : " unavailable");
   if (state.ready) scanReader(index, false);
 }
 
@@ -87,8 +85,6 @@ void ReaderModule::scanReader(int index, bool publish) {
       rememberUid(state, uid, uidLength);
       state.tagPresent = true;
       if (publish) publishChange(index, true);
-      Serial.print(config.id);
-      Serial.println(" tag detected");
     }
     return;
   }
@@ -98,8 +94,6 @@ void ReaderModule::scanReader(int index, bool publish) {
     state.tagPresent = false;
     state.uidLength = 0;
     if (publish) bus_.publish(removed);
-    Serial.print(config.id);
-    Serial.println(" tag removed");
   }
 }
 

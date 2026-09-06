@@ -24,7 +24,6 @@ class ReaderModule : public Module {
   static constexpr int kPinSlots = MAX_COMPONENT_PIN - MIN_COMPONENT_PIN + 1;
   Adafruit_PN532* readers_[MAX_READERS] = {nullptr};
   Adafruit_PN532* pinCache_[kPinSlots] = {nullptr};
-  int nextReaderIndex_ = 0;
   int provisioningIndex_ = 0;
 
   static void receive(void* context, const Event& event);

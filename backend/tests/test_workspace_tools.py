@@ -2,12 +2,18 @@ from __future__ import annotations
 
 import importlib.machinery
 import importlib.util
+import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
 
+import pytest
+
 TOOLS = Path(__file__).resolve().parents[2] / "tools"
 sys.path.insert(0, str(TOOLS))
+
+import _arduino_cli  # noqa: E402
+
 
 def _load_tool(name: str) -> ModuleType:
     path = TOOLS / name
@@ -86,3 +92,72 @@ def test_generated_firmware_config_disables_event_logger_by_default() -> None:
     )
 
     assert "constexpr bool EVENT_LOGGER_ENABLED = false;" in result
+
+
+def test_arduino_tool_accepts_supported_pn532_library_version() -> None:
+    _arduino_cli.require_library_version(
+        [{"library": {"name": "Adafruit PN532", "version": "1.3.4"}}],
+        "Adafruit PN532",
+        "1.3.4",
+    )
+
+
+@pytest.mark.parametrize(
+    "libraries",
+    [[], [{"library": {"name": "Adafruit PN532", "version": "1.4.0"}}]],
+)
+def test_arduino_tool_requires_supported_pn532_library_version(
+    libraries: list[dict[str, object]],
+) -> None:
+    with pytest.raises(_arduino_cli.ArduinoCliError, match="1.3.4 is required"):
+        _arduino_cli.require_library_version(
+            libraries,
+            "Adafruit PN532",
+            "1.3.4",
+        )
+
+
+def test_arduino_library_inventory_reports_cli_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail(*args: object, **kwargs: object) -> None:
+        raise subprocess.CalledProcessError(
+            1, ["arduino-cli"], stderr="index unavailable"
+        )
+
+    monkeypatch.setattr(_arduino_cli.subprocess, "run", fail)
+
+    with pytest.raises(
+        _arduino_cli.ArduinoCliError,
+        match="failed to list installed libraries: index unavailable",
+    ):
+        _arduino_cli.installed_libraries()
+
+
+def test_arduino_library_inventory_reports_missing_cli(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail(*args: object, **kwargs: object) -> None:
+        raise FileNotFoundError("arduino-cli")
+
+    monkeypatch.setattr(_arduino_cli.subprocess, "run", fail)
+
+    with pytest.raises(_arduino_cli.ArduinoCliError, match="was not found"):
+        _arduino_cli.installed_libraries()
+
+
+@pytest.mark.parametrize("output", ["not-json", "[]"])
+def test_arduino_library_inventory_rejects_invalid_output(
+    monkeypatch: pytest.MonkeyPatch, output: str
+) -> None:
+    completed = subprocess.CompletedProcess(
+        ["arduino-cli"], returncode=0, stdout=output, stderr=""
+    )
+    monkeypatch.setattr(
+        _arduino_cli.subprocess,
+        "run",
+        lambda *args, **kwargs: completed,
+    )
+
+    with pytest.raises(_arduino_cli.ArduinoCliError, match="invalid"):
+        _arduino_cli.installed_libraries()

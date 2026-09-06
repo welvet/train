@@ -10,6 +10,13 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from _arduino_cli import (
+    ArduinoCliError,
+    PN532_LIBRARY_NAME,
+    PN532_LIBRARY_VERSION,
+    installed_libraries,
+    require_library_version,
+)
 from _workspace import REPO_ROOT, WorkspaceError, arduino_device, arduino_secrets
 
 FIRMWARE = REPO_ROOT / "firmware" / "TrainController"
@@ -52,7 +59,14 @@ def run(command: list[str]) -> None:
     subprocess.run(command, check=True)
 
 
+def verify_firmware_libraries() -> None:
+    require_library_version(
+        installed_libraries(), PN532_LIBRARY_NAME, PN532_LIBRARY_VERSION
+    )
+
+
 def compile_or_upload(device_id: str, upload: bool) -> None:
+    verify_firmware_libraries()
     with tempfile.TemporaryDirectory(prefix="train-firmware-") as directory:
         device, sketch = prepare_sketch(device_id, Path(directory))
         compile_command = [
@@ -94,7 +108,12 @@ def main() -> None:
             compile_or_upload(args.device_id, upload=True)
         else:
             monitor(args.device_id)
-    except (WorkspaceError, subprocess.CalledProcessError) as exc:
+    except (
+        ArduinoCliError,
+        WorkspaceError,
+        subprocess.CalledProcessError,
+        OSError,
+    ) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
 

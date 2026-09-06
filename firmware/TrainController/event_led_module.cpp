@@ -3,6 +3,7 @@
 namespace train {
 
 bool EventLedModule::setup() {
+  if (!enabled_) return true;
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, HIGH);
   return bus_.subscribe(allEventsMask(), this, receive);

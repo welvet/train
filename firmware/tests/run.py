@@ -2,16 +2,27 @@
 from __future__ import annotations
 
 import argparse
-import json
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
+from typing import Any
 
 
 TESTS = Path(__file__).resolve().parent
 FIRMWARE = TESTS.parent / "TrainController"
 REPOSITORY = TESTS.parents[1]
+sys.path.insert(0, str(REPOSITORY / "tools"))
+
+from _arduino_cli import (  # noqa: E402
+    ArduinoCliError,
+    PN532_LIBRARY_NAME,
+    PN532_LIBRARY_VERSION,
+    installed_libraries,
+    require_library_version,
+)
+
 FQBN = "arduino:renesas_uno:unor4wifi"
 
 
@@ -20,18 +31,16 @@ def run(command: list[str]) -> None:
     subprocess.run(command, check=True)
 
 
-def arduino_json_include() -> Path:
-    result = subprocess.run(
-        ["arduino-cli", "lib", "list", "--format", "json"],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    libraries = json.loads(result.stdout).get("installed_libraries", [])
+def arduino_json_include(libraries: list[dict[str, Any]]) -> Path:
     for installed in libraries:
-        library = installed.get("library", {})
+        library = installed.get("library")
+        if not isinstance(library, dict):
+            continue
         if library.get("name") == "ArduinoJson":
-            source = Path(library["source_dir"])
+            source_dir = library.get("source_dir")
+            if not isinstance(source_dir, str):
+                continue
+            source = Path(source_dir)
             if source.is_dir():
                 return source
     raise SystemExit(
@@ -40,7 +49,7 @@ def arduino_json_include() -> Path:
     )
 
 
-def run_host_tests(build: Path) -> None:
+def run_host_tests(build: Path, libraries: list[dict[str, Any]]) -> None:
     compiler = shutil.which("c++") or shutil.which("g++")
     if compiler is None:
         raise SystemExit("A C++17 compiler is required for firmware tests.")
@@ -60,7 +69,7 @@ def run_host_tests(build: Path) -> None:
         "-I",
         str(FIRMWARE),
         "-isystem",
-        str(arduino_json_include()),
+        str(arduino_json_include(libraries)),
         *(str(source) for source in sources),
         str(TESTS / "firmware_tests.cpp"),
         "-o",
@@ -91,12 +100,19 @@ def main() -> None:
     if args.host_only and args.compile_only:
         parser.error("--host-only and --compile-only cannot be combined")
 
-    with tempfile.TemporaryDirectory(prefix="train-firmware-tests-") as directory:
-        build = Path(directory)
-        if not args.compile_only:
-            run_host_tests(build)
-        if not args.host_only:
-            run_board_compile(build)
+    try:
+        libraries = installed_libraries()
+        require_library_version(
+            libraries, PN532_LIBRARY_NAME, PN532_LIBRARY_VERSION
+        )
+        with tempfile.TemporaryDirectory(prefix="train-firmware-tests-") as directory:
+            build = Path(directory)
+            if not args.compile_only:
+                run_host_tests(build, libraries)
+            if not args.host_only:
+                run_board_compile(build)
+    except (ArduinoCliError, subprocess.CalledProcessError) as exc:
+        raise SystemExit(f"Error: {exc}") from exc
 
 
 if __name__ == "__main__":

@@ -23,11 +23,11 @@ train::WifiModule wifi(bus, model);
 train::Module* modules[] = {
     &eventLogger,
     &eventLed,
+    &wifi,
     &transport,
     &protocol,
     &switches,
     &readers,
-    &wifi,
 };
 constexpr size_t moduleCount = sizeof(modules) / sizeof(modules[0]);
 static_assert(
@@ -38,11 +38,7 @@ bool controllerReady = false;
 void setup() {
   Serial.begin(SERIAL_BAUDRATE);
   for (size_t index = 0; index < moduleCount; ++index) {
-    if (!modules[index]->setup()) {
-      Serial.print("Module setup failed at index ");
-      Serial.println(index);
-      return;
-    }
+    if (!modules[index]->setup()) return;
   }
   controllerReady = true;
 }
