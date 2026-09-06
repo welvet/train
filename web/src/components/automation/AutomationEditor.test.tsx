@@ -78,7 +78,7 @@ it("explains that automation needs a tagged train", () => {
   expect(screen.getByText("Add a tag to a train first")).toBeVisible();
 });
 
-it("builds a rule through large picture controls", () => {
+it("builds a rule through compact picture controls", () => {
   const getDocument = renderEditor();
   fireEvent.click(screen.getByRole("button", { name: "Create automation for yard / D1" }));
 

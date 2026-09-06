@@ -25,7 +25,7 @@ export function OnCountEditor({
             <Button
               key={count}
               variant={node.count === count ? "filled" : "light"}
-              size="lg"
+              size="md"
               className={classes.choiceButton}
               onClick={() => onChange({ ...node, count })}
               aria-label={`Run on detection ${count}`}
@@ -42,7 +42,7 @@ export function OnCountEditor({
         <SimpleGrid cols={2} spacing="xs">
           <Button
             variant={node.mode === "once" ? "filled" : "light"}
-            size="lg"
+            size="md"
             className={classes.choiceButton}
             onClick={() => onChange({ ...node, mode: "once" })}
             aria-label="Run once"
@@ -53,7 +53,7 @@ export function OnCountEditor({
           </Button>
           <Button
             variant={node.mode === "repeat" ? "filled" : "light"}
-            size="lg"
+            size="md"
             className={classes.choiceButton}
             onClick={() => onChange({ ...node, mode: "repeat" })}
             aria-label="Repeat forever"

@@ -96,14 +96,14 @@ export function AutomationEditor({
       <VisuallyHidden component="legend">
         Automation for {hubId} / {detectorId}
       </VisuallyHidden>
-      <Box mt="md" className={classes.editor}>
+      <Box mt="sm" className={classes.editor}>
         <Group justify="space-between" align="center">
           <Group gap="xs">
             <Text className={classes.titleEmoji} aria-hidden>⚙️</Text>
-            <Text fw={800}>Automation</Text>
+            <Text fw={800} size="sm">Automation</Text>
           </Group>
           {indexedRules.length > 0 && (
-            <Badge color="green" variant="light" size="lg">⚡ On</Badge>
+            <Badge color="green" variant="light" size="sm">⚡ On</Badge>
           )}
         </Group>
 
@@ -117,10 +117,10 @@ export function AutomationEditor({
         ))}
 
         {indexedRules.length === 0 ? (
-          <Paper withBorder radius="lg" p="lg" mt="sm" className={classes.emptyState}>
-            <Stack align="center">
+          <Paper withBorder radius="lg" p="sm" mt="xs" className={classes.emptyState}>
+            <Stack align="center" gap="xs">
               <Button
-                size="xl"
+                size="md"
                 onClick={createRule}
                 disabled={topology.trainIds.length === 0}
                 aria-label={`Create automation for ${hubId} / ${detectorId}`}
@@ -128,12 +128,12 @@ export function AutomationEditor({
                 🚂 Build
               </Button>
               {topology.trainIds.length === 0 && (
-                <Text size="sm" c="orange">Add a tag to a train first</Text>
+                <Text size="xs" c="orange">Add a tag to a train first</Text>
               )}
             </Stack>
           </Paper>
         ) : (
-          <Stack gap="md" mt="sm">
+          <Stack gap="sm" mt="xs">
             {indexedRules.map(({ rule, index }) => (
               <RuleEditor
                 key={`${index}-${rule.id}`}
@@ -163,7 +163,7 @@ export function AutomationEditor({
             ))}
             <Button
               variant="light"
-              size="lg"
+              size="md"
               className={classes.addRuleButton}
               onClick={createRule}
               disabled={availableTrainIds.length === 0}
@@ -194,8 +194,8 @@ function RuleEditor({
   readonly onRemove: () => void;
 }) {
   return (
-    <Paper withBorder radius="lg" p={{ base: "sm", sm: "md" }} className={classes.ruleCard}>
-      <Stack gap="md">
+    <Paper withBorder radius="lg" p="sm" className={classes.ruleCard}>
+      <Stack gap="sm">
         <fieldset className={classes.choiceFieldset}>
           <VisuallyHidden component="legend">Choose a train</VisuallyHidden>
           <SimpleGrid cols={{ base: 1, sm: Math.min(topology.trainIds.length, 3) }} spacing="xs">
@@ -204,7 +204,7 @@ function RuleEditor({
                 key={trainId}
                 variant={rule.root.train_id === trainId ? "filled" : "light"}
                 color="violet"
-                size="xl"
+                size="md"
                 className={classes.trainButton}
                 disabled={unavailableTrainIds.includes(trainId)}
                 onClick={() => onTrainChange(trainId)}
@@ -229,7 +229,7 @@ function RuleEditor({
         <Button
           variant="light"
           color="red"
-          size="lg"
+          size="md"
           className={classes.removeRuleButton}
           onClick={onRemove}
           aria-label={`Remove automation for ${rule.root.train_id}`}

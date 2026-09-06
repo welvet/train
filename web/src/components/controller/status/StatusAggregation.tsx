@@ -85,65 +85,6 @@ export function StatusAggregation({
         </Group>
       </Paper>
 
-      <Paper withBorder radius="md" p="md">
-        <Group gap="xs">
-          <Text fw={800}>Automation</Text>
-          <Badge
-            color={changedElsewhere ? "orange" : dirty ? "yellow" : "green"}
-            variant="light"
-            size="lg"
-          >
-            {changedElsewhere
-              ? "Changed elsewhere"
-              : dirty
-                ? "Unsaved"
-                : "Saved"}
-          </Badge>
-        </Group>
-        {changedElsewhere && (
-          <Alert color="orange" title="Active automation changed" mt="sm">
-            <Stack gap="xs" align="flex-start">
-              <Text size="sm">
-                {dirty
-                  ? "Reload the active tree before editing further so this draft does not overwrite newer changes."
-                  : "Reload to display the latest active automation tree."}
-              </Text>
-              <Button variant="light" color="orange" size="xs" onClick={reloadAutomation}>
-                Reload active automation
-              </Button>
-            </Stack>
-          </Alert>
-        )}
-        {!changedElsewhere && visibleValidationError && (
-          <Alert color="red" title="Automation draft cannot be saved" mt="sm">
-            {invalidDormantRules.length > 0 ? (
-              <Stack gap="xs" align="flex-start">
-                <Text size="sm">
-                  {invalidDormantRules.length === 1
-                    ? "An old hidden rule no longer matches the railway."
-                    : `${invalidDormantRules.length} old hidden rules no longer match the railway.`}
-                </Text>
-                <Button
-                  color="red"
-                  variant="light"
-                  size="lg"
-                  onClick={() => {
-                    const invalidRules = new Set(invalidDormantRules);
-                    setAutomationDocument({
-                      version: 1,
-                      rules: automationDocument.rules.filter((rule) => !invalidRules.has(rule)),
-                    });
-                  }}
-                  aria-label="Remove dormant rules that no longer match the railway"
-                >
-                  🧹 Clean up
-                </Button>
-              </Stack>
-            ) : visibleValidationError}
-          </Alert>
-        )}
-      </Paper>
-
       <StatusGroup
         title="Trains"
         empty="No trains are configured."
@@ -171,17 +112,81 @@ export function StatusAggregation({
         ))}
       </StatusGroup>
 
-      <Group justify="flex-end">
-        <Button
-          size="lg"
-          loading={automationSaving}
-          disabled={!dirty || changedElsewhere || validationError !== null}
-          onClick={() => void saveAutomation().catch(() => undefined)}
-          aria-label="Save automation"
-        >
-          💾 Save
-        </Button>
-      </Group>
+      <Paper
+        component="section"
+        aria-label="Automation save status"
+        withBorder
+        radius="md"
+        p="sm"
+      >
+        <Group justify="space-between" align="center" wrap="wrap" gap="xs">
+          <Group gap="xs">
+            <Text fw={800} size="sm">Automation</Text>
+            <Badge
+              color={changedElsewhere ? "orange" : dirty ? "yellow" : "green"}
+              variant="light"
+              size="sm"
+            >
+              {changedElsewhere
+                ? "Changed elsewhere"
+                : dirty
+                  ? "Unsaved"
+                  : "Saved"}
+            </Badge>
+          </Group>
+          <Button
+            size="md"
+            loading={automationSaving}
+            disabled={!dirty || changedElsewhere || validationError !== null}
+            onClick={() => void saveAutomation().catch(() => undefined)}
+            aria-label="Save automation"
+          >
+            💾 Save
+          </Button>
+        </Group>
+        {changedElsewhere && (
+          <Alert color="orange" title="Active automation changed" mt="sm">
+            <Stack gap="xs" align="flex-start">
+              <Text size="sm">
+                {dirty
+                  ? "Reload the active tree before editing further so this draft does not overwrite newer changes."
+                  : "Reload to display the latest active automation tree."}
+              </Text>
+              <Button variant="light" color="orange" size="xs" onClick={reloadAutomation}>
+                Reload active automation
+              </Button>
+            </Stack>
+          </Alert>
+        )}
+        {!changedElsewhere && visibleValidationError && (
+          <Alert color="red" title="Automation draft cannot be saved" mt="sm">
+            {invalidDormantRules.length > 0 ? (
+              <Stack gap="xs" align="flex-start">
+                <Text size="sm">
+                  {invalidDormantRules.length === 1
+                    ? "An old hidden rule no longer matches the railway."
+                    : `${invalidDormantRules.length} old hidden rules no longer match the railway.`}
+                </Text>
+                <Button
+                  color="red"
+                  variant="light"
+                  size="md"
+                  onClick={() => {
+                    const invalidRules = new Set(invalidDormantRules);
+                    setAutomationDocument({
+                      version: 1,
+                      rules: automationDocument.rules.filter((rule) => !invalidRules.has(rule)),
+                    });
+                  }}
+                  aria-label="Remove dormant rules that no longer match the railway"
+                >
+                  🧹 Clean up
+                </Button>
+              </Stack>
+            ) : visibleValidationError}
+          </Alert>
+        )}
+      </Paper>
     </Stack>
   );
 }

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
 
 import type { AutomationDocument } from "@/src/components/automation/types";
@@ -25,14 +25,22 @@ const externalDocument: AutomationDocument = {
   ],
 };
 
-it("renders the save control below the automation editors", () => {
+it("renders the automation status with its save control below the editors", () => {
   renderStatus(emptyDocument, vi.fn());
 
   const createAutomation = screen.getByRole("button", {
     name: "Create automation for yard / D1",
   });
-  const saveAutomation = screen.getByRole("button", { name: "Save automation" });
+  const automationStatus = screen.getByRole("region", {
+    name: "Automation save status",
+  });
+  const saveAutomation = within(automationStatus).getByRole("button", {
+    name: "Save automation",
+  });
 
+  expect(automationStatus).toHaveTextContent("Automation");
+  expect(automationStatus).toHaveTextContent("Saved");
+  expect(automationStatus.nextElementSibling).toBeNull();
   expect(
     createAutomation.compareDocumentPosition(saveAutomation) &
       Node.DOCUMENT_POSITION_FOLLOWING,

@@ -24,7 +24,7 @@ export function SetTrainSpeedEditor({
           <Button
             key={speed}
             variant={node.speed === speed ? "filled" : "light"}
-            size="lg"
+            size="md"
             className={classes.choiceButton}
             onClick={() => onChange({ ...node, speed })}
             aria-label={speed === 0 ? "Stop train" : `Set train speed to ${speed}%`}

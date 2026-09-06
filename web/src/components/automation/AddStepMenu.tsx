@@ -27,7 +27,7 @@ export function AddStepMenu({
         <Button
           key={step.type}
           variant="light"
-          size="lg"
+          size="md"
           className={classes.pictureButton}
           disabled={step.type === "set_switch" && !hasSwitches}
           onClick={() => onAdd(step.type)}
