@@ -23,6 +23,7 @@ import {
   type TrainsConfiguration,
   TrainApiClient,
 } from "@/src/api/train-api-client";
+import { ArduinoConfigurationSection } from "./ArduinoConfigurationSection";
 
 const CONFIGURATION_QUERY_KEY = ["configuration"] as const;
 
@@ -242,6 +243,13 @@ export function ConfigurationPage() {
           Save configuration
         </Button>
       </Group>
+
+      <ArduinoConfigurationSection
+        stored={configurationQuery.data?.documents.arduinos}
+        onSaved={(configuration) => {
+          queryClient.setQueryData(CONFIGURATION_QUERY_KEY, configuration);
+        }}
+      />
     </Stack>
   );
 }

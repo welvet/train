@@ -179,6 +179,9 @@ class ServerLoop:
         trains = self.root / "data" / "trains.json"
         self._seed_file(release / "data" / "trains.json", trains)
         environment["TRAIN_TRAINS_PATH"] = str(trains)
+        arduinos = self.root / "data" / "arduinos.json"
+        self._seed_file(release / "data" / "arduinos.json", arduinos)
+        environment["TRAIN_ARDUINOS_PATH"] = str(arduinos)
         automations = self.root / "data" / "automations.json"
         self._seed_automations(release / "data" / "automations.json", automations)
         environment["TRAIN_AUTOMATIONS_PATH"] = str(automations)

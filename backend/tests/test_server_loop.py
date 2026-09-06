@@ -173,6 +173,22 @@ def test_train_configuration_seed_is_persistent_across_releases(
     assert destination.read_text() == first.read_text()
 
 
+def test_arduino_configuration_seed_is_persistent_across_releases(
+    tmp_path: Path,
+) -> None:
+    server_loop = _load_tool("server-loop")
+    first = tmp_path / "first.json"
+    second = tmp_path / "second.json"
+    destination = tmp_path / "data" / "arduinos.json"
+    first.write_text('{"devices": {"first": {}}}')
+    second.write_text('{"devices": {"second": {}}}')
+
+    server_loop.ServerLoop._seed_file(first, destination)
+    server_loop.ServerLoop._seed_file(second, destination)
+
+    assert destination.read_text() == first.read_text()
+
+
 def test_failed_automation_seed_does_not_leave_partial_destination(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

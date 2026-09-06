@@ -104,6 +104,24 @@ time from the backend. The backend uses the configuration loaded at startup;
 restart it after changing `arduinos.json`, and connected devices will reconnect
 and fetch the new configuration automatically.
 
+The complete non-secret Arduino document is also available through
+`GET /api/configuration` and can be replaced as the single `arduinos` document
+in `PUT /api/configuration`. The web Configuration page groups fields by how
+they become active:
+
+- hub identity, servo timing, compatibility policy, switches, and readers need
+  a backend restart; boards reconnect and fetch them automatically;
+- device identity also needs the matching local `secrets.json` key, a firmware
+  upload, and a backend restart;
+- backend connection, baud, reconnect, and event-logger settings need local
+  synchronization followed by a firmware upload; and
+- serial port and FQBN affect only the canonical provisioning workstation and
+  must be synchronized there before running `tools/arduino`.
+
+The API never reads or exposes `secrets.json`. Removing a device decommissions
+its flashed board: the backend rejects that device ID after restart until the
+entry is restored or the board is reprovisioned.
+
 Runtime hardware configuration is bounded for the UNO R4 WiFi: at most eight
 switches, eight readers, 16 ASCII letters/digits/underscore/hyphen characters
 per device, hub, or component ID, and unique
@@ -221,13 +239,23 @@ with a unique publication attempt is updated last to trigger activation. The
 command returns only after both the FTP activation marker and the backend's
 release-aware health endpoint agree.
 
-Before building, `server-push` synchronizes `trains.json` with the running
-backend. If the documents differ, the file with the newer modification
+Before building, `server-push` synchronizes `trains.json` and `arduinos.json`
+independently with the running backend. If a document differs, the file with the newer modification
 timestamp replaces the older one; equal contents need no copy. Keep the
 deployment machine and server clocks synchronized. A backend without the
 configuration endpoint is treated as a bootstrap deployment and uses the local
-file. On the server, editable trains are stored in persistent
-`<server-root>/data/trains.json`, outside immutable release directories.
+files. A PR #32 backend whose version 1 response contains trains but not
+Arduinos is likewise an Arduino-only bootstrap. Other backend and response
+failures stop deployment. On the server, editable trains and Arduino devices
+are stored under persistent server-root `data/`, outside immutable release
+directories.
+
+After deploying the supervisor that adds persistent Arduino configuration,
+restart the external process supervising `server-loop` once. Uploading the new
+script does not reload the Python process already running. After accepting UI
+Arduino edits, rolling backend code below this feature temporarily uses that
+release's bundled Arduino topology; roll forward to reactivate the preserved
+persistent document.
 
 Bootstrap the permanent watcher once on the server from the FTP root:
 

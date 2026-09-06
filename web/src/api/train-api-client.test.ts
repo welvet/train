@@ -66,6 +66,67 @@ describe("TrainApiClient", () => {
     );
   });
 
+  it("accepts a trains-only v1 snapshot during backend rollback", async () => {
+    const configuration = configurationSnapshot();
+    delete configuration.documents.arduinos;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(configuration), { status: 200 }),
+    ));
+
+    await expect(new TrainApiClient().getConfiguration()).resolves.toEqual(
+      configuration,
+    );
+  });
+
+  it("rejects malformed Arduino configuration responses", async () => {
+    const configuration = configurationSnapshot();
+    configuration.documents.arduinos!.value.devices.arduino_1.backend_port = 0;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(configuration), { status: 200 }),
+    ));
+
+    await expect(new TrainApiClient().getConfiguration()).rejects.toMatchObject({
+      message: "The backend returned an unsupported configuration format",
+    });
+  });
+
+  it("sends Arduino updates as one document", async () => {
+    const configuration = configurationSnapshot();
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(configuration), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const update = {
+      version: 1 as const,
+      documents: {
+        arduinos: {
+          base_modified_at: 1000,
+          value: configuration.documents.arduinos!.value,
+        },
+      },
+    };
+
+    await new TrainApiClient().replaceConfiguration(update);
+
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual(update);
+  });
+
+  it("keeps configuration updates document-exclusive at compile time", () => {
+    const client = new TrainApiClient();
+    const configuration = configurationSnapshot();
+    if (false) {
+      void client.replaceConfiguration({
+        version: 1,
+        // @ts-expect-error a replacement must contain exactly one document
+        documents: {
+          trains: { base_modified_at: 1, value: configuration.documents.trains.value },
+          arduinos: { base_modified_at: 1, value: configuration.documents.arduinos!.value },
+        },
+      });
+    }
+    expect(client).toBeInstanceOf(TrainApiClient);
+  });
+
   it("rejects malformed configuration responses", async () => {
     vi.stubGlobal(
       "fetch",
@@ -386,6 +447,28 @@ function configurationSnapshot(): ConfigurationSnapshot {
               tag_ids: ["04:AB"],
             },
           ],
+        },
+      },
+      arduinos: {
+        modified_at: 1000,
+        restart_required: true,
+        value: {
+          devices: {
+            arduino_1: {
+              port: "/dev/test",
+              fqbn: "arduino:renesas_uno:unor4wifi",
+              baudrate: 9600,
+              hub_id: "hub_1",
+              backend_host: "127.0.0.1",
+              backend_port: 9000,
+              servo_settle_ms: 500,
+              reconnect_ms: 2000,
+              event_logger_enabled: false,
+              allow_legacy_hello: true,
+              switches: [],
+              readers: [],
+            },
+          },
         },
       },
     },

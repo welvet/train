@@ -6,9 +6,21 @@ export type StateEnvelope = components["schemas"]["StateEnvelope"];
 export type PublicEvent = components["schemas"]["PublicEvent"];
 export type CommandResponse = components["schemas"]["CommandResponse"];
 export type ConfigurationSnapshot = components["schemas"]["ConfigurationSnapshot"];
-export type ConfigurationUpdate = components["schemas"]["ConfigurationUpdate"];
 export type TrainConfiguration = components["schemas"]["TrainConfiguration"];
 export type TrainsConfiguration = components["schemas"]["TrainsConfiguration"];
+export type ArduinoDeviceConfiguration = components["schemas"]["ArduinoDeviceConfiguration"];
+export type ArduinoReaderConfiguration = components["schemas"]["ArduinoReaderConfiguration"];
+export type ArduinoSwitchConfiguration = components["schemas"]["ArduinoSwitchConfiguration"];
+export type ArduinosConfiguration = components["schemas"]["ArduinosConfiguration"];
+type TrainsConfigurationUpdate = components["schemas"]["TrainsConfigurationUpdate"];
+type ArduinosConfigurationUpdate = components["schemas"]["ArduinosConfigurationUpdate"];
+
+export type ConfigurationUpdate = {
+  version: 1;
+  documents:
+    | { trains: TrainsConfigurationUpdate; arduinos?: never }
+    | { arduinos: ArduinosConfigurationUpdate; trains?: never };
+};
 
 const INITIAL_STREAM_RECONNECT_DELAY_MS = 2_000;
 const MAX_STREAM_RECONNECT_DELAY_MS = 30_000;
@@ -307,14 +319,92 @@ function isConfigurationSnapshot(
   ) {
     return false;
   }
-  return trains.value.trains.every(
+  if (!trains.value.trains.every(
     (train) =>
       isRecord(train) &&
       typeof train.id === "string" &&
       typeof train.lego_hub_id === "string" &&
       typeof train.ble_address === "string" &&
       isStringArray(train.tag_ids),
+  )) {
+    return false;
+  }
+
+  const arduinos = value.documents.arduinos;
+  if (arduinos === undefined) {
+    return true;
+  }
+  if (
+    !isRecord(arduinos) ||
+    !isPositiveNumber(arduinos.modified_at) ||
+    typeof arduinos.restart_required !== "boolean" ||
+    !isRecord(arduinos.value) ||
+    !isRecord(arduinos.value.devices) ||
+    Object.keys(arduinos.value.devices).length === 0
+  ) {
+    return false;
+  }
+  return Object.entries(arduinos.value.devices).every(([deviceId, device]) =>
+    isRuntimeId(deviceId) && isArduinoDevice(device),
   );
+}
+
+function isArduinoDevice(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    isNonEmptyString(value.port) &&
+    isNonEmptyString(value.fqbn) &&
+    isBoundedInteger(value.baudrate, 1, 0xffffffff) &&
+    isRuntimeId(value.hub_id) &&
+    isNonEmptyString(value.backend_host) &&
+    isBoundedInteger(value.backend_port, 1, 65535) &&
+    isBoundedInteger(value.servo_settle_ms, 1, 0xffffffff) &&
+    isBoundedInteger(value.reconnect_ms, 1, 0xffffffff) &&
+    typeof value.event_logger_enabled === "boolean" &&
+    typeof value.allow_legacy_hello === "boolean" &&
+    Array.isArray(value.switches) &&
+    value.switches.length <= 8 &&
+    value.switches.every(isArduinoSwitch) &&
+    Array.isArray(value.readers) &&
+    value.readers.length <= 8 &&
+    value.readers.every(isArduinoReader)
+  );
+}
+
+function isArduinoSwitch(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    isRuntimeId(value.id) &&
+    isBoundedInteger(value.pin, 2, 10) &&
+    isBoundedInteger(value.straight, 0, 180) &&
+    isBoundedInteger(value.diverge, 0, 180)
+  );
+}
+
+function isArduinoReader(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    isRuntimeId(value.id) &&
+    isBoundedInteger(value.ss_pin, 2, 10) &&
+    isBoundedInteger(value.read_timeout_ms, 1, 1000) &&
+    isBoundedInteger(value.removal_delay_ms, 1, 0xffffffff)
+  );
+}
+
+function isRuntimeId(value: unknown): value is string {
+  return typeof value === "string" && /^[A-Za-z0-9_-]{1,16}$/.test(value);
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isPositiveNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+function isBoundedInteger(value: unknown, minimum: number, maximum: number) {
+  return Number.isInteger(value) && Number(value) >= minimum && Number(value) <= maximum;
 }
 
 function isStringArray(value: unknown): value is string[] {

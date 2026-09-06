@@ -25,3 +25,19 @@ def test_contract_contains_every_public_event() -> None:
     }
 
     assert names == {spec.name for spec in PUBLIC_EVENTS}
+
+
+def test_configuration_contract_supports_optional_arduino_snapshot_and_xor_update() -> None:
+    schemas = openapi_document()["components"]["schemas"]
+    snapshot_documents = schemas["ConfigurationSnapshot"]["properties"]["documents"]
+    assert snapshot_documents["required"] == ["trains"]
+    assert snapshot_documents["properties"]["arduinos"] == {
+        "$ref": "#/components/schemas/ArduinosConfigurationDocument"
+    }
+
+    update_documents = schemas["ConfigurationUpdate"]["properties"]["documents"]
+    assert [option["required"] for option in update_documents["oneOf"]] == [
+        ["trains"],
+        ["arduinos"],
+    ]
+    assert all(option["additionalProperties"] is False for option in update_documents["oneOf"])

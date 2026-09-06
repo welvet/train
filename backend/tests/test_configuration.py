@@ -8,6 +8,7 @@ import pytest
 
 from train.configuration import (
     ConfigurationConflict,
+    ConfigurationDocument,
     ConfigurationError,
     ConfigurationStore,
 )
@@ -193,3 +194,62 @@ async def test_replace_rejects_invalid_train_document(tmp_path: Path) -> None:
                 }
             },
         }))
+
+
+async def test_two_document_store_validates_complete_candidate_before_write(
+    tmp_path: Path,
+) -> None:
+    trains = tmp_path / "trains.json"
+    arduinos = tmp_path / "arduinos.json"
+    trains.write_text('{"trains": [{"id": "old"}]}')
+    arduinos.write_text('{"devices": {"board": {"hub": "old"}}}')
+    os.utime(trains, (1000, 1000))
+    os.utime(arduinos, (1000, 1000))
+    candidates: list[dict[str, dict[str, object]]] = []
+
+    def normalize(value: dict[str, object]) -> dict[str, object]:
+        return value
+
+    def validate(value) -> None:
+        candidates.append(dict(value))
+        if value["arduinos"]["devices"] == {}:
+            raise ValueError("at least one Arduino is required")
+
+    store = ConfigurationStore(
+        {
+            "trains": ConfigurationDocument(trains, normalize),
+            "arduinos": ConfigurationDocument(arduinos, normalize),
+        },
+        validate=validate,
+    )
+
+    snapshot = await store.replace_json(json.dumps({
+        "version": 1,
+        "documents": {
+            "arduinos": {
+                "base_modified_at": 1000,
+                "value": {"devices": {"board": {"hub": "new"}}},
+            }
+        },
+    }))
+
+    assert snapshot["documents"]["trains"]["value"] == {
+        "trains": [{"id": "old"}]
+    }
+    assert candidates[-1]["arduinos"] == {
+        "devices": {"board": {"hub": "new"}}
+    }
+
+    with pytest.raises(ConfigurationError, match="at least one Arduino"):
+        await store.replace_json(json.dumps({
+            "version": 1,
+            "documents": {
+                "arduinos": {
+                    "base_modified_at": snapshot["documents"]["arduinos"]["modified_at"],
+                    "value": {"devices": {}},
+                }
+            },
+        }))
+    assert json.loads(arduinos.read_text()) == {
+        "devices": {"board": {"hub": "new"}}
+    }
