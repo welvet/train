@@ -1,3 +1,5 @@
+import logging
+
 from train.core.event_bus import EventBus
 from train.domain import (
     Event,
@@ -8,17 +10,40 @@ from train.domain import (
     TrainTagRegistry,
 )
 from train.modules.arduino_hub.controller import ArduinoHubController
-from train.modules.arduino_hub.protocol import DetectedTag, Hello, TagChanged
+from train.modules.arduino_hub.protocol import (
+    ConfigRejected,
+    DetectedTag,
+    Hello,
+    TagChanged,
+)
 
 
 class FakeHubClient:
     def __init__(self) -> None:
         self.hub_name: str | None = None
+        self.phase = "new"
+        self.device_id: str | None = None
+        self.configuration_hub: str | None = None
+        self.configuration_revision: str | None = None
+        self.configuration_payload: dict[str, object] | None = None
         self.closed = False
         self.moves: list[tuple[str, int, str]] = []
 
     def bind(self, hub_name: str) -> None:
         self.hub_name = hub_name
+        self.phase = "registered"
+
+    async def configure(
+        self,
+        device_id: str,
+        hub_name: str,
+        config: dict[str, object],
+    ) -> str:
+        self.device_id = device_id
+        self.configuration_hub = hub_name
+        self.configuration_revision = "0" * 64
+        self.phase = "config_sent"
+        return self.configuration_revision
 
     async def move_switch(
         self,
@@ -161,3 +186,51 @@ async def test_out_of_range_integer_switch_target_is_rejected() -> None:
     ]
     assert len(responses) == 1
     assert responses[0].ok is False
+
+
+async def test_registered_runtime_client_cannot_change_applied_configuration() -> None:
+    bus = EventBus()
+    payload = {
+        "schema": 1,
+        "hub": "HUB_A",
+        "servo_settle_ms": 500,
+        "switches": [{"id": "S1", "pin": 9, "straight": 58, "diverge": 100}],
+        "readers": [],
+    }
+    controller = ArduinoHubController(
+        bus,
+        train_tags=TrainTagRegistry(),
+        hub_config={"HUB_A": {"switches": {"S1": {}}, "detectors": ()}},
+    )
+    client = FakeHubClient()
+    client.phase = "config_sent"
+    client.configuration_hub = "HUB_A"
+    client.configuration_revision = "0" * 64
+    client.configuration_payload = payload
+    hello = Hello("HUB_A", ("S1",), (), (), "0" * 64, payload)
+
+    assert await controller.handle_message(client, hello)
+
+    changed = {**payload, "servo_settle_ms": 750}
+    assert not await controller.handle_message(
+        client,
+        Hello("HUB_A", ("S1",), (), (), "0" * 64, changed),
+    )
+
+
+async def test_configuration_rejection_must_match_pending_device(caplog) -> None:
+    controller = ArduinoHubController(
+        EventBus(),
+        train_tags=TrainTagRegistry(),
+        hub_config={"HUB_A": {"switches": {}, "detectors": ()}},
+    )
+    client = FakeHubClient()
+
+    with caplog.at_level(logging.WARNING, logger="train.hub.controller"):
+        assert not await controller.handle_message(
+            client,
+            ConfigRejected("other-device", 1, "invalid_configuration"),
+        )
+
+    assert "unexpected configuration rejection" in caplog.text
+    assert "rejected configuration:" not in caplog.text

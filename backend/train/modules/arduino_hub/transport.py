@@ -6,6 +6,9 @@ from collections.abc import Awaitable, Callable
 
 from train.modules.arduino_hub.protocol import (
     InboundMessage,
+    MAX_FRAME_BYTES,
+    encode_configuration,
+    configuration_payload,
     encode_move_command,
     encode_ping_command,
     parse_message,
@@ -15,6 +18,8 @@ from train.modules.arduino_hub.timing import HEARTBEAT_INTERVAL, HEARTBEAT_TIMEO
 MessageHandler = Callable[["HubConnection", InboundMessage], Awaitable[bool]]
 DisconnectHandler = Callable[["HubConnection"], Awaitable[None]]
 CLOSE_TIMEOUT = 1.0
+CONFIG_REQUEST_TIMEOUT = 5.0
+CONFIGURATION_TIMEOUT = 35.0
 
 
 class HubConnection:
@@ -28,9 +33,36 @@ class HubConnection:
         self._write_lock = asyncio.Lock()
         self._last_received_at = asyncio.get_running_loop().time()
         self.hub_name: str | None = None
+        self.phase = "new"
+        self.device_id: str | None = None
+        self.configuration_hub: str | None = None
+        self.configuration_revision: str | None = None
+        self.configuration_payload: dict[str, object] | None = None
+        self._phase_started_at = self._last_received_at
 
     def bind(self, hub_name: str) -> None:
         self.hub_name = hub_name
+        self.phase = "registered"
+        self._phase_started_at = asyncio.get_running_loop().time()
+
+    async def configure(
+        self,
+        device_id: str,
+        hub_name: str,
+        config: dict[str, object],
+    ) -> str:
+        payload, revision = encode_configuration(hub_name, config)
+        await self._write(payload)
+        self.device_id = device_id
+        self.configuration_hub = hub_name
+        self.configuration_revision = revision
+        self.configuration_payload = configuration_payload(hub_name, config)
+        self.phase = "config_sent"
+        self._phase_started_at = asyncio.get_running_loop().time()
+        return revision
+
+    def phase_age(self) -> float:
+        return asyncio.get_running_loop().time() - self._phase_started_at
 
     async def move_switch(
         self,
@@ -75,6 +107,8 @@ class ArduinoHubServer:
         on_disconnect: DisconnectHandler,
         heartbeat_interval: float = HEARTBEAT_INTERVAL,
         heartbeat_timeout: float = HEARTBEAT_TIMEOUT,
+        config_request_timeout: float = CONFIG_REQUEST_TIMEOUT,
+        configuration_timeout: float = CONFIGURATION_TIMEOUT,
     ) -> None:
         self._host = host
         self._port = port
@@ -82,6 +116,8 @@ class ArduinoHubServer:
         self._on_disconnect = on_disconnect
         self._heartbeat_interval = heartbeat_interval
         self._heartbeat_timeout = heartbeat_timeout
+        self._config_request_timeout = config_request_timeout
+        self._configuration_timeout = configuration_timeout
         self._server: asyncio.Server | None = None
         self._connections: set[HubConnection] = set()
         self._tasks: set[asyncio.Task[None]] = set()
@@ -96,6 +132,7 @@ class ArduinoHubServer:
             self._accept_client,
             self._host,
             self._port,
+            limit=MAX_FRAME_BYTES,
         )
         self._log.info("Hub server listening on %s:%d", self._host, self._port)
 
@@ -134,21 +171,26 @@ class ArduinoHubServer:
 
     async def _handle_client(self, connection: HubConnection) -> None:
         heartbeat = asyncio.create_task(self._heartbeat(connection))
+        provisioning = asyncio.create_task(self._provisioning_deadline(connection))
         try:
             while line := await connection.reader.readline():
+                if len(line) > MAX_FRAME_BYTES:
+                    self._log.warning("Rejecting oversized hub frame")
+                    break
                 connection.note_received()
                 message = parse_message(line)
                 if message is not None and not await self._on_message(connection, message):
                     break
         except asyncio.CancelledError:
             raise
-        except ConnectionError as exc:
+        except (ConnectionError, asyncio.LimitOverrunError, ValueError) as exc:
             self._log.debug("Hub connection closed with an error: %s", exc)
         except Exception:
             self._log.exception("Unexpected hub client error")
         finally:
             heartbeat.cancel()
-            await asyncio.gather(heartbeat, return_exceptions=True)
+            provisioning.cancel()
+            await asyncio.gather(heartbeat, provisioning, return_exceptions=True)
             self._connections.discard(connection)
             try:
                 await self._on_disconnect(connection)
@@ -199,3 +241,19 @@ class ArduinoHubServer:
                 self._log.exception("Unexpected hub heartbeat error")
                 connection.close()
                 return
+
+    async def _provisioning_deadline(self, connection: HubConnection) -> None:
+        while connection.phase != "registered":
+            timeout = (
+                self._config_request_timeout
+                if connection.phase == "new"
+                else self._configuration_timeout
+            )
+            remaining = timeout - connection.phase_age()
+            if remaining <= 0:
+                self._log.warning(
+                    "Hub provisioning timed out in phase %s", connection.phase
+                )
+                connection.close()
+                return
+            await asyncio.sleep(min(remaining, 0.25))

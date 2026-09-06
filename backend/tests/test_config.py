@@ -81,8 +81,19 @@ def test_load_runtime_config_from_explicit_workspace(tmp_path: Path) -> None:
     assert [device.hub_id for device in config.arduinos] == ["hub_1", "hub_2"]
     assert config.arduino_hubs["hub_1"] == {
         "device_id": "arduino_1",
-        "switches": {"S1": {"straight": 58, "diverge": 100}},
+        "switches": {
+            "S1": {"pin": 9, "straight": 58, "diverge": 100}
+        },
         "detectors": ("D1",),
+        "servo_settle_ms": 500,
+        "readers": {
+            "D1": {
+                "ss_pin": 4,
+                "read_timeout_ms": 250,
+                "removal_delay_ms": 750,
+            }
+        },
+        "allow_legacy_hello": True,
     }
 
 
@@ -234,7 +245,7 @@ def test_duplicate_hardware_pin_is_rejected(tmp_path: Path) -> None:
     devices["devices"]["arduino_1"]["readers"][0]["ss_pin"] = 9
     (tmp_path / "arduinos.json").write_text(json.dumps(devices))
 
-    with pytest.raises(ConfigError, match="duplicate hardware pin"):
+    with pytest.raises(ConfigError, match="duplicates pin"):
         validate_arduino_upload_config(tmp_path)
 
 

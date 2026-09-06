@@ -104,3 +104,20 @@ async def test_unexpected_heartbeat_failure_closes_connection(caplog) -> None:
 
     connection.close.assert_called_once_with()
     assert "Unexpected hub heartbeat error" in caplog.text
+
+
+async def test_unidentified_connection_is_closed_at_provisioning_deadline() -> None:
+    connection = Mock(spec=HubConnection)
+    connection.phase = "new"
+    connection.phase_age.return_value = 1.0
+    server = ArduinoHubServer(
+        "127.0.0.1",
+        0,
+        on_message=AsyncMock(return_value=True),
+        on_disconnect=AsyncMock(),
+        config_request_timeout=0.5,
+    )
+
+    await server._provisioning_deadline(connection)
+
+    connection.close.assert_called_once_with()

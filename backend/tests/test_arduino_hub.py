@@ -22,11 +22,17 @@ from train.modules.arduino_hub import ArduinoHubModule
 
 HUB_CONFIG = {
     "A_HUB_1": {
+        "device_id": "arduino_1",
+        "servo_settle_ms": 500,
         "switches": {
-            "S1": {"straight": 58, "diverge": 100},
-            "S2": {"straight": 58, "diverge": 100},
+            "S1": {"pin": 9, "straight": 58, "diverge": 100},
+            "S2": {"pin": 10, "straight": 58, "diverge": 100},
         },
         "detectors": ("D1", "D2"),
+        "readers": {
+            "D1": {"ss_pin": 4, "read_timeout_ms": 250, "removal_delay_ms": 750},
+            "D2": {"ss_pin": 5, "read_timeout_ms": 250, "removal_delay_ms": 750},
+        },
     },
     "HUB_A": {
         "switches": {
@@ -119,6 +125,46 @@ async def test_hello_publishes_hub_connected(bus: EventBus, hub) -> None:
     assert connected[0].switches == ("S1", "S2")
     assert connected[0].detectors == ("D1", "D2")
 
+    writer.close()
+    await writer.wait_closed()
+
+
+async def test_device_fetches_runtime_configuration_before_registration(
+    bus: EventBus, hub
+) -> None:
+    mod, port = hub
+    events = _collect_events(bus)
+    reader, writer = await asyncio.open_connection("127.0.0.1", port)
+    await _send_line(writer, {
+        "event": "config_request",
+        "schema": 1,
+        "device_id": "arduino_1",
+    })
+
+    configuration = await _read_line(reader)
+    assert configuration["cmd"] == "configure"
+    assert configuration["hub"] == "A_HUB_1"
+    assert configuration["switches"][0] == {
+        "id": "S1", "pin": 9, "straight": 58, "diverge": 100
+    }
+    assert configuration["readers"][0]["ss_pin"] == 4
+    await _send_line(writer, {
+        "event": "hello",
+        "hub": "A_HUB_1",
+        "revision": configuration["revision"],
+        "applied": {
+            key: value
+            for key, value in configuration.items()
+            if key not in {"cmd", "revision"}
+        },
+        "switches": ["S1", "S2"],
+        "detectors": ["D1", "D2"],
+        "detected_tags": [],
+    })
+    await asyncio.sleep(0.05)
+
+    assert mod._clients["A_HUB_1"].device_id == "arduino_1"
+    assert len([event for event in events if isinstance(event, HubConnected)]) == 1
     writer.close()
     await writer.wait_closed()
 

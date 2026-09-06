@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections import defaultdict
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -22,6 +21,8 @@ from train.domain import (
 )
 from train.modules.arduino_hub.protocol import (
     Hello,
+    ConfigRejected,
+    ConfigRequest,
     InboundMessage,
     MoveAcknowledged,
     Pong,
@@ -31,6 +32,11 @@ from train.modules.arduino_hub.protocol import (
 
 class HubClient(Protocol):
     hub_name: str | None
+    phase: str
+    device_id: str | None
+    configuration_hub: str | None
+    configuration_revision: str | None
+    configuration_payload: dict[str, object] | None
 
     def bind(self, hub_name: str) -> None: ...
 
@@ -40,6 +46,13 @@ class HubClient(Protocol):
         angle: int,
         request_id: str,
     ) -> None: ...
+
+    async def configure(
+        self,
+        device_id: str,
+        hub_name: str,
+        config: dict[str, object],
+    ) -> str: ...
 
     def close(self) -> None: ...
 
@@ -68,10 +81,15 @@ class ArduinoHubController:
         self._bus = bus
         self._train_tags = train_tags
         self._hub_config = hub_config
+        self._device_config = {
+            str(config["device_id"]): (hub_name, dict(config))
+            for hub_name, config in hub_config.items()
+            if "device_id" in config
+        }
         self._clients: dict[str, HubClient] = {}
-        self._registration_locks: dict[str, asyncio.Lock] = defaultdict(
-            asyncio.Lock
-        )
+        self._registration_locks: dict[str, asyncio.Lock] = {
+            hub_name: asyncio.Lock() for hub_name in hub_config
+        }
         self._log = logging.getLogger("train.hub.controller")
 
     @property
@@ -96,10 +114,28 @@ class ArduinoHubController:
                 client.hub_name,
             )
             return False
+        if isinstance(message, ConfigRequest):
+            return await self._configure(client, message)
+        if isinstance(message, ConfigRejected):
+            if (
+                client.phase != "config_sent"
+                or message.device_id != client.device_id
+            ):
+                self._log.warning(
+                    "Rejecting unexpected configuration rejection from %s",
+                    message.device_id,
+                )
+                return False
+            self._log.error(
+                "Device %s rejected configuration: %s",
+                message.device_id,
+                message.reason,
+            )
+            return False
         if isinstance(message, Hello):
             return await self._register(client, message)
-        if client.hub_name is None:
-            return True
+        if client.phase != "registered" or client.hub_name is None:
+            return isinstance(message, Pong)
         if isinstance(message, TagChanged):
             await self._handle_tag_change(client.hub_name, message)
         elif isinstance(message, MoveAcknowledged):
@@ -133,12 +169,77 @@ class ArduinoHubController:
             await self._publish_switch_result(event, requested_angle, ok=False)
 
     async def _register(self, client: HubClient, hello: Hello) -> bool:
-        async with self._registration_locks[hello.hub_name]:
+        lock = self._registration_locks.get(hello.hub_name)
+        if lock is None:
+            self._log.warning("Rejecting unknown hub: %s", hello.hub_name)
+            return False
+        async with lock:
             return await self._register_serialized(client, hello)
+
+    async def _configure(
+        self, client: HubClient, request: ConfigRequest
+    ) -> bool:
+        if client.phase != "new":
+            self._log.warning("Rejecting repeated configuration request")
+            return False
+        resolved = self._device_config.get(request.device_id)
+        if resolved is None:
+            self._log.warning("Rejecting unknown device: %s", request.device_id)
+            return False
+        hub_name, config = resolved
+        try:
+            await client.configure(request.device_id, hub_name, config)
+        except (ConnectionError, OSError, ValueError):
+            self._log.warning(
+                "Failed to configure device %s", request.device_id, exc_info=True
+            )
+            return False
+        self._log.info("Sent configuration for %s (%s)", request.device_id, hub_name)
+        return True
 
     async def _register_serialized(
         self, client: HubClient, hello: Hello
     ) -> bool:
+        if client.phase == "config_sent":
+            if (
+                hello.revision != client.configuration_revision
+                or hello.hub_name != client.configuration_hub
+                or hello.applied != client.configuration_payload
+            ):
+                self._log.warning("Rejecting mismatched configuration acknowledgement")
+                return False
+        elif client.phase == "new":
+            if hello.revision is not None:
+                self._log.warning("Rejecting unsolicited revision-bound hello")
+                return False
+            configured = self._hub_config.get(hello.hub_name)
+            if configured is None or not configured.get("allow_legacy_hello", True):
+                self._log.warning("Rejecting disabled legacy hello")
+                return False
+            current = self._clients.get(hello.hub_name)
+            if current is not None and current.configuration_revision is not None:
+                self._log.warning(
+                    "Rejecting legacy takeover of provisioned hub %s",
+                    hello.hub_name,
+                )
+                return False
+            self._log.warning(
+                "Accepting legacy hello from %s without revision binding",
+                hello.hub_name,
+            )
+        elif client.phase == "registered":
+            if (
+                hello.hub_name != client.hub_name
+                or hello.revision != client.configuration_revision
+                or (
+                    client.configuration_revision is not None
+                    and hello.applied != client.configuration_payload
+                )
+            ):
+                self._log.warning("Rejecting changed hello on registered connection")
+                return False
+        else:
+            return False
         if client.hub_name is not None and client.hub_name != hello.hub_name:
             self._log.warning(
                 "Rejecting hub identity change from %s to %s",

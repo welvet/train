@@ -6,6 +6,7 @@ bool TransportModule::setup() {
   return bus_.subscribe(
       eventMask(EventType::WifiConnected) |
           eventMask(EventType::WifiDisconnected) |
+          eventMask(EventType::DisconnectRequested) |
           eventMask(EventType::OutboundDocument),
       this,
       receive);
@@ -26,6 +27,11 @@ void TransportModule::onEvent(const Event& event) {
     return;
   }
   if (event.type() == EventType::WifiDisconnected) {
+    client_.stop();
+    setBackendConnected(false);
+    return;
+  }
+  if (event.type() == EventType::DisconnectRequested) {
     client_.stop();
     setBackendConnected(false);
     return;
@@ -59,6 +65,7 @@ void TransportModule::readLines() {
         lineBuffer_[lineLength_] = '\0';
         bus_.publish(InboundLineEvent(lineBuffer_));
       }
+      if (lineOverflowed_) bus_.publish(InboundFrameTooLargeEvent());
       lineLength_ = 0;
       lineOverflowed_ = false;
     } else if (!lineOverflowed_ && lineLength_ < kLineBufferSize - 1) {

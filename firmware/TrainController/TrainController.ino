@@ -13,7 +13,7 @@ train::EventBus bus;
 train::ControllerModel model;
 
 train::EventLoggerModule eventLogger(bus);
-train::EventLedModule eventLed(bus);
+train::EventLedModule eventLed(bus, model);
 train::TransportModule transport(bus, model);
 train::ProtocolModule protocol(bus, model);
 train::SwitchModule switches(bus, model);

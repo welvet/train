@@ -4,6 +4,7 @@
 #include <WiFiS3.h>
 
 #include <climits>
+#include <cstring>
 #include <functional>
 #include <iostream>
 #include <stdexcept>
@@ -171,6 +172,32 @@ void resetFakes() {
   fake_pn532::reset();
 }
 
+void configureTestModel(ControllerModel& model) {
+  std::strcpy(model.config.hubId, "test-hub");
+  std::strcpy(
+      model.config.revision,
+      "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+  model.config.servoSettleMs = 500;
+  model.config.switchCount = 2;
+  std::strcpy(model.config.switches[0].id, "S1");
+  model.config.switches[0].pin = 9;
+  model.config.switches[0].straightAngle = 55;
+  model.config.switches[0].divergeAngle = 105;
+  std::strcpy(model.config.switches[1].id, "S2");
+  model.config.switches[1].pin = 10;
+  model.config.switches[1].straightAngle = 60;
+  model.config.switches[1].divergeAngle = 110;
+  model.config.readerCount = 2;
+  std::strcpy(model.config.readers[0].id, "D1");
+  model.config.readers[0].ssPin = 4;
+  model.config.readers[0].readTimeoutMs = 25;
+  model.config.readers[0].removalDelayMs = 750;
+  std::strcpy(model.config.readers[1].id, "D2");
+  model.config.readers[1].ssPin = 5;
+  model.config.readers[1].readTimeoutMs = 25;
+  model.config.readers[1].removalDelayMs = 1000;
+}
+
 TEST(eventBusFiltersEventsAndRejectsDuplicateContexts) {
   EventBus bus;
   TypeCollector collector;
@@ -213,6 +240,8 @@ TEST(eventBusRejectsInvalidAndExcessSubscriptions) {
 TEST(protocolSendsCompleteHelloSnapshot) {
   EventBus bus;
   ControllerModel model;
+  configureTestModel(model);
+  model.configurationApplied = true;
   model.readers[0].ready = true;
   model.readers[0].tagPresent = true;
   model.readers[0].uid[0] = 0x04;
@@ -227,7 +256,7 @@ TEST(protocolSendsCompleteHelloSnapshot) {
       train::eventMask(EventType::OutboundDocument),
       &output,
       JsonCollector::receive));
-  bus.publish(BackendConnectedEvent());
+  bus.publish(train::HardwareConfiguredEvent());
 
   CHECK(output.values.size() == 1);
   JsonDocument document = parseJson(output.values[0]);
@@ -243,9 +272,190 @@ TEST(protocolSendsCompleteHelloSnapshot) {
   CHECK(document["detected_tags"][0]["tag_id"] == "04:A1");
 }
 
+TEST(protocolFetchesAppliesAndAcknowledgesRuntimeConfiguration) {
+  resetFakes();
+  EventBus bus;
+  ControllerModel model;
+  train::ProtocolModule protocol(bus, model);
+  train::ReaderModule readers(bus, model);
+  JsonCollector output;
+  TypeCollector disconnects;
+
+  CHECK(protocol.setup());
+  CHECK(readers.setup());
+  CHECK(bus.subscribe(
+      train::eventMask(EventType::OutboundDocument),
+      &output,
+      JsonCollector::receive));
+  CHECK(bus.subscribe(
+      train::eventMask(EventType::DisconnectRequested),
+      &disconnects,
+      TypeCollector::receive));
+
+  bus.publish(BackendConnectedEvent());
+  JsonDocument request = parseJson(output.values.back());
+  CHECK(request["event"] == "config_request");
+  CHECK(request["schema"] == 1);
+  CHECK(request["device_id"] == "test-device");
+
+  bus.publish(InboundLineEvent(
+      "{\"cmd\":\"configure\",\"schema\":1,\"hub\":\"yard\","
+      "\"servo_settle_ms\":500,\"switches\":[{\"id\":\"S1\","
+      "\"pin\":9,\"straight\":55,\"diverge\":105}],"
+      "\"readers\":[{\"id\":\"D1\",\"ss_pin\":4,"
+      "\"read_timeout_ms\":25,\"removal_delay_ms\":750}],"
+      "\"revision\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"}"));
+  CHECK(model.configurationPending);
+  CHECK(!model.configurationApplied);
+  fake_pn532::queueRead(0, {0x04, 0xA1});
+  readers.trigger();
+  readers.trigger();
+
+  CHECK(model.configurationApplied);
+  CHECK(disconnects.values.empty());
+  JsonDocument hello = parseJson(output.values.back());
+  CHECK(hello["event"] == "hello");
+  CHECK(hello["hub"] == "yard");
+  CHECK(hello["revision"] ==
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+  CHECK(hello["switches"][0] == "S1");
+  CHECK(hello["detectors"][0] == "D1");
+  CHECK(hello["detected_tags"][0]["tag_id"] == "04:A1");
+  CHECK(hello["applied"]["switches"][0]["pin"] == 9);
+  CHECK(hello["applied"]["readers"][0]["read_timeout_ms"] == 25);
+}
+
+TEST(eventLedStopsUsingSpiClockPinWhenReadersAreConfigured) {
+  resetFakes();
+  EventBus bus;
+  ControllerModel model;
+  train::EventLedModule led(bus, model);
+  CHECK(led.setup());
+  model.readersUseSpi = true;
+  bus.publish(train::ConfigurationChangedEvent());
+  const size_t writes = fake_arduino::pinWrites.size();
+  bus.publish(WifiConnectedEvent());
+  CHECK(fake_arduino::pinWrites.size() == writes);
+  CHECK(fake_arduino::pinWrites.back().pin == LED_BUILTIN);
+  CHECK(fake_arduino::pinWrites.back().value == HIGH);
+}
+
+TEST(protocolDisconnectsWhenConfigurationDoesNotArrive) {
+  resetFakes();
+  EventBus bus;
+  ControllerModel model;
+  train::ProtocolModule protocol(bus, model);
+  TypeCollector disconnects;
+  CHECK(protocol.setup());
+  CHECK(bus.subscribe(
+      train::eventMask(EventType::DisconnectRequested),
+      &disconnects,
+      TypeCollector::receive));
+
+  bus.publish(BackendConnectedEvent());
+  fake_arduino::now = 9999;
+  protocol.trigger();
+  CHECK(disconnects.values.empty());
+  fake_arduino::now = 10000;
+  protocol.trigger();
+  CHECK(disconnects.values ==
+        std::vector<EventType>({EventType::DisconnectRequested}));
+}
+
+TEST(protocolRejectsNumericConfigurationBeforeNarrowing) {
+  resetFakes();
+  EventBus bus;
+  ControllerModel model;
+  train::ProtocolModule protocol(bus, model);
+  JsonCollector output;
+  TypeCollector disconnects;
+  CHECK(protocol.setup());
+  CHECK(bus.subscribe(
+      train::eventMask(EventType::OutboundDocument),
+      &output,
+      JsonCollector::receive));
+  CHECK(bus.subscribe(
+      train::eventMask(EventType::DisconnectRequested),
+      &disconnects,
+      TypeCollector::receive));
+
+  bus.publish(BackendConnectedEvent());
+  bus.publish(InboundLineEvent(
+      "{\"cmd\":\"configure\",\"schema\":1,\"hub\":\"yard\","
+      "\"servo_settle_ms\":500,\"switches\":[{\"id\":\"S1\","
+      "\"pin\":258,\"straight\":55,\"diverge\":105}],"
+      "\"readers\":[],"
+      "\"revision\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"}"));
+
+  CHECK(!model.configurationPending);
+  CHECK(!model.configurationApplied);
+  CHECK(disconnects.values ==
+        std::vector<EventType>({EventType::DisconnectRequested}));
+  JsonDocument rejection = parseJson(output.values.back());
+  CHECK(rejection["event"] == "config_rejected");
+  CHECK(rejection["reason"] == "invalid_configuration");
+}
+
+TEST(protocolRejectsReaderTimeoutBeforeNarrowing) {
+  EventBus bus;
+  ControllerModel model;
+  train::ProtocolModule protocol(bus, model);
+  JsonCollector output;
+  TypeCollector disconnects;
+  CHECK(protocol.setup());
+  CHECK(bus.subscribe(
+      train::eventMask(EventType::OutboundDocument),
+      &output,
+      JsonCollector::receive));
+  CHECK(bus.subscribe(
+      train::eventMask(EventType::DisconnectRequested),
+      &disconnects,
+      TypeCollector::receive));
+
+  bus.publish(BackendConnectedEvent());
+  bus.publish(InboundLineEvent(
+      "{\"cmd\":\"configure\",\"schema\":1,\"hub\":\"yard\","
+      "\"servo_settle_ms\":500,\"switches\":[],"
+      "\"readers\":[{\"id\":\"D1\",\"ss_pin\":4,"
+      "\"read_timeout_ms\":65537,\"removal_delay_ms\":750}],"
+      "\"revision\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"}"));
+
+  CHECK(!model.configurationPending);
+  CHECK(!model.configurationApplied);
+  CHECK(disconnects.values ==
+        std::vector<EventType>({EventType::DisconnectRequested}));
+  JsonDocument rejection = parseJson(output.values.back());
+  CHECK(rejection["event"] == "config_rejected");
+  CHECK(rejection["reason"] == "invalid_configuration");
+}
+
+TEST(protocolSuppressesStaleTagEventsDuringConfigurationHandshake) {
+  EventBus bus;
+  ControllerModel model;
+  configureTestModel(model);
+  model.configurationApplied = true;
+  train::ProtocolModule protocol(bus, model);
+  JsonCollector output;
+  CHECK(protocol.setup());
+  CHECK(bus.subscribe(
+      train::eventMask(EventType::OutboundDocument),
+      &output,
+      JsonCollector::receive));
+
+  bus.publish(BackendConnectedEvent());
+  const uint8_t uid[] = {0x04, 0xA1};
+  bus.publish(TagChangedEvent(0, true, uid, sizeof(uid)));
+
+  CHECK(output.values.size() == 1);
+  JsonDocument request = parseJson(output.values[0]);
+  CHECK(request["event"] == "config_request");
+}
+
 TEST(protocolParsesMovesAndIgnoresMalformedInput) {
   EventBus bus;
   ControllerModel model;
+  configureTestModel(model);
+  model.configurationApplied = true;
   train::ProtocolModule protocol(bus, model);
   MoveCollector moves;
 
@@ -279,6 +489,8 @@ TEST(protocolParsesMovesAndIgnoresMalformedInput) {
 TEST(protocolSerializesPongSwitchAndTagEvents) {
   EventBus bus;
   ControllerModel model;
+  configureTestModel(model);
+  model.configurationApplied = true;
   train::ProtocolModule protocol(bus, model);
   JsonCollector output;
 
@@ -329,6 +541,7 @@ TEST(switchModuleResolvesPositionsAndDetachesAfterSettleTime) {
   resetFakes();
   EventBus bus;
   ControllerModel model;
+  configureTestModel(model);
   train::SwitchModule switches(bus, model);
   SwitchCollector moved;
 
@@ -362,6 +575,7 @@ TEST(switchModuleValidatesAnglesAndIgnoresUnknownSwitches) {
   resetFakes();
   EventBus bus;
   ControllerModel model;
+  configureTestModel(model);
   train::SwitchModule switches(bus, model);
   SwitchCollector moved;
 
@@ -393,10 +607,16 @@ TEST(readerModuleTracksDetectionReplacementAndRemoval) {
   resetFakes();
   EventBus bus;
   ControllerModel model;
+  configureTestModel(model);
   train::ReaderModule readers(bus, model);
   TagCollector changes;
 
   CHECK(readers.setup());
+  model.configurationPending = true;
+  bus.publish(train::ConfigurationChangedEvent());
+  readers.trigger();
+  readers.trigger();
+  readers.trigger();
   CHECK(bus.subscribe(
       train::eventMask(EventType::TagChanged),
       &changes,
@@ -449,10 +669,16 @@ TEST(readerFailureDoesNotDisableOtherReaders) {
   fake_pn532::devices[0].firmwareVersion = 0;
   EventBus bus;
   ControllerModel model;
+  configureTestModel(model);
   train::ReaderModule readers(bus, model);
   TagCollector changes;
 
   CHECK(readers.setup());
+  model.configurationPending = true;
+  bus.publish(train::ConfigurationChangedEvent());
+  readers.trigger();
+  readers.trigger();
+  readers.trigger();
   CHECK(!model.readers[0].ready);
   CHECK(model.readers[1].ready);
   CHECK(bus.subscribe(
@@ -540,15 +766,15 @@ TEST(transportThrottlesReconnectsAndDiscardsLongLines) {
   transport.trigger();
   CHECK(fake_wifi::client.connectCount == 2);
 
-  const std::string largestValidLine(255, 'x');
+  const std::string largestValidLine(MAX_CONFIG_FRAME_BYTES - 1, 'x');
   fake_wifi::receive(largestValidLine + "\n");
   transport.trigger();
   CHECK(lines.values == std::vector<std::string>({largestValidLine}));
 
-  fake_wifi::receive(std::string(200, 'x'));
+  fake_wifi::receive(std::string(2000, 'x'));
   transport.trigger();
   CHECK(lines.values.size() == 1);
-  fake_wifi::receive(std::string(56, 'x') + "\nvalid\n");
+  fake_wifi::receive(std::string(48, 'x') + "\nvalid\n");
   transport.trigger();
   CHECK(lines.values.size() == 2);
   CHECK(lines.values[1] == "valid");
@@ -631,7 +857,8 @@ TEST(eventLoggerDoesNothingWhenDisabled) {
 TEST(eventLedBlipsOnEveryEvent) {
   resetFakes();
   EventBus bus;
-  train::EventLedModule led(bus);
+  ControllerModel model;
+  train::EventLedModule led(bus, model);
 
   CHECK(led.setup());
   CHECK(fake_arduino::pinModes.size() == 1);

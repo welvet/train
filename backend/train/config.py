@@ -2,11 +2,18 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from train.modules.arduino_hub.timing import MAX_READER_READ_TIMEOUT_MS
+from train.modules.arduino_hub.protocol import (
+    MAX_COMPONENTS,
+    MAX_ID_BYTES,
+    encode_configuration,
+    validate_hello_frame_size,
+)
 
 
 class ConfigError(ValueError):
@@ -33,16 +40,27 @@ class BackendConfig:
 @dataclass(frozen=True, slots=True)
 class ArduinoSwitchConfig:
     switch_id: str
+    pin: int
     straight: int
     diverge: int
+
+
+@dataclass(frozen=True, slots=True)
+class ArduinoReaderConfig:
+    reader_id: str
+    ss_pin: int
+    read_timeout_ms: int
+    removal_delay_ms: int
 
 
 @dataclass(frozen=True, slots=True)
 class ArduinoDeviceConfig:
     device_id: str
     hub_id: str
+    servo_settle_ms: int
     switches: tuple[ArduinoSwitchConfig, ...]
-    readers: tuple[str, ...]
+    readers: tuple[ArduinoReaderConfig, ...]
+    allow_legacy_hello: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,12 +88,23 @@ class RuntimeConfig:
                 "device_id": device.device_id,
                 "switches": {
                     switch.switch_id: {
+                        "pin": switch.pin,
                         "straight": switch.straight,
                         "diverge": switch.diverge,
                     }
                     for switch in device.switches
                 },
-                "detectors": device.readers,
+                "detectors": tuple(reader.reader_id for reader in device.readers),
+                "servo_settle_ms": device.servo_settle_ms,
+                "readers": {
+                    reader.reader_id: {
+                        "ss_pin": reader.ss_pin,
+                        "read_timeout_ms": reader.read_timeout_ms,
+                        "removal_delay_ms": reader.removal_delay_ms,
+                    }
+                    for reader in device.readers
+                },
+                "allow_legacy_hello": device.allow_legacy_hello,
             }
             for device in self.arduinos
         }
@@ -124,11 +153,18 @@ def load_runtime_config(data_dir: Path | None = None) -> RuntimeConfig:
 
     devices = _parse_arduino_devices(arduinos_data)
 
-    return RuntimeConfig(
+    runtime = RuntimeConfig(
         backend=backend,
         trains=trains,
         arduinos=devices,
     )
+    for hub_id, hub_config in runtime.arduino_hubs.items():
+        try:
+            encode_configuration(hub_id, hub_config)
+            validate_hello_frame_size(hub_id, hub_config)
+        except ValueError as exc:
+            raise ConfigError(str(exc)) from exc
+    return runtime
 
 
 def parse_trains_document(trains_data: dict[str, Any]) -> tuple[TrainConfig, ...]:
@@ -222,28 +258,71 @@ def _parse_arduino_devices(
             raise ConfigError("arduinos.json: device IDs must be non-empty strings")
         if not isinstance(value, dict):
             raise ConfigError(f"{source} must be an object")
-        hub_id = _string(value, "hub_id", source)
+        normalized_device_id = _runtime_id(device_id, "arduinos.json: device ID")
+        hub_id = _runtime_id(_string(value, "hub_id", source), f"{source}.hub_id")
         _unique(hub_id, hub_ids, f"{source}.hub_id")
+        servo_settle_ms = _bounded_int(
+            value, "servo_settle_ms", source, maximum=0xFFFFFFFF
+        )
+        allow_legacy_hello = value.get("allow_legacy_hello", True)
+        if not isinstance(allow_legacy_hello, bool):
+            raise ConfigError(f"{source}.allow_legacy_hello must be a boolean")
         component_ids: set[str] = set()
+        pins: set[int] = set()
         switches: list[ArduinoSwitchConfig] = []
         for index, switch in enumerate(_list(value, "switches", source)):
             item_source = f"{source}.switches[{index}]"
             if not isinstance(switch, dict):
                 raise ConfigError(f"{item_source} must be an object")
-            switch_id = _string(switch, "id", item_source)
+            switch_id = _runtime_id(
+                _string(switch, "id", item_source), f"{item_source}.id"
+            )
             _unique(switch_id, component_ids, f"{item_source}.id")
+            pin = _runtime_pin(switch, "pin", item_source, pins)
             angles: list[int] = []
             for key in ("straight", "diverge"):
                 angle = switch.get(key)
                 if not isinstance(angle, int) or isinstance(angle, bool) or not 0 <= angle <= 180:
                     raise ConfigError(f"{item_source}.{key} must be in 0..180")
                 angles.append(angle)
-            switches.append(ArduinoSwitchConfig(switch_id, *angles))
-        reader_ids = _validate_component_ids(
-            value, "readers", source, component_ids
-        )
+            switches.append(ArduinoSwitchConfig(switch_id, pin, *angles))
+        readers: list[ArduinoReaderConfig] = []
+        for index, reader in enumerate(_list(value, "readers", source)):
+            item_source = f"{source}.readers[{index}]"
+            if not isinstance(reader, dict):
+                raise ConfigError(f"{item_source} must be an object")
+            reader_id = _runtime_id(
+                _string(reader, "id", item_source), f"{item_source}.id"
+            )
+            _unique(reader_id, component_ids, f"{item_source}.id")
+            ss_pin = _runtime_pin(reader, "ss_pin", item_source, pins)
+            read_timeout_ms = _bounded_int(
+                reader,
+                "read_timeout_ms",
+                item_source,
+                maximum=MAX_READER_READ_TIMEOUT_MS,
+            )
+            removal_delay_ms = _bounded_int(
+                reader, "removal_delay_ms", item_source, maximum=0xFFFFFFFF
+            )
+            readers.append(ArduinoReaderConfig(
+                reader_id, ss_pin, read_timeout_ms, removal_delay_ms
+            ))
+        if len(switches) > MAX_COMPONENTS:
+            raise ConfigError(
+                f"{source}.switches supports at most {MAX_COMPONENTS} entries"
+            )
+        if len(readers) > MAX_COMPONENTS:
+            raise ConfigError(
+                f"{source}.readers supports at most {MAX_COMPONENTS} entries"
+            )
         devices.append(ArduinoDeviceConfig(
-            device_id.strip(), hub_id, tuple(switches), reader_ids
+            normalized_device_id,
+            hub_id,
+            servo_settle_ms,
+            tuple(switches),
+            tuple(readers),
+            allow_legacy_hello,
         ))
 
     return tuple(devices)
@@ -287,29 +366,35 @@ def validate_arduino_upload_config(data_dir: Path | None = None) -> None:
             _string(device, key, source)
         _bounded_int(device, "baudrate", source, maximum=0xFFFFFFFF)
         _port(device, "backend_port", source)
-        for key in ("servo_settle_ms", "reconnect_ms"):
+        for key in ("reconnect_ms",):
             _bounded_int(device, key, source, maximum=0xFFFFFFFF)
         logger_enabled = device.get("event_logger_enabled", False)
         if not isinstance(logger_enabled, bool):
             raise ConfigError(
                 f"{source}.event_logger_enabled must be a boolean"
             )
-        pins: set[int] = set()
-        _validate_component_pins(device, "switches", "pin", source, pins)
-        _validate_component_pins(device, "readers", "ss_pin", source, pins)
-        for index, reader in enumerate(_list(device, "readers", source)):
-            reader_source = f"{source}.readers[{index}]"
-            if not isinstance(reader, dict):
-                raise ConfigError(f"{reader_source} must be an object")
-            _bounded_int(
-                reader,
-                "read_timeout_ms",
-                reader_source,
-                maximum=MAX_READER_READ_TIMEOUT_MS,
-            )
-            _bounded_int(
-                reader, "removal_delay_ms", reader_source, maximum=0xFFFFFFFF
-            )
+
+
+def _runtime_pin(
+    value: dict[str, Any], key: str, source: str, seen: set[int]
+) -> int:
+    pin = _bounded_int(value, key, source, maximum=10)
+    if pin < 2:
+        raise ConfigError(f"{source}.{key} must be a digital pin in D2..D10")
+    if pin in seen:
+        raise ConfigError(f"{source}.{key} duplicates pin D{pin}")
+    seen.add(pin)
+    return pin
+
+
+def _runtime_id(value: str, source: str) -> str:
+    if len(value.encode("utf-8")) > MAX_ID_BYTES:
+        raise ConfigError(f"{source} must be at most {MAX_ID_BYTES} bytes")
+    if re.fullmatch(r"[A-Za-z0-9_-]+", value) is None:
+        raise ConfigError(
+            f"{source} may contain only letters, digits, underscores, and hyphens"
+        )
+    return value
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -365,44 +450,6 @@ def _list(value: dict[str, Any], key: str, source: str) -> list[Any]:
     if not isinstance(result, list):
         raise ConfigError(f"{source}: '{key}' must be a list")
     return result
-
-
-def _validate_component_ids(
-    device: dict[str, Any],
-    collection: str,
-    source: str,
-    component_ids: set[str],
-) -> tuple[str, ...]:
-    ids: list[str] = []
-    for index, component in enumerate(_list(device, collection, source)):
-        item_source = f"{source}.{collection}[{index}]"
-        if not isinstance(component, dict):
-            raise ConfigError(f"{item_source} must be an object")
-        component_id = _string(component, "id", item_source)
-        _unique(component_id, component_ids, f"{item_source}.id")
-        ids.append(component_id)
-    return tuple(ids)
-
-
-def _validate_component_pins(
-    device: dict[str, Any],
-    collection: str,
-    pin_key: str,
-    source: str,
-    pins: set[int],
-) -> None:
-    for index, component in enumerate(_list(device, collection, source)):
-        item_source = f"{source}.{collection}[{index}]"
-        if not isinstance(component, dict):
-            raise ConfigError(f"{item_source} must be an object")
-        pin = component.get(pin_key)
-        if not isinstance(pin, int) or isinstance(pin, bool) or not 0 <= pin <= 255:
-            raise ConfigError(f"{item_source}.{pin_key} must be a pin in 0..255")
-        if pin in pins:
-            raise ConfigError(
-                f"{item_source}.{pin_key}: duplicate hardware pin '{pin}'"
-            )
-        pins.add(pin)
 
 
 def _unique(value: str, seen: set[str], source: str) -> None:

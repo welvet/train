@@ -84,6 +84,7 @@ switches and multiple PN532 readers sharing the hardware SPI bus:
       "servo_settle_ms": 500,
       "reconnect_ms": 2000,
       "event_logger_enabled": true,
+      "allow_legacy_hello": true,
       "switches": [
         {"id": "S1", "pin": 9, "straight": 58, "diverge": 100}
       ],
@@ -94,6 +95,29 @@ switches and multiple PN532 readers sharing the hardware SPI bus:
   }
 }
 ```
+
+The generated firmware contains only the device ID, Wi-Fi and backend
+connection settings, serial baud rate, reconnect delay, and event-logger flag.
+After connecting, the Arduino identifies itself by device ID and fetches its
+hub ID, switch pins and angles, reader SS pins and timings, and servo settle
+time from the backend. The backend uses the configuration loaded at startup;
+restart it after changing `arduinos.json`, and connected devices will reconnect
+and fetch the new configuration automatically.
+
+Runtime hardware configuration is bounded for the UNO R4 WiFi: at most eight
+switches, eight readers, 16 ASCII letters/digits/underscore/hyphen characters
+per device, hub, or component ID, and unique
+component pins in D2 through D10. D0/D1 remain available for UART and D11-D13
+remain reserved for SPI and the activity LED. When readers are configured the
+firmware disables activity-LED blinking before starting SPI. Device IDs are
+routing identities on the trusted operator LAN, not authentication secrets.
+
+Deploy the backend version supporting runtime configuration before uploading
+the new firmware. The backend continues to accept the legacy compiled-topology
+hello during this compatibility window when `allow_legacy_hello` is omitted or
+`true`, but a legacy connection cannot replace a runtime-configured connection.
+Set the option to `false` after upgrading that device. New firmware requires
+the configuration handshake.
 
 `read_timeout_ms` may be at most 1000 ms so NFC polling cannot block heartbeat
 responses long enough for the backend to disconnect a healthy Arduino hub.

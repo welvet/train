@@ -5,32 +5,78 @@
 namespace train {
 
 bool ReaderModule::setup() {
-  SPI.begin();
-  for (int index = 0; index < READER_COUNT; ++index) {
-    readers_[index] = new Adafruit_PN532(READERS[index].ssPin, &SPI);
-    readers_[index]->begin();
-    ReaderState& state = model_.readers[index];
-    state.ready =
-        readers_[index]->getFirmwareVersion() != 0 && readers_[index]->SAMConfig();
-    Serial.print(READERS[index].id);
-    Serial.println(state.ready ? " ready" : " unavailable");
-  }
-  return true;
+  return bus_.subscribe(
+      eventMask(EventType::ConfigurationChanged), this, receive);
 }
 
 void ReaderModule::trigger() {
-  if (READER_COUNT == 0) return;
+  if (model_.configurationPending) {
+    provisionNextReader();
+    return;
+  }
+  if (!model_.configurationApplied || model_.config.readerCount == 0) return;
   updateReader(nextReaderIndex_);
-  if (++nextReaderIndex_ >= READER_COUNT) nextReaderIndex_ = 0;
+  if (++nextReaderIndex_ >= model_.config.readerCount) nextReaderIndex_ = 0;
+}
+
+void ReaderModule::receive(void* context, const Event&) {
+  static_cast<ReaderModule*>(context)->beginConfiguration();
+}
+
+void ReaderModule::beginConfiguration() {
+  for (int index = 0; index < MAX_READERS; ++index) {
+    readers_[index] = nullptr;
+    model_.readers[index] = {};
+  }
+  nextReaderIndex_ = 0;
+  provisioningIndex_ = 0;
+  if (model_.config.readerCount == 0) {
+    model_.configurationPending = false;
+    model_.configurationApplied = true;
+    bus_.publish(HardwareConfiguredEvent());
+    return;
+  }
+  SPI.begin();
+  for (int index = 0; index < model_.config.readerCount; ++index) {
+    pinMode(model_.config.readers[index].ssPin, OUTPUT);
+    digitalWrite(model_.config.readers[index].ssPin, HIGH);
+  }
+}
+
+void ReaderModule::provisionNextReader() {
+  if (provisioningIndex_ >= model_.config.readerCount) {
+    model_.configurationPending = false;
+    model_.configurationApplied = true;
+    bus_.publish(HardwareConfiguredEvent());
+    return;
+  }
+  const int index = provisioningIndex_++;
+  const ReaderConfig& config = model_.config.readers[index];
+  const int cacheIndex = config.ssPin - MIN_COMPONENT_PIN;
+  if (pinCache_[cacheIndex] == nullptr) {
+    pinCache_[cacheIndex] = new Adafruit_PN532(config.ssPin, &SPI);
+  }
+  readers_[index] = pinCache_[cacheIndex];
+  readers_[index]->begin();
+  ReaderState& state = model_.readers[index];
+  state.ready =
+      readers_[index]->getFirmwareVersion() != 0 && readers_[index]->SAMConfig();
+  Serial.print(config.id);
+  Serial.println(state.ready ? " ready" : " unavailable");
+  if (state.ready) scanReader(index, false);
 }
 
 void ReaderModule::updateReader(int index) {
+  scanReader(index, true);
+}
+
+void ReaderModule::scanReader(int index, bool publish) {
   ReaderState& state = model_.readers[index];
   if (!state.ready) return;
 
   uint8_t uid[7] = {0};
   uint8_t uidLength = 0;
-  const ReaderConfig& config = READERS[index];
+  const ReaderConfig& config = model_.config.readers[index];
   const bool detected = readers_[index]->readPassiveTargetID(
       PN532_MIFARE_ISO14443A, uid, &uidLength, config.readTimeoutMs);
   const unsigned long now = millis();
@@ -40,7 +86,7 @@ void ReaderModule::updateReader(int index) {
     if (!state.tagPresent || !uidMatches(state, uid, uidLength)) {
       rememberUid(state, uid, uidLength);
       state.tagPresent = true;
-      publishChange(index, true);
+      if (publish) publishChange(index, true);
       Serial.print(config.id);
       Serial.println(" tag detected");
     }
@@ -51,7 +97,7 @@ void ReaderModule::updateReader(int index) {
     const TagChangedEvent removed(index, false, state.uid, state.uidLength);
     state.tagPresent = false;
     state.uidLength = 0;
-    bus_.publish(removed);
+    if (publish) bus_.publish(removed);
     Serial.print(config.id);
     Serial.println(" tag removed");
   }
