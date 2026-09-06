@@ -78,19 +78,21 @@ it("explains that automation needs a tagged train", () => {
   expect(screen.getByText("Add a tag to a train first")).toBeVisible();
 });
 
-it("builds a rule through compact picture controls", () => {
+it("builds a rule with numeric speed input", () => {
   const getDocument = renderEditor();
   fireEvent.click(screen.getByRole("button", { name: "Create automation for yard / D1" }));
 
   fireEvent.click(screen.getByRole("button", { name: "Add speed step" }));
-  fireEvent.click(screen.getByRole("button", { name: "Set train speed to 50%" }));
+  fireEvent.change(screen.getByRole("textbox", { name: "Train speed (%)" }), {
+    target: { value: "37" },
+  });
   fireEvent.click(screen.getByRole("button", { name: "Add wait step" }));
   fireEvent.click(screen.getByRole("button", { name: "Wait 5 seconds" }));
   fireEvent.click(screen.getAllByRole("button", { name: "Add switch step" })[0]);
   fireEvent.click(screen.getByRole("button", { name: "Flip switch position" }));
 
   expect(getDocument().rules[0].root.children).toMatchObject([
-    { type: "set_train_speed", speed: 50 },
+    { type: "set_train_speed", speed: 37 },
     {
       type: "wait",
       seconds: 5,
@@ -99,6 +101,80 @@ it("builds a rule through compact picture controls", () => {
       ],
     },
   ]);
+});
+
+it("accepts every valid speed including reverse, stop, and the boundaries", () => {
+  const getDocument = renderEditor();
+  fireEvent.click(screen.getByRole("button", { name: "Create automation for yard / D1" }));
+  fireEvent.click(screen.getByRole("button", { name: "Add speed step" }));
+
+  const speedInput = screen.getByRole("textbox", { name: "Train speed (%)" });
+  for (const speed of [-100, -73, 0, 42, 100]) {
+    fireEvent.change(speedInput, { target: { value: String(speed) } });
+    expect(getDocument().rules[0].root.children[0]).toMatchObject({
+      type: "set_train_speed",
+      speed,
+    });
+  }
+});
+
+it("allows clearing numeric inputs before entering a new speed or count", () => {
+  const getDocument = renderEditor();
+  fireEvent.click(screen.getByRole("button", { name: "Create automation for yard / D1" }));
+  fireEvent.click(screen.getByRole("button", { name: "Add speed step" }));
+  fireEvent.click(screen.getByRole("button", { name: "Add count step" }));
+
+  const speedInput = screen.getByRole("textbox", { name: "Train speed (%)" });
+  fireEvent.change(speedInput, { target: { value: "" } });
+  expect(speedInput).toHaveValue("");
+  expect(screen.getByText("Enter a whole number from -100 to 100")).toBeVisible();
+  fireEvent.change(speedInput, { target: { value: "-73" } });
+
+  const countInput = screen.getByRole("textbox", { name: "Detection count" });
+  fireEvent.change(countInput, { target: { value: "" } });
+  expect(countInput).toHaveValue("");
+  expect(screen.getByText("Enter a positive whole number")).toBeVisible();
+  fireEvent.change(countInput, { target: { value: "17" } });
+
+  expect(getDocument().rules[0].root.children).toMatchObject([
+    { type: "set_train_speed", speed: -73 },
+    { type: "on_count", count: 17 },
+  ]);
+});
+
+it("rejects invalid speed and repeat count values", () => {
+  const getDocument = renderEditor();
+  fireEvent.click(screen.getByRole("button", { name: "Create automation for yard / D1" }));
+  fireEvent.click(screen.getByRole("button", { name: "Add speed step" }));
+  fireEvent.click(screen.getByRole("button", { name: "Add count step" }));
+
+  const speedInput = screen.getByRole("textbox", { name: "Train speed (%)" });
+  const countInput = screen.getByRole("textbox", { name: "Detection count" });
+
+  fireEvent.change(speedInput, { target: { value: "101" } });
+  expect(screen.getByText("Speed must be from -100 to 100")).toBeVisible();
+  fireEvent.blur(speedInput);
+  expect(speedInput).toHaveValue("0");
+  fireEvent.change(speedInput, { target: { value: "1.5" } });
+  expect(screen.getByText("Enter a whole number from -100 to 100")).toBeVisible();
+  fireEvent.blur(speedInput);
+  fireEvent.change(countInput, { target: { value: "0" } });
+  expect(screen.getByText("Detection count must be at least 1")).toBeVisible();
+  fireEvent.blur(countInput);
+  expect(countInput).toHaveValue("2");
+  fireEvent.change(countInput, { target: { value: "2.5" } });
+  expect(screen.getByText("Enter a positive whole number")).toBeVisible();
+  fireEvent.blur(countInput);
+
+  const [speedNode, countNode] = getDocument().rules[0].root.children;
+  expect(speedNode).toMatchObject({ type: "set_train_speed", speed: 0 });
+  expect(countNode).toMatchObject({ type: "on_count", count: 2 });
+
+  fireEvent.change(countInput, { target: { value: "17" } });
+  expect(getDocument().rules[0].root.children[1]).toMatchObject({
+    type: "on_count",
+    count: 17,
+  });
 });
 
 it("starts every nested action list empty and lets it return to empty", () => {

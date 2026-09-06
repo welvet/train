@@ -130,9 +130,9 @@ it("loads and saves the backend automation document", async () => {
     </AppProviders>,
   );
 
-  const speedButton = await screen.findByRole("button", { name: "Set train speed to 50%" });
+  const speedInput = await screen.findByRole("textbox", { name: "Train speed (%)" });
   expect(screen.getByText("Saved")).toBeInTheDocument();
-  fireEvent.click(speedButton);
+  fireEvent.change(speedInput, { target: { value: "50" } });
   expect(screen.getByText("Unsaved")).toBeInTheDocument();
 
   fireEvent.click(screen.getByRole("button", { name: "Save automation" }));
