@@ -12,6 +12,7 @@ const STEP_TYPES: readonly {
   { type: "set_switch", emoji: "🚦", label: "Switch" },
   { type: "wait", emoji: "⏱️", label: "Wait" },
   { type: "on_count", emoji: "🔁", label: "Count" },
+  { type: "if_count", emoji: "🔀", label: "Count branch" },
 ];
 
 export function AddStepMenu({

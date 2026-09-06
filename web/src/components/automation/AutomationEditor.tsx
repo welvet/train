@@ -54,17 +54,20 @@ export function AutomationEditor({
     (trainId) => !indexedRules.some(({ rule }) => rule.root.train_id === trainId),
   );
   const localValidationError = getValidationError(
-    { version: 1, rules: indexedRules.map(({ rule }) => rule) },
+    { version: document.version, rules: indexedRules.map(({ rule }) => rule) },
     topology,
   );
 
   const setDocument = (next: AutomationDocument) => {
-    onDocumentChange(next);
+    onDocumentChange({
+      ...next,
+      version: next.version === 2 || containsIfCount(next) ? 2 : 1,
+    });
   };
 
   const replaceRule = (index: number, next: AutomationRule) => {
     setDocument({
-      version: 1,
+      version: document.version,
       rules: document.rules.map((rule, itemIndex) =>
         itemIndex === index ? { ...next, enabled: true } : rule,
       ),
@@ -84,7 +87,7 @@ export function AutomationEditor({
         children: [],
       },
     };
-    setDocument({ version: 1, rules: [...document.rules, next] });
+    setDocument({ version: document.version, rules: [...document.rules, next] });
   };
 
   const conflicts = sharedTargetWarnings(document).filter((warning) =>
@@ -146,7 +149,10 @@ export function AutomationEditor({
                   replaceRule(index, {
                     ...rule,
                     id: uniqueRuleId(
-                      { version: 1, rules: document.rules.filter((_, itemIndex) => itemIndex !== index) },
+                      {
+                        version: document.version,
+                        rules: document.rules.filter((_, itemIndex) => itemIndex !== index),
+                      },
                       ruleId(hubId, detectorId, trainId),
                     ),
                     root: { ...rule.root, train_id: trainId },
@@ -155,7 +161,7 @@ export function AutomationEditor({
                 onChange={(next) => replaceRule(index, next)}
                 onRemove={() =>
                   setDocument({
-                    version: 1,
+                    version: document.version,
                     rules: document.rules.filter((_, itemIndex) => itemIndex !== index),
                   })
                 }
@@ -269,6 +275,16 @@ function sharedTargetWarnings(document: AutomationDocument) {
   return [...targets.entries()]
     .filter(([, ruleIds]) => ruleIds.length > 1)
     .map(([target, ruleIds]) => ({ target, ruleIds }));
+}
+
+function containsIfCount(document: AutomationDocument): boolean {
+  let found = false;
+  for (const rule of document.rules) {
+    visitAutomationNodes(rule.root.children, (node) => {
+      if (node.type === "if_count") found = true;
+    });
+  }
+  return found;
 }
 
 function getValidationError(

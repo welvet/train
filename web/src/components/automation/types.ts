@@ -26,11 +26,27 @@ export interface OnCountNode {
   readonly children: readonly AutomationNode[];
 }
 
+export type BranchWhen = "match" | "otherwise";
+
+export interface BranchNode {
+  readonly type: "branch";
+  readonly when: BranchWhen;
+  readonly children: readonly AutomationNode[];
+}
+
+export interface IfCountNode {
+  readonly type: "if_count";
+  readonly count: number;
+  readonly children: readonly [BranchNode, BranchNode];
+}
+
 export type AutomationNode =
   | SetTrainSpeedNode
   | SetSwitchNode
   | WaitNode
-  | OnCountNode;
+  | OnCountNode
+  | IfCountNode
+  | BranchNode;
 
 export interface TrainDetectedNode {
   readonly type: "train_detected";
@@ -47,7 +63,7 @@ export interface AutomationRule {
 }
 
 export interface AutomationDocument {
-  readonly version: 1;
+  readonly version: 1 | 2;
   readonly rules: readonly AutomationRule[];
 }
 

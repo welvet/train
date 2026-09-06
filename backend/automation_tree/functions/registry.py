@@ -70,6 +70,30 @@ class FunctionRegistry:
             raise ValueError(
                 f"function {function_type} has an invalid children policy"
             )
+        allowed_parent_types = function.allowed_parent_types
+        if allowed_parent_types is not None and (
+            not isinstance(allowed_parent_types, frozenset)
+            or any(
+                not isinstance(parent_type, str)
+                or not parent_type
+                or parent_type != parent_type.strip()
+                for parent_type in allowed_parent_types
+            )
+        ):
+            raise ValueError(
+                f"function {function_type} allowed_parent_types must be None or "
+                "a frozenset of non-empty strings without surrounding whitespace"
+            )
+        minimum_version = function.minimum_document_version
+        if (
+            isinstance(minimum_version, bool)
+            or not isinstance(minimum_version, int)
+            or minimum_version < 1
+        ):
+            raise ValueError(
+                f"function {function_type} minimum_document_version must be a "
+                "positive integer"
+            )
         if not isinstance(function.fields, frozenset) or any(
             not isinstance(field, str)
             or not field

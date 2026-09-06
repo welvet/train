@@ -20,7 +20,7 @@ MAX_TREE_DEPTH = 64
 
 
 class AutomationParser:
-    """Strict parser for version 1 configurable automation documents."""
+    """Strict parser for version 1 and 2 configurable automation documents."""
 
     def __init__(
         self,
@@ -77,7 +77,7 @@ class AutomationParser:
             path="$",
         )
         version = require_int(document["version"], "$.version", minimum=1)
-        if version != 1:
+        if version not in (1, 2):
             raise AutomationParseError("$.version", f"unsupported version: {version}")
         raw_rules = document["rules"]
         if not isinstance(raw_rules, list):
@@ -89,13 +89,19 @@ class AutomationParser:
             )
 
         rules = tuple(
-            self._parse_rule(raw_rule, index)
+            self._parse_rule(raw_rule, index, document_version=version)
             for index, raw_rule in enumerate(raw_rules)
         )
         self._validate_unique_rules(rules)
         return AutomationDocument(version=version, rules=rules)
 
-    def _parse_rule(self, value: object, index: int) -> Rule:
+    def _parse_rule(
+        self,
+        value: object,
+        index: int,
+        *,
+        document_version: int,
+    ) -> Rule:
         path = f"$.rules[{index}]"
         rule = require_mapping(value, path)
         require_fields(
@@ -106,7 +112,11 @@ class AutomationParser:
         )
         rule_id = require_non_empty_string(rule["id"], f"{path}.id")
         enabled = require_bool(rule["enabled"], f"{path}.enabled")
-        trigger, children = self._parse_root(rule["root"], f"{path}.root")
+        trigger, children = self._parse_root(
+            rule["root"],
+            f"{path}.root",
+            document_version=document_version,
+        )
         return Rule(
             id=rule_id,
             enabled=enabled,
@@ -114,7 +124,13 @@ class AutomationParser:
             children=children,
         )
 
-    def _parse_root(self, value: object, path: str) -> tuple[Trigger, tuple[Node, ...]]:
+    def _parse_root(
+        self,
+        value: object,
+        path: str,
+        *,
+        document_version: int,
+    ) -> tuple[Trigger, tuple[Node, ...]]:
         root = require_mapping(value, path)
         require_fields(
             root,
@@ -137,7 +153,14 @@ class AutomationParser:
             ),
         )
         node_count = [0]
-        children = self._parse_children(root["children"], path, (), node_count)
+        children = self._parse_children(
+            root["children"],
+            path,
+            (),
+            node_count,
+            document_version=document_version,
+            parent_type="train_detected",
+        )
         if not children:
             raise AutomationParseError(f"{path}.children", "must not be empty")
         return trigger, children
@@ -148,6 +171,9 @@ class AutomationParser:
         parent_path: str,
         parent_node_path: tuple[int, ...],
         node_count: list[int],
+        *,
+        document_version: int,
+        parent_type: str,
     ) -> tuple[Node, ...]:
         path = f"{parent_path}.children"
         if not isinstance(value, list):
@@ -158,6 +184,8 @@ class AutomationParser:
                 f"{path}[{index}]",
                 (*parent_node_path, index),
                 node_count,
+                document_version=document_version,
+                parent_type=parent_type,
             )
             for index, child in enumerate(value)
         )
@@ -168,6 +196,9 @@ class AutomationParser:
         path: str,
         node_path: tuple[int, ...],
         node_count: list[int],
+        *,
+        document_version: int,
+        parent_type: str,
     ) -> Node:
         if len(node_path) > self._max_tree_depth:
             raise AutomationParseError(
@@ -195,6 +226,22 @@ class AutomationParser:
                 f"{path}.type",
                 f"unsupported node type: {raw_type}",
             )
+        if document_version < function.minimum_document_version:
+            raise AutomationParseError(
+                f"{path}.type",
+                f"requires automation document version "
+                f"{function.minimum_document_version} or later",
+            )
+        allowed_parent_types = function.allowed_parent_types
+        if (
+            allowed_parent_types is not None
+            and parent_type not in allowed_parent_types
+        ):
+            allowed = ", ".join(sorted(allowed_parent_types))
+            raise AutomationParseError(
+                f"{path}.type",
+                f"is only allowed under: {allowed}",
+            )
         required = {"type", "children", *function.fields}
         require_fields(node, required=required, allowed=required, path=path)
         raw_children = node["children"]
@@ -210,6 +257,8 @@ class AutomationParser:
             path,
             node_path,
             node_count,
+            document_version=document_version,
+            parent_type=raw_type,
         )
         return Node(
             type=raw_type,

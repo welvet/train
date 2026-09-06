@@ -121,6 +121,38 @@ it("keeps an empty nested action quiet and unsaveable until it gets a child", ()
   expect(screen.getByRole("button", { name: "Save automation" })).toBeEnabled();
 });
 
+it("keeps both count branches unfinished until each has an action", async () => {
+  const onReplaceAutomation = vi.fn(
+    async (document: AutomationDocument) => document,
+  );
+  renderStatus(emptyDocument, onReplaceAutomation);
+
+  fireEvent.click(
+    screen.getByRole("button", { name: "Create automation for yard / D1" }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Add count branch step" }));
+
+  const save = screen.getByRole("button", { name: "Save automation" });
+  expect(save).toBeDisabled();
+  expect(screen.queryByText("Automation draft cannot be saved")).not.toBeInTheDocument();
+
+  fireEvent.click(
+    within(screen.getByRole("group", { name: "Steps every configured count" }))
+      .getByRole("button", { name: "Add speed step" }),
+  );
+  expect(save).toBeDisabled();
+
+  fireEvent.click(
+    within(screen.getByRole("group", { name: "Steps all other times" }))
+      .getByRole("button", { name: "Add speed step" }),
+  );
+  expect(save).toBeEnabled();
+  fireEvent.click(save);
+
+  await waitFor(() => expect(onReplaceAutomation).toHaveBeenCalledTimes(1));
+  expect(onReplaceAutomation.mock.calls[0][0].version).toBe(2);
+});
+
 it("still shows unrelated validation errors on an unfinished rule", () => {
   const document: AutomationDocument = {
     version: 1,

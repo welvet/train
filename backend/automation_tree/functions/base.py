@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
+from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Protocol, TypeVar
 
@@ -20,6 +21,13 @@ class ChildrenPolicy(str, Enum):
 class NodeDecision(str, Enum):
     ENTER_CHILDREN = "enter_children"
     SKIP_CHILDREN = "skip_children"
+
+
+@dataclass(frozen=True, slots=True)
+class ChildSelection:
+    """Select exactly one direct child of the executing node."""
+
+    index: int
 
 
 class FunctionContext(Protocol):
@@ -46,6 +54,8 @@ class NodeFunction(ABC):
     type: str
     children_policy: ChildrenPolicy
     fields: frozenset[str]
+    allowed_parent_types: frozenset[str] | None = None
+    minimum_document_version: int = 1
 
     @abstractmethod
     def parse(self, value: Mapping[str, object], path: str) -> object:
@@ -56,8 +66,8 @@ class NodeFunction(ABC):
         self,
         context: FunctionContext,
         node: Node,
-    ) -> NodeDecision:
-        """Execute the node and decide whether traversal enters its children."""
+    ) -> NodeDecision | ChildSelection:
+        """Execute the node and decide whether traversal enters or selects children."""
 
 
 def require_node_config(node: Node, config_type: type[ConfigT]) -> ConfigT:

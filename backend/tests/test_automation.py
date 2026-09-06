@@ -22,9 +22,12 @@ from train.domain import (
 from train.modules.automation import AutomationModule
 
 
-def _document(*children: dict[str, object]) -> dict[str, object]:
+def _document(
+    *children: dict[str, object],
+    version: int = 1,
+) -> dict[str, object]:
     return {
-        "version": 1,
+        "version": version,
         "rules": [{
             "id": "station",
             "enabled": True,
@@ -144,6 +147,41 @@ async def test_module_dispatches_flip_switch_target(
         await module._runner.wait_idle()
 
         assert [item.target for item in switches] == ["flip"]
+    finally:
+        await module.stop()
+
+
+async def test_module_executes_count_branch_and_preserves_version_2(
+    bus: EventBus, tmp_path: Path
+) -> None:
+    branch = {
+        "type": "if_count",
+        "count": 2,
+        "children": [
+            {"type": "branch", "when": "match", "children": [_switch("diverge")]},
+            {
+                "type": "branch",
+                "when": "otherwise",
+                "children": [_switch("straight")],
+            },
+        ],
+    }
+    document = _document(branch, version=2)
+    path = tmp_path / "automations.json"
+    _write(path, document)
+    _, switches = await _acknowledge_commands(bus)
+    module = AutomationModule(bus, path=path, tagged_trains={"express"})
+    await module.start()
+
+    try:
+        for _ in range(2):
+            await bus.publish(TagDetected(
+                hub_name="yard", detector_name="D1", train_id="express"
+            ))
+            await module._runner.wait_idle()
+
+        assert [item.target for item in switches] == ["straight", "diverge"]
+        assert module.snapshot()["document"] == document
     finally:
         await module.stop()
 

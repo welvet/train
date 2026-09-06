@@ -46,7 +46,10 @@ export function StatusAggregation({
   const invalidDormantRules = automationDocument.rules.filter(
     (rule) =>
       !rule.enabled &&
-      automationValidationError({ version: 1, rules: [rule] }, topology) !== null,
+      automationValidationError(
+        { version: automationDocument.version, rules: [rule] },
+        topology,
+      ) !== null,
   );
   const visibleValidationError = automationValidationError(
     documentForVisibleValidation(automationDocument),
@@ -174,7 +177,7 @@ export function StatusAggregation({
                   onClick={() => {
                     const invalidRules = new Set(invalidDormantRules);
                     setAutomationDocument({
-                      version: 1,
+                      version: automationDocument.version,
                       rules: automationDocument.rules.filter((rule) => !invalidRules.has(rule)),
                     });
                   }}
@@ -199,7 +202,7 @@ function documentForVisibleValidation(
   document: AutomationDocument,
 ): AutomationDocument {
   return {
-    version: 1,
+    version: document.version,
     rules: document.rules.map((rule) =>
       rule.enabled
         ? {
@@ -220,11 +223,19 @@ function nodesForVisibleValidation(
   if (nodes.length === 0) {
     return [{ type: "set_train_speed", speed: 0, children: [] }];
   }
-  return nodes.map((node) =>
-    node.type === "wait" || node.type === "on_count"
-      ? { ...node, children: nodesForVisibleValidation(node.children) }
-      : node,
-  );
+  return nodes.map((node) => {
+    if (node.type === "if_count") {
+      const children = node.children.map((branch) => ({
+        ...branch,
+        children: nodesForVisibleValidation(branch.children),
+      })) as unknown as typeof node.children;
+      return { ...node, children };
+    }
+    if (node.type === "wait" || node.type === "on_count" || node.type === "branch") {
+      return { ...node, children: nodesForVisibleValidation(node.children) };
+    }
+    return node;
+  });
 }
 
 function topologyFor(system: SystemModel): AutomationTopology {

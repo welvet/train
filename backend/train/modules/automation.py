@@ -15,7 +15,9 @@ from automation_tree import (
     AutomationParseError,
     AutomationParser,
     AutomationRunner,
+    BranchFunction,
     FunctionRegistry,
+    IfCountFunction,
     OnCountFunction,
     SetSwitchFunction,
     SetTrainSpeedFunction,
@@ -304,6 +306,8 @@ def create_automation_parser(
     set_train_speed=None,
 ) -> tuple[AutomationParser, FunctionRegistry]:
     functions = FunctionRegistry([
+        BranchFunction(),
+        IfCountFunction(),
         OnCountFunction(),
         SetSwitchFunction(set_switch or _unavailable_handler),
         SetTrainSpeedFunction(set_train_speed or _unavailable_handler),

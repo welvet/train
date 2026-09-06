@@ -3,6 +3,7 @@ import { ActionIcon, Badge, Group, Paper, Stack, Text, Tooltip } from "@mantine/
 import { AddStepMenu } from "./AddStepMenu";
 import { createNode, type AutomationNodeType } from "./node-factories";
 import { OnCountEditor } from "./nodes/OnCountEditor";
+import { IfCountEditor } from "./nodes/IfCountEditor";
 import { SetSwitchEditor } from "./nodes/SetSwitchEditor";
 import { SetTrainSpeedEditor } from "./nodes/SetTrainSpeedEditor";
 import { WaitEditor } from "./nodes/WaitEditor";
@@ -14,6 +15,8 @@ const NODE_LABELS: Record<AutomationNode["type"], { emoji: string; label: string
   wait: { emoji: "⏱️", label: "Wait" },
   set_train_speed: { emoji: "🚂", label: "Speed" },
   on_count: { emoji: "🔁", label: "Count" },
+  if_count: { emoji: "🔀", label: "Count branch" },
+  branch: { emoji: "↪️", label: "Branch" },
 };
 
 export function AutomationNodeList({
@@ -140,6 +143,7 @@ function AutomationNodeEditor({
           )}
           {node.type === "wait" && <WaitEditor node={node} onChange={onChange} />}
           {node.type === "on_count" && <OnCountEditor node={node} onChange={onChange} />}
+          {node.type === "if_count" && <IfCountEditor node={node} onChange={onChange} />}
 
           {hasChildren && (
             <div className={classes.children}>
@@ -152,8 +156,61 @@ function AutomationNodeEditor({
               />
             </div>
           )}
+          {node.type === "if_count" && (
+            <Stack gap="sm" className={classes.branchGroup}>
+              {node.children.map((branch, branchIndex) => (
+                <Paper
+                  withBorder
+                  radius="md"
+                  p="sm"
+                  key={branch.when}
+                  className={classes.branchCard}
+                >
+                  <Stack gap="xs">
+                    <Text fw={700} size="sm">
+                      {branch.when === "match"
+                        ? `Every ${node.count}${ordinalSuffix(node.count)} time`
+                        : "All other times"}
+                    </Text>
+                    <AutomationNodeList
+                      nodes={branch.children}
+                      switches={switches}
+                      accessibleLabel={
+                        branch.when === "match"
+                          ? "Steps every configured count"
+                          : "Steps all other times"
+                      }
+                      onChange={(children) => {
+                        const branches = [...node.children] as [
+                          typeof node.children[0],
+                          typeof node.children[1],
+                        ];
+                        branches[branchIndex] = { ...branch, children };
+                        onChange({ ...node, children: branches });
+                      }}
+                    />
+                  </Stack>
+                </Paper>
+              ))}
+            </Stack>
+          )}
         </Stack>
       </Paper>
     </li>
   );
+}
+
+function ordinalSuffix(value: number): string {
+  const remainder100 = value % 100;
+  if (remainder100 >= 11 && remainder100 <= 13) return "th";
+  switch (value % 10) {
+    case 1:
+      return "st";
+    case 2:
+      return "nd";
+    case 3:
+      return "rd";
+    default:
+      return "th";
+  }
 }

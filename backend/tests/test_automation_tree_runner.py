@@ -8,7 +8,9 @@ import pytest
 from automation_tree import (
     AutomationParser,
     AutomationRunner,
+    BranchFunction,
     FunctionRegistry,
+    IfCountFunction,
     OnCountFunction,
     RuleState,
     SetSwitchFunction,
@@ -18,6 +20,7 @@ from automation_tree import (
 )
 from automation_tree.functions import (
     ChildrenPolicy,
+    ChildSelection,
     FunctionContext,
     NodeDecision,
     NodeFunction,
@@ -68,9 +71,10 @@ def _document(
     enabled: bool = True,
     rule_id: str = "departure",
     detector_id: str = "station",
+    version: int = 1,
 ) -> dict[str, object]:
     return {
-        "version": 1,
+        "version": version,
         "rules": [{
             "id": rule_id,
             "enabled": enabled,
@@ -104,8 +108,30 @@ def _wait(seconds: float, *children: object) -> dict[str, object]:
     return {"type": "wait", "seconds": seconds, "children": list(children)}
 
 
+def _if_count(
+    count: int,
+    *,
+    match: tuple[object, ...],
+    otherwise: tuple[object, ...],
+) -> dict[str, object]:
+    return {
+        "type": "if_count",
+        "count": count,
+        "children": [
+            {"type": "branch", "when": "match", "children": list(match)},
+            {
+                "type": "branch",
+                "when": "otherwise",
+                "children": list(otherwise),
+            },
+        ],
+    }
+
+
 def _functions(actions: _Actions) -> FunctionRegistry:
     return FunctionRegistry([
+        BranchFunction(),
+        IfCountFunction(),
         WaitFunction(),
         OnCountFunction(),
         SetTrainSpeedFunction(actions.set_speed),
@@ -251,6 +277,91 @@ async def test_occurrence_count_repeats() -> None:
         assert await _run_once(runner) == "departure"
 
     assert [call[-1] for call in actions.calls] == [3, 3, 3]
+
+
+async def test_if_count_selects_exactly_one_branch_per_visit() -> None:
+    actions = _Actions()
+    runner = AutomationRunner(_functions(actions))
+    await runner.replace(_parser(actions).parse(_document(
+        _if_count(5, match=(_speed(50),), otherwise=(_speed(10),)),
+        version=2,
+    )))
+
+    for _ in range(10):
+        await _run_once(runner)
+
+    assert [call[-1] for call in actions.calls] == [
+        10, 10, 10, 10, 50,
+        10, 10, 10, 10, 50,
+    ]
+
+
+async def test_if_count_branch_runs_multiple_children_in_order() -> None:
+    actions = _Actions()
+    runner = AutomationRunner(_functions(actions))
+    await runner.replace(_parser(actions).parse(_document(
+        _if_count(
+            2,
+            match=(_speed(20), _speed(21)),
+            otherwise=(_speed(10), _speed(11)),
+        ),
+        version=2,
+    )))
+
+    await _run_once(runner)
+    await _run_once(runner)
+
+    assert [call[-1] for call in actions.calls] == [10, 11, 20, 21]
+
+
+async def test_nested_if_count_counts_only_visits_that_reach_it() -> None:
+    actions = _Actions()
+    runner = AutomationRunner(_functions(actions))
+    await runner.replace(_parser(actions).parse(_document(
+        _count(
+            2,
+            _if_count(2, match=(_speed(20),), otherwise=(_speed(10),)),
+        ),
+        version=2,
+    )))
+
+    for _ in range(4):
+        await _run_once(runner)
+
+    assert [call[-1] for call in actions.calls] == [10, 20]
+
+
+async def test_if_count_consumes_occurrence_when_selected_branch_fails() -> None:
+    actions = _Actions()
+    actions.fail_speed = RuntimeError("failed")
+    runner = AutomationRunner(_functions(actions))
+    document = _parser(actions).parse(_document(
+        _if_count(2, match=(_speed(20),), otherwise=(_speed(10),)),
+        version=2,
+    ))
+    await runner.replace(document)
+
+    await _run_once(runner)
+    actions.fail_speed = None
+    await _run_once(runner)
+
+    assert [call[-1] for call in actions.calls] == [10, 20]
+
+
+async def test_if_count_counter_resets_on_complete_replacement() -> None:
+    actions = _Actions()
+    runner = AutomationRunner(_functions(actions))
+    document = _parser(actions).parse(_document(
+        _if_count(2, match=(_speed(20),), otherwise=(_speed(10),)),
+        version=2,
+    ))
+    await runner.replace(document)
+    await _run_once(runner)
+
+    await runner.replace(document, preserve_unchanged=False)
+    await _run_once(runner)
+
+    assert [call[-1] for call in actions.calls] == [10, 10]
 
 
 async def test_nested_counters_are_private_to_node_paths() -> None:
@@ -555,6 +666,43 @@ async def test_invalid_plugin_decision_is_a_structured_node_failure() -> None:
     assert status.failure.node_type == "invalid_decision"
     assert status.failure.node_path == (0,)
     assert "returned invalid decision" in status.failure.message
+
+
+class _InvalidSelectionFunction(NodeFunction):
+    type = "invalid_selection"
+    children_policy = ChildrenPolicy.REQUIRED
+    fields = frozenset({"index"})
+
+    def parse(self, value, path: str) -> object:
+        return value["index"]
+
+    async def execute(self, context: FunctionContext, node: Node) -> ChildSelection:
+        return ChildSelection(index=node.config)
+
+
+@pytest.mark.parametrize("index", [True, -1, 1, "0"])
+async def test_invalid_child_selection_is_parent_node_failure(index: object) -> None:
+    actions = _Actions()
+    functions = FunctionRegistry([
+        _InvalidSelectionFunction(),
+        SetTrainSpeedFunction(actions.set_speed),
+    ])
+    parser = AutomationParser(functions)
+    runner = AutomationRunner(functions)
+    await runner.replace(parser.parse(_document({
+        "type": "invalid_selection",
+        "index": index,
+        "children": [_speed(10)],
+    })))
+
+    await _run_once(runner)
+
+    status = runner.statuses()[0]
+    assert status.failure is not None
+    assert status.failure.node_type == "invalid_selection"
+    assert status.failure.node_path == (0,)
+    assert "selected invalid child index" in status.failure.message
+    assert actions.calls == []
 
 
 async def test_invalid_builtin_config_is_a_structured_node_failure() -> None:

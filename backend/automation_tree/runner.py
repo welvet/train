@@ -5,7 +5,12 @@ import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
-from automation_tree.functions import FunctionContext, FunctionRegistry, NodeDecision
+from automation_tree.functions import (
+    ChildSelection,
+    FunctionContext,
+    FunctionRegistry,
+    NodeDecision,
+)
 from automation_tree.model import (
     AutomationDocument,
     Node,
@@ -269,7 +274,7 @@ class AutomationRunner:
                 )
             try:
                 decision = await function.execute(context, node)
-                if not isinstance(decision, NodeDecision):
+                if not isinstance(decision, (NodeDecision, ChildSelection)):
                     raise TypeError(
                         f"function {node.type} returned invalid decision: {decision!r}"
                     )
@@ -279,6 +284,22 @@ class AutomationRunner:
                 raise _NodeExecutionError(node, exc) from exc
             if decision is NodeDecision.ENTER_CHILDREN:
                 await self._execute_children(context, node.children)
+            elif isinstance(decision, ChildSelection):
+                index = decision.index
+                if (
+                    isinstance(index, bool)
+                    or not isinstance(index, int)
+                    or index < 0
+                    or index >= len(node.children)
+                ):
+                    raise _NodeExecutionError(
+                        node,
+                        TypeError(
+                            f"function {node.type} selected invalid child index: "
+                            f"{index!r}"
+                        ),
+                    )
+                await self._execute_children(context, (node.children[index],))
 
     async def _cancel(self, runtimes: list[_RuntimeRule]) -> None:
         tasks: list[asyncio.Task[None]] = []

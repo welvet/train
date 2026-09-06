@@ -103,6 +103,100 @@ it("builds a rule with numeric speed input", () => {
   ]);
 });
 
+it("upgrades version 1 when adding a count branch with two fixed outcomes", () => {
+  const getDocument = renderEditor();
+  fireEvent.click(screen.getByRole("button", { name: "Create automation for yard / D1" }));
+  fireEvent.click(screen.getByRole("button", { name: "Add count branch step" }));
+
+  expect(screen.getByText("Every 5th time")).toBeVisible();
+  expect(screen.getByText("All other times")).toBeVisible();
+  const matchSteps = screen.getByRole("group", { name: "Steps every configured count" });
+  const otherwiseSteps = screen.getByRole("group", { name: "Steps all other times" });
+  fireEvent.click(within(matchSteps).getByRole("button", { name: "Add speed step" }));
+  fireEvent.click(within(otherwiseSteps).getByRole("button", { name: "Add speed step" }));
+
+  expect(getDocument()).toMatchObject({
+    version: 2,
+    rules: [
+      {
+        root: {
+          children: [
+            {
+              type: "if_count",
+              count: 5,
+              children: [
+                { type: "branch", when: "match", children: [{ type: "set_train_speed" }] },
+                {
+                  type: "branch",
+                  when: "otherwise",
+                  children: [{ type: "set_train_speed" }],
+                },
+              ],
+            },
+          ],
+        },
+      },
+    ],
+  });
+});
+
+it("preserves document versions during ordinary edits", () => {
+  const v1Document: AutomationDocument = {
+    version: 1,
+    rules: [
+      {
+        id: "v1",
+        enabled: true,
+        root: {
+          type: "train_detected",
+          hub_id: "yard",
+          detector_id: "D1",
+          train_id: "express",
+          children: [{ type: "set_train_speed", speed: 10, children: [] }],
+        },
+      },
+    ],
+  };
+  const getV1 = renderEditor(v1Document);
+  fireEvent.change(screen.getByRole("textbox", { name: "Train speed (%)" }), {
+    target: { value: "11" },
+  });
+  expect(getV1().version).toBe(1);
+});
+
+it("never downgrades a version 2 document during ordinary edits", () => {
+  const v2Document: AutomationDocument = {
+    version: 2,
+    rules: [
+      {
+        id: "v2",
+        enabled: true,
+        root: {
+          type: "train_detected",
+          hub_id: "yard",
+          detector_id: "D1",
+          train_id: "express",
+          children: [{ type: "set_train_speed", speed: 10, children: [] }],
+        },
+      },
+    ],
+  };
+  const getV2 = renderEditor(v2Document);
+  fireEvent.change(screen.getByRole("textbox", { name: "Train speed (%)" }), {
+    target: { value: "12" },
+  });
+  expect(getV2().version).toBe(2);
+});
+
+it("keeps version 2 after the last count branch is removed", () => {
+  const getDocument = renderEditor();
+  fireEvent.click(screen.getByRole("button", { name: "Create automation for yard / D1" }));
+  fireEvent.click(screen.getByRole("button", { name: "Add count branch step" }));
+  fireEvent.click(screen.getByRole("button", { name: "Remove Count branch step 1" }));
+
+  expect(getDocument()).toMatchObject({ version: 2, rules: [{ root: { children: [] } }] });
+});
+
 it("accepts every valid speed including reverse, stop, and the boundaries", () => {
   const getDocument = renderEditor();
   fireEvent.click(screen.getByRole("button", { name: "Create automation for yard / D1" }));

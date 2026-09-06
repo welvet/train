@@ -56,8 +56,14 @@ under `data/`, it belongs to one installation and must remain outside Git.
 }
 ```
 
-`version` selects the file format. The backend must reject versions it does
-not understand instead of guessing. `rules` is an ordered list for stable UI
+`version` selects the file format. Version 1 contains the original linear and
+filtering nodes. Version 2 adds exclusive count branching while retaining every
+version 1 node and behavior. The backend accepts both versions and must reject
+versions it does not understand instead of guessing. The editor preserves a
+version 1 document until a count branch is added, then saves the complete
+document as version 2. Once version 2 is saved, rolling back to a version-1-only
+backend requires removing the v2 nodes and changing the document version first.
+`rules` is an ordered list for stable UI
 display; list order does not give a rule priority. An empty `rules` list is
 valid and means that no configurable automation is active.
 
@@ -115,6 +121,8 @@ terminal hardware nodes are leaves and require an empty `children` array.
 | `set_switch` | terminal | `hub_id`, `switch_id`, `position`, `children` | Moves a configured switch to `straight` or `diverge`, or `flip`s its last-known position. |
 | `wait` | control | `seconds`, `children` | Waits, then runs its children in order. |
 | `on_count` | conditional | `count`, `children` | Runs its children on every configured occurrence. |
+| `if_count` | conditional, v2 | `count`, `children` | Selects its `match` branch on every configured occurrence and `otherwise` on the rest. |
+| `branch` | control, v2 | `when`, `children` | Labels the `match` or `otherwise` subtree directly beneath `if_count`. |
 
 ### Set the detected train's speed
 
@@ -200,6 +208,61 @@ one after the fact.
 Counters belong to the node's path within a rule, not just to its displayed
 contents. They are runtime state and are not written back to JSON. They reset
 when the backend starts or a complete document is applied through the API.
+
+### Count branch (version 2)
+
+Use `if_count` when both the matching and non-matching occurrences need an
+action. It requires exactly one `match` branch and one `otherwise` branch, and
+executes exactly one of them each time execution reaches the node. Branch order
+in JSON does not change their meaning.
+
+For example, this keeps a switch straight for four passes and sends the fifth
+pass down the diverging route, repeating the cycle on the 10th, 15th, and later
+multiples:
+
+```json
+{
+  "type": "if_count",
+  "count": 5,
+  "children": [
+    {
+      "type": "branch",
+      "when": "match",
+      "children": [
+        {
+          "type": "set_switch",
+          "hub_id": "hub_1",
+          "switch_id": "S1",
+          "position": "diverge",
+          "children": []
+        }
+      ]
+    },
+    {
+      "type": "branch",
+      "when": "otherwise",
+      "children": [
+        {
+          "type": "set_switch",
+          "hub_id": "hub_1",
+          "switch_id": "S1",
+          "position": "straight",
+          "children": []
+        }
+      ]
+    }
+  ]
+}
+```
+
+The counter advances whenever traversal reaches this particular node. At the
+root level that is every admitted matching detection. A nested `if_count` only
+counts executions that reach it. As with `on_count`, a failed or cancelled
+branch does not roll the occurrence back.
+
+Switch acknowledgement means the Arduino accepted the command, not that a
+physical position sensor observed completion. Place the detector far enough
+before the switch for it to settle before the train arrives.
 
 ## Execution model
 
@@ -362,6 +425,5 @@ installation-written Python. The backend:
 5. exposes validated rule configuration and runtime status through the web API.
 
 Arbitrary event subscriptions, Python callbacks, speed ramps, and custom
-background tasks are intentionally outside version 1. New root or node
-types can be added in a later schema version when there is a concrete UI use
-case.
+background tasks remain outside versions 1 and 2. Further root or node types
+require a later schema version and a concrete UI use case.

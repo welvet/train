@@ -7,8 +7,10 @@ import pytest
 from automation_tree import (
     AutomationParseError,
     AutomationParser,
+    BranchFunction,
     DuplicateFunctionError,
     FunctionRegistry,
+    IfCountFunction,
     OnCountFunction,
     SetSwitchFunction,
     SetTrainSpeedFunction,
@@ -16,7 +18,9 @@ from automation_tree import (
 )
 from automation_tree.functions import (
     ChildrenPolicy,
+    BranchConfig,
     FunctionContext,
+    IfCountConfig,
     NodeDecision,
     NodeFunction,
     OnCountConfig,
@@ -45,14 +49,16 @@ async def _set_switch(
 def parser() -> AutomationParser:
     return AutomationParser(FunctionRegistry([
         WaitFunction(),
+        BranchFunction(),
+        IfCountFunction(),
         OnCountFunction(),
         SetTrainSpeedFunction(_set_speed),
         SetSwitchFunction(_set_switch),
     ]))
 
 
-def _document(*rules: object) -> dict[str, object]:
-    return {"version": 1, "rules": list(rules)}
+def _document(*rules: object, version: int = 1) -> dict[str, object]:
+    return {"version": version, "rules": list(rules)}
 
 
 def _rule(
@@ -155,7 +161,7 @@ def test_parse_json_rejects_non_standard_json(
         ({"version": 1}, r"\$: missing required field: rules"),
         ({"version": 1, "rules": [], "extra": True}, r"\$.extra: unknown"),
         ({"version": True, "rules": []}, r"\$.version: must be an integer"),
-        ({"version": 2, "rules": []}, r"unsupported version: 2"),
+        ({"version": 3, "rules": []}, r"unsupported version: 3"),
         ({"version": 1, "rules": {}}, r"\$.rules: must be an array"),
     ],
 )
@@ -304,6 +310,104 @@ def test_rejects_removed_count_mode(parser: AutomationParser) -> None:
         parser.parse(_document(_rule(node)))
 
 
+def test_parses_version_2_count_branches(parser: AutomationParser) -> None:
+    node = {
+        "type": "if_count",
+        "count": 5,
+        "children": [
+            {
+                "type": "branch",
+                "when": "otherwise",
+                "children": [_speed(10)],
+            },
+            {
+                "type": "branch",
+                "when": "match",
+                "children": [_speed(50)],
+            },
+        ],
+    }
+
+    document = parser.parse(_document(_rule(node), version=2))
+
+    count_node = document.rules[0].children[0]
+    assert isinstance(count_node.config, IfCountConfig)
+    assert count_node.config.otherwise_index == 0
+    assert count_node.config.match_index == 1
+    assert all(isinstance(child.config, BranchConfig) for child in count_node.children)
+
+
+def test_rejects_version_2_node_in_version_1(parser: AutomationParser) -> None:
+    node = {
+        "type": "if_count",
+        "count": 5,
+        "children": [
+            {"type": "branch", "when": "match", "children": [_speed()]},
+            {"type": "branch", "when": "otherwise", "children": [_speed()]},
+        ],
+    }
+
+    with pytest.raises(
+        AutomationParseError,
+        match=r"\.type: requires automation document version 2 or later",
+    ):
+        parser.parse(_document(_rule(node)))
+
+
+@pytest.mark.parametrize(
+    ("children", "message"),
+    [
+        ([], r"must not be empty"),
+        (
+            [{"type": "branch", "when": "match", "children": [_speed()]}],
+            r"must contain exactly one match branch",
+        ),
+        (
+            [
+                {"type": "branch", "when": "match", "children": [_speed()]},
+                {"type": "branch", "when": "match", "children": [_speed()]},
+            ],
+            r"duplicate match branch",
+        ),
+        (
+            [
+                _speed(),
+                {"type": "branch", "when": "otherwise", "children": [_speed()]},
+            ],
+            r"\.type: must be branch",
+        ),
+    ],
+)
+def test_rejects_invalid_if_count_branches(
+    parser: AutomationParser,
+    children: list[object],
+    message: str,
+) -> None:
+    node = {"type": "if_count", "count": 5, "children": children}
+    with pytest.raises(AutomationParseError, match=message):
+        parser.parse(_document(_rule(node), version=2))
+
+
+def test_rejects_branch_outside_if_count(parser: AutomationParser) -> None:
+    node = {"type": "branch", "when": "match", "children": [_speed()]}
+    with pytest.raises(AutomationParseError, match=r"only allowed under: if_count"):
+        parser.parse(_document(_rule(node), version=2))
+
+
+@pytest.mark.parametrize("count", [0, -1, True, 1.5])
+def test_rejects_invalid_if_count(parser: AutomationParser, count: object) -> None:
+    node = {
+        "type": "if_count",
+        "count": count,
+        "children": [
+            {"type": "branch", "when": "match", "children": [_speed()]},
+            {"type": "branch", "when": "otherwise", "children": [_speed()]},
+        ],
+    }
+    with pytest.raises(AutomationParseError, match=r"\.count: must be"):
+        parser.parse(_document(_rule(node), version=2))
+
+
 @pytest.mark.parametrize("speed", [-101, 101, True, 1.5])
 def test_rejects_invalid_speed(parser: AutomationParser, speed: object) -> None:
     with pytest.raises(AutomationParseError, match=r"\.speed: must be"):
@@ -405,6 +509,16 @@ def test_registry_replaces_existing_binding() -> None:
             "children_policy",
             "forbidden",
             "function custom has an invalid children policy",
+        ),
+        (
+            "allowed_parent_types",
+            {"if_count"},
+            "allowed_parent_types must be None or a frozenset",
+        ),
+        (
+            "minimum_document_version",
+            True,
+            "minimum_document_version must be a positive integer",
         ),
         (
             "fields",
