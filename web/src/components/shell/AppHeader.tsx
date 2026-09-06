@@ -28,7 +28,6 @@ export function AppHeader({ menuOpened, onMenuToggle }: AppHeaderProps) {
         <Burger
           opened={menuOpened}
           onClick={onMenuToggle}
-          hiddenFrom="sm"
           size="sm"
           aria-label="Toggle navigation"
         />

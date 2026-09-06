@@ -9,7 +9,7 @@ import { AppHeader } from "./AppHeader";
 import { type AppPage, PageHost } from "./PageHost";
 
 export function AppFrame() {
-  const [mobileOpened, { toggle, close }] = useDisclosure(false);
+  const [menuOpened, { toggle, close }] = useDisclosure(false);
   const [page, setPage] = useState<AppPage>("controller");
 
   return (
@@ -18,12 +18,12 @@ export function AppFrame() {
       navbar={{
         width: 230,
         breakpoint: "sm",
-        collapsed: { mobile: !mobileOpened },
+        collapsed: { mobile: !menuOpened, desktop: !menuOpened },
       }}
       padding={{ base: "sm", sm: "lg" }}
     >
       <AppShell.Header>
-        <AppHeader menuOpened={mobileOpened} onMenuToggle={toggle} />
+        <AppHeader menuOpened={menuOpened} onMenuToggle={toggle} />
       </AppShell.Header>
       <AppShell.Navbar p="sm">
         <NavLink

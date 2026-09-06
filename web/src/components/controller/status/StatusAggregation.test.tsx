@@ -25,6 +25,20 @@ const externalDocument: AutomationDocument = {
   ],
 };
 
+it("renders the save control below the automation editors", () => {
+  renderStatus(emptyDocument, vi.fn());
+
+  const createAutomation = screen.getByRole("button", {
+    name: "Create automation for yard / D1",
+  });
+  const saveAutomation = screen.getByRole("button", { name: "Save automation" });
+
+  expect(
+    createAutomation.compareDocumentPosition(saveAutomation) &
+      Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+});
+
 it("does not let a local draft overwrite an external automation update", () => {
   const onReplaceAutomation = vi.fn();
   const { rerender } = renderStatus(emptyDocument, onReplaceAutomation);

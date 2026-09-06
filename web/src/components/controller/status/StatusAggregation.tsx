@@ -86,30 +86,19 @@ export function StatusAggregation({
       </Paper>
 
       <Paper withBorder radius="md" p="md">
-        <Group justify="space-between" align="center" wrap="wrap">
-          <Group gap="xs">
-            <Text fw={800}>Automation</Text>
-            <Badge
-              color={changedElsewhere ? "orange" : dirty ? "yellow" : "green"}
-              variant="light"
-              size="lg"
-            >
-              {changedElsewhere
-                ? "Changed elsewhere"
-                : dirty
-                  ? "Unsaved"
-                  : "Saved"}
-            </Badge>
-          </Group>
-          <Button
+        <Group gap="xs">
+          <Text fw={800}>Automation</Text>
+          <Badge
+            color={changedElsewhere ? "orange" : dirty ? "yellow" : "green"}
+            variant="light"
             size="lg"
-            loading={automationSaving}
-            disabled={!dirty || changedElsewhere || validationError !== null}
-            onClick={() => void saveAutomation().catch(() => undefined)}
-            aria-label="Save automation"
           >
-            💾 Save
-          </Button>
+            {changedElsewhere
+              ? "Changed elsewhere"
+              : dirty
+                ? "Unsaved"
+                : "Saved"}
+          </Badge>
         </Group>
         {changedElsewhere && (
           <Alert color="orange" title="Active automation changed" mt="sm">
@@ -181,6 +170,18 @@ export function StatusAggregation({
           />
         ))}
       </StatusGroup>
+
+      <Group justify="flex-end">
+        <Button
+          size="lg"
+          loading={automationSaving}
+          disabled={!dirty || changedElsewhere || validationError !== null}
+          onClick={() => void saveAutomation().catch(() => undefined)}
+          aria-label="Save automation"
+        >
+          💾 Save
+        </Button>
+      </Group>
     </Stack>
   );
 }
