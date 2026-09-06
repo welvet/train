@@ -8,6 +8,7 @@ import pytest
 from train.config import (
     ConfigError,
     default_automation_path,
+    default_trains_path,
     load_runtime_config,
     validate_arduino_upload_config,
 )
@@ -94,6 +95,36 @@ def test_automation_path_can_be_separate_from_immutable_runtime_data(
     assert default_automation_path() == path
 
 
+def test_trains_path_can_be_separate_from_immutable_runtime_data(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "persistent" / "trains.json"
+    monkeypatch.setenv("TRAIN_TRAINS_PATH", str(path))
+
+    assert default_trains_path() == path
+
+
+def test_default_runtime_load_uses_persistent_trains_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    release = tmp_path / "release"
+    release.mkdir()
+    _write_config(release)
+    persistent = tmp_path / "persistent" / "trains.json"
+    persistent.parent.mkdir()
+    persistent.write_text(json.dumps({
+        "trains": [
+            {"id": "persisted", "ble_address": "11:22", "tag_ids": []}
+        ]
+    }))
+    monkeypatch.setenv("TRAIN_DATA_DIR", str(release))
+    monkeypatch.setenv("TRAIN_TRAINS_PATH", str(persistent))
+
+    config = load_runtime_config()
+
+    assert [train.train_id for train in config.trains] == ["persisted"]
+
+
 @pytest.mark.parametrize("field", ["id", "ble_address"])
 def test_duplicate_train_identity_is_rejected(tmp_path: Path, field: str) -> None:
     _write_config(tmp_path)
@@ -122,6 +153,25 @@ def test_duplicate_tag_id_within_train_is_rejected(tmp_path: Path) -> None:
     (tmp_path / "trains.json").write_text(json.dumps(trains))
 
     with pytest.raises(ConfigError, match="duplicate value"):
+        load_runtime_config(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("target", "field"),
+    [("root", "unexpected"), ("train", "color")],
+)
+def test_unsupported_train_fields_are_rejected(
+    tmp_path: Path, target: str, field: str
+) -> None:
+    _write_config(tmp_path)
+    trains = json.loads((tmp_path / "trains.json").read_text())
+    if target == "root":
+        trains[field] = True
+    else:
+        trains["trains"][0][field] = "red"
+    (tmp_path / "trains.json").write_text(json.dumps(trains))
+
+    with pytest.raises(ConfigError, match=rf"unsupported field\(s\): {field}"):
         load_runtime_config(tmp_path)
 
 

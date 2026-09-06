@@ -1,7 +1,7 @@
 "use client";
 
 import Joystick from "@fluentui-emoji/react/flat/joystick";
-import { AppShell, NavLink } from "@mantine/core";
+import { AppShell, NavLink, Text } from "@mantine/core";
 import { useDisclosure } from "@mantine/hooks";
 import { useState } from "react";
 
@@ -32,6 +32,15 @@ export function AppFrame() {
           leftSection={<Joystick width={28} aria-hidden />}
           onClick={() => {
             setPage("controller");
+            close();
+          }}
+        />
+        <NavLink
+          active={page === "configuration"}
+          label="Configuration"
+          leftSection={<Text size="xl" aria-hidden>⚙️</Text>}
+          onClick={() => {
+            setPage("configuration");
             close();
           }}
         />

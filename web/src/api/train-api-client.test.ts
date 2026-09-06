@@ -1,5 +1,6 @@
 import {
   ApiRequestError,
+  type ConfigurationSnapshot,
   type StateEnvelope,
   TrainApiClient,
 } from "./train-api-client";
@@ -25,6 +26,80 @@ describe("TrainApiClient", () => {
       "/api/state",
       expect.objectContaining({ cache: "no-store" }),
     );
+  });
+
+  it("reads and replaces the versioned configuration envelope", async () => {
+    const configuration = configurationSnapshot();
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(
+      new Response(JSON.stringify(configuration), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    ));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new TrainApiClient();
+
+    await expect(client.getConfiguration()).resolves.toEqual(configuration);
+    const update = {
+      version: 1 as const,
+      documents: {
+        trains: {
+          base_modified_at: 1000,
+          modified_at: 2000,
+          value: configuration.documents.trains.value,
+        },
+      },
+    };
+    await expect(client.replaceConfiguration(update)).resolves.toEqual(
+      configuration,
+    );
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/configuration",
+      expect.objectContaining({ cache: "no-store" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/configuration",
+      expect.objectContaining({ method: "PUT", body: JSON.stringify(update) }),
+    );
+  });
+
+  it("rejects malformed configuration responses", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ version: 1, documents: {} }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+
+    await expect(new TrainApiClient().getConfiguration()).rejects.toMatchObject({
+      message: "The backend returned an unsupported configuration format",
+      status: 0,
+    });
+  });
+
+  it("rejects an empty train configuration response", async () => {
+    const configuration = configurationSnapshot();
+    configuration.documents.trains.value.trains = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify(configuration), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+
+    await expect(new TrainApiClient().getConfiguration()).rejects.toMatchObject({
+      message: "The backend returned an unsupported configuration format",
+      status: 0,
+    });
   });
 
   it("rejects malformed automation in a state envelope", async () => {
@@ -291,6 +366,28 @@ function stateEnvelope(): StateEnvelope {
       trains: {},
       lego_hubs: {},
       arduino_hubs: {},
+    },
+  };
+}
+
+function configurationSnapshot(): ConfigurationSnapshot {
+  return {
+    version: 1,
+    documents: {
+      trains: {
+        modified_at: 1000,
+        restart_required: true,
+        value: {
+          trains: [
+            {
+              id: "express",
+              lego_hub_id: "express-hub",
+              ble_address: "AA:BB",
+              tag_ids: ["04:AB"],
+            },
+          ],
+        },
+      },
     },
   };
 }

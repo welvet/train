@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from automation_tree import AutomationParseError, RuleState
+from train.config import BackendConfig, RuntimeConfig, TrainConfig
 from train.core.event_bus import EventBus
 from train.domain import (
     AutomationHalt,
@@ -384,6 +385,34 @@ async def test_update_rejects_unknown_switch_without_changing_active_document(
         assert json.loads(path.read_text()) == original
     finally:
         await module.stop()
+
+
+def test_candidate_can_be_validated_against_persisted_restart_topology(
+    bus: EventBus,
+    tmp_path: Path,
+) -> None:
+    module = AutomationModule(
+        bus,
+        path=tmp_path / "automations.json",
+        tagged_trains={"express"},
+    )
+    future_config = RuntimeConfig(
+        backend=BackendConfig(
+            "localhost",
+            8080,
+            "http://localhost:8080",
+            "localhost",
+            9000,
+        ),
+        trains=(TrainConfig("other", "other_hub", "AA:BB", ()),),
+        arduinos=(),
+    )
+
+    with pytest.raises(AutomationParseError, match="unknown train: express"):
+        module.validate_json_for_runtime_config(
+            json.dumps(_document(_speed(20))),
+            future_config,
+        )
 
 
 async def test_missing_automation_file_has_guided_error(

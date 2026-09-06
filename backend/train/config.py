@@ -95,10 +95,19 @@ def default_automation_path() -> Path:
     return default_data_dir() / "automations.json"
 
 
+def default_trains_path() -> Path:
+    configured = os.environ.get("TRAIN_TRAINS_PATH")
+    if configured:
+        return Path(configured).expanduser().resolve()
+    return default_data_dir() / "trains.json"
+
+
 def load_runtime_config(data_dir: Path | None = None) -> RuntimeConfig:
     root = data_dir or default_data_dir()
     backend_data = _read_json(root / "backend.json")
-    trains_data = _read_json(root / "trains.json")
+    trains_data = _read_json(
+        root / "trains.json" if data_dir is not None else default_trains_path()
+    )
     arduinos_data = _read_json(root / "arduinos.json")
 
     api = _mapping(backend_data, "api", "backend.json")
@@ -111,6 +120,25 @@ def load_runtime_config(data_dir: Path | None = None) -> RuntimeConfig:
         arduino_port=_port(arduino, "port", "backend.json"),
     )
 
+    trains = parse_trains_document(trains_data)
+
+    devices = _parse_arduino_devices(arduinos_data)
+
+    return RuntimeConfig(
+        backend=backend,
+        trains=trains,
+        arduinos=devices,
+    )
+
+
+def parse_trains_document(trains_data: dict[str, Any]) -> tuple[TrainConfig, ...]:
+    """Validate and normalize the editable trains.json document."""
+    unexpected_root_fields = set(trains_data) - {"trains"}
+    if unexpected_root_fields:
+        raise ConfigError(
+            "trains.json: unsupported field(s): "
+            + ", ".join(sorted(unexpected_root_fields))
+        )
     raw_trains = trains_data.get("trains")
     if not isinstance(raw_trains, list) or not raw_trains:
         raise ConfigError("trains.json: 'trains' must be a non-empty list")
@@ -124,6 +152,18 @@ def load_runtime_config(data_dir: Path | None = None) -> RuntimeConfig:
         source = f"trains.json: trains[{index}]"
         if not isinstance(value, dict):
             raise ConfigError(f"{source} must be an object")
+        unexpected_fields = set(value) - {
+            "id",
+            "lego_hub_id",
+            "ble_address",
+            "tag_id",
+            "tag_ids",
+        }
+        if unexpected_fields:
+            raise ConfigError(
+                f"{source}: unsupported field(s): "
+                + ", ".join(sorted(unexpected_fields))
+            )
         train_id = _string(value, "id", source)
         raw_lego_hub_id = value.get("lego_hub_id", train_id)
         if not isinstance(raw_lego_hub_id, str) or not raw_lego_hub_id.strip():
@@ -148,6 +188,29 @@ def load_runtime_config(data_dir: Path | None = None) -> RuntimeConfig:
             normalized_tag_ids,
         ))
 
+    return tuple(trains)
+
+
+def normalized_trains_document(
+    trains_data: dict[str, Any],
+) -> dict[str, list[dict[str, object]]]:
+    """Return the stable on-disk representation used by the configuration API."""
+    return {
+        "trains": [
+            {
+                "id": train.train_id,
+                "lego_hub_id": train.lego_hub_id,
+                "ble_address": train.ble_address,
+                "tag_ids": list(train.tag_ids),
+            }
+            for train in parse_trains_document(trains_data)
+        ]
+    }
+
+
+def _parse_arduino_devices(
+    arduinos_data: dict[str, Any],
+) -> tuple[ArduinoDeviceConfig, ...]:
     raw_devices = _mapping(arduinos_data, "devices", "arduinos.json")
     if not raw_devices:
         raise ConfigError("arduinos.json: 'devices' must not be empty")
@@ -183,11 +246,7 @@ def load_runtime_config(data_dir: Path | None = None) -> RuntimeConfig:
             device_id.strip(), hub_id, tuple(switches), reader_ids
         ))
 
-    return RuntimeConfig(
-        backend=backend,
-        trains=tuple(trains),
-        arduinos=tuple(devices),
-    )
+    return tuple(devices)
 
 
 def _train_tag_ids(value: dict[str, Any], source: str) -> tuple[str, ...]:

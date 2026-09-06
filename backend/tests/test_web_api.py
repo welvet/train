@@ -11,6 +11,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from automation_tree import AutomationParseError
 import train.modules.web_api.transport as web_transport
 from train.core.event_bus import EventBus
+from train.configuration import ConfigurationConflict, ConfigurationError
 from train.domain import (
     AutomationHalt,
     SetSwitchPosition,
@@ -125,7 +126,100 @@ async def test_openapi_exposes_state_and_public_event_contract(
         "/api/state/stream",
         "/api/events",
         "/api/automation",
+        "/api/configuration",
     }
+
+
+async def test_configuration_endpoint_reads_and_replaces_document(
+    bus: EventBus,
+) -> None:
+    current = {
+        "version": 1,
+        "documents": {
+            "trains": {
+                "modified_at": 1000.0,
+                "restart_required": True,
+                "value": {"trains": []},
+            }
+        },
+    }
+    updates: list[dict[str, object]] = []
+
+    async def update(text: str) -> dict[str, object]:
+        updates.append(json.loads(text))
+        return current
+
+    module = WebApiModule(
+        bus,
+        host="127.0.0.1",
+        port=0,
+        configuration_snapshot=lambda: current,
+        configuration_update=update,
+    )
+    await module.start()
+    assert module._app is not None
+    client = TestClient(TestServer(module._app))
+    await client.start_server()
+    try:
+        response = await client.get("/api/configuration")
+        assert response.status == 200
+        assert await response.json() == current
+
+        replacement = {
+            "version": 1,
+            "documents": {
+                "trains": {
+                    "base_modified_at": 1000,
+                    "modified_at": 2000,
+                    "value": {"trains": []},
+                }
+            },
+        }
+        response = await client.put("/api/configuration", json=replacement)
+        assert response.status == 200
+        assert await response.json() == current
+        assert updates == [replacement]
+    finally:
+        await client.close()
+        await module.stop()
+
+
+@pytest.mark.parametrize(
+    ("error", "status"),
+    [
+        (ConfigurationError("$.documents", "invalid"), 400),
+        (ConfigurationConflict("$.documents.trains", "stale"), 409),
+    ],
+)
+async def test_configuration_endpoint_reports_structured_errors(
+    bus: EventBus,
+    error: ConfigurationError,
+    status: int,
+) -> None:
+    async def reject(text: str) -> dict[str, object]:
+        raise error
+
+    module = WebApiModule(
+        bus,
+        host="127.0.0.1",
+        port=0,
+        configuration_snapshot=lambda: {},
+        configuration_update=reject,
+    )
+    await module.start()
+    assert module._app is not None
+    client = TestClient(TestServer(module._app))
+    await client.start_server()
+    try:
+        response = await client.put("/api/configuration", data="{}")
+        assert response.status == status
+        assert await response.json() == {
+            "error": error.message,
+            "path": error.path,
+        }
+    finally:
+        await client.close()
+        await module.stop()
 
 
 async def test_state_stream_sends_initial_and_changed_full_snapshots(

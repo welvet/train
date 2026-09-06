@@ -172,6 +172,60 @@
         ],
         "type": "object"
       },
+      "ConfigurationSnapshot": {
+        "additionalProperties": false,
+        "properties": {
+          "documents": {
+            "additionalProperties": false,
+            "properties": {
+              "trains": {
+                "$ref": "#/components/schemas/TrainsConfigurationDocument"
+              }
+            },
+            "required": [
+              "trains"
+            ],
+            "type": "object"
+          },
+          "version": {
+            "const": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "documents"
+        ],
+        "type": "object"
+      },
+      "ConfigurationUpdate": {
+        "additionalProperties": false,
+        "properties": {
+          "documents": {
+            "additionalProperties": false,
+            "maxProperties": 1,
+            "minProperties": 1,
+            "properties": {
+              "trains": {
+                "$ref": "#/components/schemas/TrainsConfigurationUpdate"
+              }
+            },
+            "required": [
+              "trains"
+            ],
+            "type": "object"
+          },
+          "version": {
+            "const": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "documents"
+        ],
+        "type": "object"
+      },
       "DetectorState": {
         "additionalProperties": false,
         "properties": {
@@ -434,6 +488,37 @@
         ],
         "type": "object"
       },
+      "TrainConfiguration": {
+        "additionalProperties": false,
+        "properties": {
+          "ble_address": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "lego_hub_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "tag_ids": {
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "lego_hub_id",
+          "ble_address",
+          "tag_ids"
+        ],
+        "type": "object"
+      },
       "TrainState": {
         "additionalProperties": false,
         "properties": {
@@ -451,6 +536,64 @@
           "train_id",
           "lego_hub_id",
           "speed"
+        ],
+        "type": "object"
+      },
+      "TrainsConfiguration": {
+        "additionalProperties": false,
+        "properties": {
+          "trains": {
+            "items": {
+              "$ref": "#/components/schemas/TrainConfiguration"
+            },
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "trains"
+        ],
+        "type": "object"
+      },
+      "TrainsConfigurationDocument": {
+        "additionalProperties": false,
+        "properties": {
+          "modified_at": {
+            "exclusiveMinimum": 0,
+            "type": "number"
+          },
+          "restart_required": {
+            "type": "boolean"
+          },
+          "value": {
+            "$ref": "#/components/schemas/TrainsConfiguration"
+          }
+        },
+        "required": [
+          "modified_at",
+          "restart_required",
+          "value"
+        ],
+        "type": "object"
+      },
+      "TrainsConfigurationUpdate": {
+        "additionalProperties": false,
+        "properties": {
+          "base_modified_at": {
+            "exclusiveMinimum": 0,
+            "type": "number"
+          },
+          "modified_at": {
+            "exclusiveMinimum": 0,
+            "type": "number"
+          },
+          "value": {
+            "$ref": "#/components/schemas/TrainsConfiguration"
+          }
+        },
+        "required": [
+          "base_modified_at",
+          "value"
         ],
         "type": "object"
       }
@@ -515,6 +658,108 @@
               }
             },
             "description": "Automation runtime unavailable"
+          }
+        }
+      }
+    },
+    "/api/configuration": {
+      "get": {
+        "operationId": "getConfiguration",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigurationSnapshot"
+                }
+              }
+            },
+            "description": "Editable backend configuration"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Configuration read failed"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Configuration management unavailable"
+          }
+        }
+      },
+      "put": {
+        "operationId": "replaceConfiguration",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfigurationUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigurationSnapshot"
+                }
+              }
+            },
+            "description": "Configuration persisted"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid configuration"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Configuration update is stale"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Configuration persistence failed"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Configuration management unavailable"
           }
         }
       }

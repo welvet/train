@@ -5,6 +5,7 @@ import gzip
 import hashlib
 import io
 import json
+import math
 import os
 import platform
 import re
@@ -78,6 +79,12 @@ class RuntimeTarget:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class SyncedDocument:
+    modified_at: float
+    value: dict[str, object]
+
+
 def load_deployment(root: Path | None = None) -> DeploymentConfig:
     workspace = root or data_dir()
     document = read_json("deployment.json", workspace)
@@ -130,6 +137,183 @@ def load_deployment(root: Path | None = None) -> DeploymentConfig:
         tls,
         ca_file.strip() if ca_file is not None else None,
     )
+
+
+def synchronize_configuration(
+    config: DeploymentConfig,
+    workspace: Path,
+) -> str:
+    """Synchronize editable configuration with the running backend."""
+    local_path = workspace / "trains.json"
+    endpoint = config.health_url.rstrip("/") + "/api/configuration"
+    for _ in range(3):
+        local = _local_trains_document(local_path, workspace)
+        remote = _fetch_configuration(endpoint)
+        if remote is None:
+            return "unavailable"
+        if local != _local_trains_document(local_path, workspace):
+            continue
+        if remote.value == local.value:
+            return "unchanged"
+        if remote.modified_at > local.modified_at:
+            if local != _local_trains_document(local_path, workspace):
+                continue
+            _atomic_write_json(
+                local_path,
+                remote.value,
+                remote.modified_at,
+            )
+            return "downloaded"
+        if remote.modified_at == local.modified_at:
+            raise RuntimeError(
+                "Configuration sync found different trains.json documents with the "
+                "same timestamp; touch the intended winner and retry"
+            )
+
+        uploaded = _upload_configuration(endpoint, local, remote.modified_at)
+        if uploaded is None or local != _local_trains_document(local_path, workspace):
+            continue
+        _atomic_write_json(
+            local_path,
+            uploaded.value,
+            uploaded.modified_at,
+        )
+        return "uploaded"
+    raise RuntimeError(
+        "Configuration changed repeatedly during synchronization; retry when edits stop"
+    )
+
+
+def _local_trains_document(path: Path, workspace: Path) -> SyncedDocument:
+    for _ in range(3):
+        before = path.stat()
+        value = read_json("trains.json", workspace)
+        after = path.stat()
+        if _file_identity(before) == _file_identity(after):
+            return SyncedDocument(after.st_mtime_ns / 1_000_000_000, value)
+    raise RuntimeError(
+        "Local trains.json changed repeatedly while being read; retry when edits stop"
+    )
+
+
+def _file_identity(value: os.stat_result) -> tuple[int, int, int, int]:
+    return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns)
+
+
+def _fetch_configuration(endpoint: str) -> SyncedDocument | None:
+    try:
+        request = urllib.request.Request(
+            endpoint,
+            headers={"Accept": "application/json"},
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            contents = response.read()
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            return None
+        raise RuntimeError(
+            f"Configuration sync failed: backend returned HTTP {exc.code}"
+        ) from exc
+    except (OSError, urllib.error.URLError) as exc:
+        raise RuntimeError(
+            "Configuration sync failed: backend is unreachable"
+        ) from exc
+    try:
+        remote = json.loads(contents)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(
+            "Configuration sync failed: backend returned invalid JSON"
+        ) from exc
+    return _configuration_trains_document(remote)
+
+
+def _upload_configuration(
+    endpoint: str,
+    local: SyncedDocument,
+    base_modified_at: float,
+) -> SyncedDocument | None:
+    payload = {
+        "version": 1,
+        "documents": {
+            "trains": {
+                "base_modified_at": base_modified_at,
+                "modified_at": local.modified_at,
+                "value": local.value,
+            }
+        },
+    }
+    request = urllib.request.Request(
+        endpoint,
+        data=(json.dumps(payload) + "\n").encode(),
+        headers={
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        },
+        method="PUT",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            return _configuration_trains_document(json.loads(response.read()))
+    except urllib.error.HTTPError as exc:
+        if exc.code == 409:
+            return None
+        try:
+            detail = json.loads(exc.read()).get("error")
+        except (AttributeError, json.JSONDecodeError, UnicodeDecodeError):
+            detail = None
+        message = detail if isinstance(detail, str) else f"HTTP {exc.code}"
+        raise RuntimeError(f"Configuration upload failed: {message}") from exc
+    except (
+        OSError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        urllib.error.URLError,
+    ) as exc:
+        raise RuntimeError("Configuration upload failed") from exc
+
+
+def _configuration_trains_document(value: object) -> SyncedDocument:
+    if not isinstance(value, dict) or value.get("version") != 1:
+        raise RuntimeError("Backend returned an unsupported configuration format")
+    documents = value.get("documents")
+    trains = documents.get("trains") if isinstance(documents, dict) else None
+    if not isinstance(trains, dict):
+        raise RuntimeError("Backend configuration is missing trains")
+    modified_at = trains.get("modified_at")
+    document = trains.get("value")
+    if (
+        not isinstance(modified_at, (int, float))
+        or isinstance(modified_at, bool)
+        or not math.isfinite(modified_at)
+        or modified_at <= 0
+        or not isinstance(document, dict)
+    ):
+        raise RuntimeError("Backend returned an invalid trains configuration")
+    return SyncedDocument(float(modified_at), document)
+
+
+def _atomic_write_json(path: Path, value: object, modified_at: float) -> None:
+    descriptor, name = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+    )
+    staged = Path(name)
+    try:
+        with os.fdopen(descriptor, "w") as output:
+            json.dump(value, output, indent=2)
+            output.write("\n")
+            output.flush()
+            os.fsync(output.fileno())
+        os.utime(staged, ns=(int(modified_at * 1_000_000_000),) * 2)
+        os.replace(staged, path)
+        directory = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        staged.unlink(missing_ok=True)
 
 
 def build_bundle(workspace: Path, destination: Path, target: RuntimeTarget) -> str:

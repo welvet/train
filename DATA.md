@@ -59,6 +59,13 @@ train. Older firmware remains protocol-compatible, but may report a direct
 change between two tags as a removal followed by a new detection; updated
 firmware lets the backend coalesce both tags into one continuous train presence.
 
+The complete train document is available through `GET /api/configuration` and
+can be replaced atomically with `PUT /api/configuration`. The API uses a
+versioned `documents` envelope so more editable workspace files can be added
+without creating a separate top-level protocol. Updates are validated and
+written to `trains.json`; restart the backend before expecting the new topology
+to control hardware.
+
 ### `arduinos.json`
 
 Defines any number of named Arduino devices. Each device may have multiple
@@ -189,6 +196,14 @@ included. The release is uploaded under its SHA-256 name, and `release.json`
 with a unique publication attempt is updated last to trigger activation. The
 command returns only after both the FTP activation marker and the backend's
 release-aware health endpoint agree.
+
+Before building, `server-push` synchronizes `trains.json` with the running
+backend. If the documents differ, the file with the newer modification
+timestamp replaces the older one; equal contents need no copy. Keep the
+deployment machine and server clocks synchronized. A backend without the
+configuration endpoint is treated as a bootstrap deployment and uses the local
+file. On the server, editable trains are stored in persistent
+`<server-root>/data/trains.json`, outside immutable release directories.
 
 Bootstrap the permanent watcher once on the server from the FTP root:
 

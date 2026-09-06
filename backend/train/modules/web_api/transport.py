@@ -12,6 +12,7 @@ from aiohttp import web
 
 from automation_tree import AutomationParseError
 
+from train.configuration import ConfigurationConflict, ConfigurationError
 from train.core.event_bus import CommandFailed, CommandResourceNotFound, EventBus
 from train.domain import (
     Event,
@@ -39,6 +40,8 @@ class WebApiServer:
         automation_update: Callable[[str], Awaitable[dict[str, object]]] | None = None,
         automation_subscribe: Callable[[Callable[[], None]], None] | None = None,
         automation_unsubscribe: Callable[[Callable[[], None]], None] | None = None,
+        configuration_snapshot: Callable[[], dict[str, object]] | None = None,
+        configuration_update: Callable[[str], Awaitable[dict[str, object]]] | None = None,
         static_root: Path | None = None,
     ) -> None:
         self._bus = bus
@@ -49,6 +52,8 @@ class WebApiServer:
         self._automation_update = automation_update
         self._automation_subscribe = automation_subscribe
         self._automation_unsubscribe = automation_unsubscribe
+        self._configuration_snapshot = configuration_snapshot
+        self._configuration_update = configuration_update
         self._static_files = StaticFileResolver(
             static_root if static_root is not None else PACKAGED_STATIC_ROOT
         )
@@ -72,6 +77,8 @@ class WebApiServer:
         app.router.add_get("/api/state/stream", self._handle_state_stream)
         app.router.add_post("/api/events", self._handle_event)
         app.router.add_put("/api/automation", self._handle_automation_update)
+        app.router.add_get("/api/configuration", self._handle_configuration)
+        app.router.add_put("/api/configuration", self._handle_configuration_update)
         app.router.add_get("/{path:.*}", self._static_files.handle)
         self._app = app
         self._runner = web.AppRunner(app)
@@ -257,6 +264,42 @@ class WebApiServer:
             self._automation_revision += 1
             await self._notify_state_changed()
         return web.json_response({"automation": automation})
+
+    async def _handle_configuration(self, request: web.Request) -> web.Response:
+        if self._configuration_snapshot is None:
+            return web.json_response(
+                {"error": "configuration management is unavailable"}, status=503
+            )
+        try:
+            configuration = self._configuration_snapshot()
+        except (ConfigurationError, OSError) as exc:
+            return web.json_response({"error": str(exc)}, status=500)
+        return web.json_response(configuration)
+
+    async def _handle_configuration_update(
+        self, request: web.Request
+    ) -> web.Response:
+        if self._configuration_update is None:
+            return web.json_response(
+                {"error": "configuration management is unavailable"}, status=503
+            )
+        try:
+            configuration = await self._configuration_update(await request.text())
+        except ConfigurationConflict as exc:
+            return web.json_response(
+                {"error": exc.message, "path": exc.path}, status=409
+            )
+        except ConfigurationError as exc:
+            return web.json_response(
+                {"error": exc.message, "path": exc.path}, status=400
+            )
+        except UnicodeDecodeError:
+            return web.json_response({"error": "body must be valid JSON"}, status=400)
+        except OSError:
+            return web.json_response(
+                {"error": "could not persist configuration"}, status=500
+            )
+        return web.json_response(configuration)
 
 
 def _empty_automation_snapshot() -> dict[str, object]:

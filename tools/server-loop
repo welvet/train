@@ -176,6 +176,9 @@ class ServerLoop:
             raise ReleaseError(f"release Python is missing: {python}")
         environment = os.environ.copy()
         environment["TRAIN_DATA_DIR"] = str(release / "data")
+        trains = self.root / "data" / "trains.json"
+        self._seed_file(release / "data" / "trains.json", trains)
+        environment["TRAIN_TRAINS_PATH"] = str(trains)
         automations = self.root / "data" / "automations.json"
         self._seed_automations(release / "data" / "automations.json", automations)
         environment["TRAIN_AUTOMATIONS_PATH"] = str(automations)
@@ -195,11 +198,26 @@ class ServerLoop:
 
     @staticmethod
     def _seed_automations(source: Path, destination: Path) -> None:
+        ServerLoop._seed_file(
+            source,
+            destination,
+            missing_default=EMPTY_AUTOMATIONS,
+        )
+
+    @staticmethod
+    def _seed_file(
+        source: Path,
+        destination: Path,
+        *,
+        missing_default: bytes | None = None,
+    ) -> None:
         destination.parent.mkdir(parents=True, exist_ok=True)
         try:
             contents = source.read_bytes()
         except FileNotFoundError:
-            contents = EMPTY_AUTOMATIONS
+            if missing_default is None:
+                raise
+            contents = missing_default
         descriptor, name = tempfile.mkstemp(
             dir=destination.parent,
             prefix=f".{destination.name}.",
