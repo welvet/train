@@ -87,7 +87,9 @@ it("builds a rule with numeric speed input", () => {
     target: { value: "37" },
   });
   fireEvent.click(screen.getByRole("button", { name: "Add wait step" }));
-  fireEvent.click(screen.getByRole("button", { name: "Wait 5 seconds" }));
+  fireEvent.change(screen.getByRole("textbox", { name: "Wait (seconds)" }), {
+    target: { value: "5" },
+  });
   fireEvent.click(screen.getAllByRole("button", { name: "Add switch step" })[0]);
   fireEvent.click(screen.getByRole("button", { name: "Flip switch position" }));
 
@@ -195,6 +197,42 @@ it("keeps version 2 after the last count branch is removed", () => {
   fireEvent.click(screen.getByRole("button", { name: "Remove Count branch step 1" }));
 
   expect(getDocument()).toMatchObject({ version: 2, rules: [{ root: { children: [] } }] });
+});
+
+it("accepts any wait duration allowed by the automation contract", () => {
+  const getDocument = renderEditor();
+  fireEvent.click(screen.getByRole("button", { name: "Create automation for yard / D1" }));
+  fireEvent.click(screen.getByRole("button", { name: "Add wait step" }));
+
+  const waitInput = screen.getByRole("textbox", { name: "Wait (seconds)" });
+  for (const seconds of [0, 2.5, 3600]) {
+    fireEvent.change(waitInput, { target: { value: String(seconds) } });
+    expect(getDocument().rules[0].root.children[0]).toMatchObject({
+      type: "wait",
+      seconds,
+    });
+  }
+});
+
+it("rejects invalid wait durations and restores the last valid value", () => {
+  const getDocument = renderEditor();
+  fireEvent.click(screen.getByRole("button", { name: "Create automation for yard / D1" }));
+  fireEvent.click(screen.getByRole("button", { name: "Add wait step" }));
+
+  const waitInput = screen.getByRole("textbox", { name: "Wait (seconds)" });
+  fireEvent.change(waitInput, { target: { value: "3601" } });
+  expect(screen.getByText("Wait must be from 0 to 3600 seconds")).toBeVisible();
+  fireEvent.blur(waitInput);
+  expect(waitInput).toHaveValue("1");
+
+  fireEvent.change(waitInput, { target: { value: "" } });
+  expect(screen.getByText("Enter a number from 0 to 3600")).toBeVisible();
+  fireEvent.blur(waitInput);
+
+  expect(getDocument().rules[0].root.children[0]).toMatchObject({
+    type: "wait",
+    seconds: 1,
+  });
 });
 
 it("accepts every valid speed including reverse, stop, and the boundaries", () => {
