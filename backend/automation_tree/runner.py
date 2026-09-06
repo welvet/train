@@ -13,6 +13,7 @@ from automation_tree.functions import (
 )
 from automation_tree.model import (
     AutomationDocument,
+    CURRENT_AUTOMATION_DOCUMENT_VERSION,
     Node,
     NodeFailure,
     Rule,
@@ -33,6 +34,7 @@ class _RuntimeRule:
     task: asyncio.Task[None] | None = None
     last_error: str | None = None
     failure: NodeFailure | None = None
+    waiters: int = 0
 
     def __post_init__(self) -> None:
         if not self.definition.enabled:
@@ -57,12 +59,15 @@ class _ExecutionContext(FunctionContext):
         return self._runtime.definition.trigger
 
     async def sleep(self, seconds: float) -> None:
-        self._runtime.state = RuleState.WAITING
-        self._runner._notify_status_changed()
+        self._runtime.waiters += 1
+        if self._runtime.waiters == 1:
+            self._runtime.state = RuleState.WAITING
+            self._runner._notify_status_changed()
         try:
             await self._runner._sleep(seconds)
         finally:
-            if self._runtime.task is asyncio.current_task():
+            self._runtime.waiters -= 1
+            if self._runtime.waiters == 0 and self._runtime.task is not None:
                 self._runtime.state = RuleState.RUNNING
                 self._runner._notify_status_changed()
 
@@ -89,7 +94,10 @@ class AutomationRunner:
         self._status_changed = status_changed or (lambda: None)
         self._rules: dict[str, _RuntimeRule] = {}
         self._triggers: dict[Trigger, _RuntimeRule] = {}
-        self._document = AutomationDocument(version=1, rules=())
+        self._document = AutomationDocument(
+            version=CURRENT_AUTOMATION_DOCUMENT_VERSION,
+            rules=(),
+        )
         self._lock = asyncio.Lock()
         self._paused = False
         self._closed = False
@@ -128,6 +136,12 @@ class AutomationRunner:
         try:
             async with self._lock:
                 self._ensure_open()
+                if document.version != CURRENT_AUTOMATION_DOCUMENT_VERSION:
+                    raise ValueError(
+                        "automation runner requires document version "
+                        f"{CURRENT_AUTOMATION_DOCUMENT_VERSION}, got "
+                        f"{document.version}"
+                    )
                 self._validate_functions(document)
                 definitions = {rule.id: rule for rule in document.rules}
                 changing = [
@@ -136,8 +150,6 @@ class AutomationRunner:
                     if not preserve_unchanged
                     or definitions.get(rule_id) != runtime.definition
                 ]
-                await self._cancel(changing)
-
                 rules: dict[str, _RuntimeRule] = {}
                 for definition in document.rules:
                     existing = self._rules.get(definition.id)
@@ -150,12 +162,15 @@ class AutomationRunner:
                     else:
                         rules[definition.id] = _RuntimeRule(definition)
 
-                self._rules = rules
-                self._triggers = {
+                triggers = {
                     runtime.definition.trigger: runtime
                     for runtime in rules.values()
                     if runtime.definition.enabled
                 }
+                await self._cancel(changing)
+
+                self._rules = rules
+                self._triggers = triggers
                 self._document = document
                 self._notify_status_changed()
         finally:
@@ -265,23 +280,60 @@ class AutomationRunner:
         context: _ExecutionContext,
         children: tuple[Node, ...],
     ) -> None:
-        for node in children:
-            function = self._functions.get(node.type)
-            if function is None:
-                raise _NodeExecutionError(
-                    node,
-                    RuntimeError(f"function is not registered: {node.type}"),
+        tasks = [
+            asyncio.create_task(
+                self._execute_node(context, node),
+                name=f"automation:{context.rule_id}:{_format_node_path(node.path)}",
+            )
+            for node in children
+        ]
+        if not tasks:
+            return
+        try:
+            done, pending = await asyncio.wait(
+                tasks,
+                return_when=asyncio.FIRST_EXCEPTION,
+            )
+            if any(
+                not task.cancelled() and task.exception() is not None
+                for task in done
+            ):
+                for task in pending:
+                    task.cancel()
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+        except BaseException:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
+
+        for result in results:
+            if isinstance(result, _NodeExecutionError):
+                raise result
+        for result in results:
+            if isinstance(result, BaseException) and not isinstance(
+                result, asyncio.CancelledError
+            ):
+                raise result
+
+    async def _execute_node(
+        self,
+        context: _ExecutionContext,
+        node: Node,
+    ) -> None:
+        function = self._functions.get(node.type)
+        if function is None:
+            raise _NodeExecutionError(
+                node,
+                RuntimeError(f"function is not registered: {node.type}"),
+            )
+        try:
+            decision = await function.execute(context, node)
+            if not isinstance(decision, (NodeDecision, ChildSelection)):
+                raise TypeError(
+                    f"function {node.type} returned invalid decision: {decision!r}"
                 )
-            try:
-                decision = await function.execute(context, node)
-                if not isinstance(decision, (NodeDecision, ChildSelection)):
-                    raise TypeError(
-                        f"function {node.type} returned invalid decision: {decision!r}"
-                    )
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                raise _NodeExecutionError(node, exc) from exc
             if decision is NodeDecision.ENTER_CHILDREN:
                 await self._execute_children(context, node.children)
             elif isinstance(decision, ChildSelection):
@@ -292,14 +344,17 @@ class AutomationRunner:
                     or index < 0
                     or index >= len(node.children)
                 ):
-                    raise _NodeExecutionError(
-                        node,
-                        TypeError(
-                            f"function {node.type} selected invalid child index: "
-                            f"{index!r}"
-                        ),
+                    raise TypeError(
+                        f"function {node.type} selected invalid child index: "
+                        f"{index!r}"
                     )
                 await self._execute_children(context, (node.children[index],))
+        except asyncio.CancelledError:
+            raise
+        except _NodeExecutionError:
+            raise
+        except Exception as exc:
+            raise _NodeExecutionError(node, exc) from exc
 
     async def _cancel(self, runtimes: list[_RuntimeRule]) -> None:
         tasks: list[asyncio.Task[None]] = []

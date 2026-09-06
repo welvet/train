@@ -92,7 +92,7 @@ async def test_state_returns_complete_domain_snapshot(
     assert envelope["version"] == 4
     assert envelope["snapshot_at"] > 0
     assert envelope["automation"] == {
-        "document": {"version": 1, "rules": []},
+        "document": {"version": 3, "rules": []},
         "eligible_train_ids": [],
         "paused": False,
         "statuses": [],

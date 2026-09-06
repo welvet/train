@@ -37,7 +37,7 @@ def test_data_initializer_creates_isolated_workspace_scaffold(
     deployment = (tmp_path / "deployment.json").read_text()
     assert '"remote_dir": "/train/deploy"' in deployment
     assert (tmp_path / "automations.json").read_text() == (
-        '{\n  "version": 1,\n  "rules": []\n}\n'
+        '{\n  "version": 3,\n  "rules": []\n}\n'
     )
 
 

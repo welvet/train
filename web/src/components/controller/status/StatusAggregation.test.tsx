@@ -150,7 +150,7 @@ it("keeps both count branches unfinished until each has an action", async () => 
   fireEvent.click(save);
 
   await waitFor(() => expect(onReplaceAutomation).toHaveBeenCalledTimes(1));
-  expect(onReplaceAutomation.mock.calls[0][0].version).toBe(2);
+  expect(onReplaceAutomation.mock.calls[0][0].version).toBe(3);
 });
 
 it("still shows unrelated validation errors on an unfinished rule", () => {
@@ -227,7 +227,7 @@ it("removes only invalid dormant rules from the document-level cleanup", async (
 
   await waitFor(() => expect(onReplaceAutomation).toHaveBeenCalledTimes(1));
   expect(onReplaceAutomation).toHaveBeenCalledWith({
-    version: 1,
+    version: 3,
     rules: [validDormantRule],
   });
 });

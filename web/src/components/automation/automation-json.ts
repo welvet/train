@@ -9,6 +9,12 @@ const MAX_RULES = 1_000;
 const MAX_NODES_PER_RULE = 1_000;
 const MAX_TREE_DEPTH = 64;
 
+export function currentAutomationDocument(
+  document: AutomationDocument,
+): AutomationDocument {
+  return document.version === 3 ? document : { ...document, version: 3 };
+}
+
 export function serializeAutomation(document: AutomationDocument): string {
   return JSON.stringify(validateAutomation(document), null, 2);
 }
@@ -27,8 +33,8 @@ export function parseAutomation(source: string): AutomationDocument {
 
   const value = object(input, "Automation document");
   exactKeys(value, ["version", "rules"], "Automation document");
-  if (value.version !== 1 && value.version !== 2) {
-    throw new Error("Only automation document versions 1 and 2 are supported.");
+  if (value.version !== 1 && value.version !== 2 && value.version !== 3) {
+    throw new Error("Only automation document versions 1, 2, and 3 are supported.");
   }
   if (!Array.isArray(value.rules)) {
     throw new Error("Automation document rules must be an array.");
@@ -37,7 +43,9 @@ export function parseAutomation(source: string): AutomationDocument {
     throw new Error(`Automation document may contain at most ${MAX_RULES} rules.`);
   }
 
-  const rules = value.rules.map((rule, index) => parseRule(rule, index, value.version as 1 | 2));
+  const rules = value.rules.map((rule, index) =>
+    parseRule(rule, index, value.version as 1 | 2 | 3),
+  );
   const ids = new Set<string>();
   const enabledTriggers = new Set<string>();
   for (const rule of rules) {
@@ -52,10 +60,10 @@ export function parseAutomation(source: string): AutomationDocument {
     }
   }
 
-  return { version: value.version as 1 | 2, rules };
+  return { version: value.version as 1 | 2 | 3, rules };
 }
 
-function parseRule(input: unknown, index: number, version: 1 | 2): AutomationRule {
+function parseRule(input: unknown, index: number, version: 1 | 2 | 3): AutomationRule {
   const label = `Rule ${index + 1}`;
   const value = object(input, label);
   exactKeys(value, ["id", "enabled", "root"], label);
@@ -101,7 +109,7 @@ function parseNode(
   path: string,
   nodeCount: { value: number },
   depth: number,
-  version: 1 | 2,
+  version: 1 | 2 | 3,
   parentType: string,
 ): AutomationNode {
   if (depth > MAX_TREE_DEPTH) {
@@ -222,7 +230,7 @@ function childrenOf(
   path: string,
   nodeCount: { value: number },
   depth: number,
-  version: 1 | 2,
+  version: 1 | 2 | 3,
   parentType: string,
 ): AutomationNode[] {
   if (!Array.isArray(input)) throw new Error(`${path} children must be an array.`);

@@ -125,7 +125,7 @@ def test_release_without_automations_uses_compatible_empty_default(
         release / "data" / "automations.json", destination
     )
 
-    assert json.loads(destination.read_text()) == {"version": 1, "rules": []}
+    assert json.loads(destination.read_text()) == {"version": 3, "rules": []}
 
 
 def test_remove_tree_does_not_follow_directory_symlinks(tmp_path: Path) -> None:

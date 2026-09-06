@@ -19,12 +19,13 @@ from train.domain import (
     TagDetected,
     TrainSpeedChanged,
 )
+from train.modules import automation as automation_module
 from train.modules.automation import AutomationModule
 
 
 def _document(
     *children: dict[str, object],
-    version: int = 1,
+    version: int = 3,
 ) -> dict[str, object]:
     return {
         "version": version,
@@ -151,7 +152,7 @@ async def test_module_dispatches_flip_switch_target(
         await module.stop()
 
 
-async def test_module_executes_count_branch_and_preserves_version_2(
+async def test_module_executes_count_branch_and_migrates_version_2(
     bus: EventBus, tmp_path: Path
 ) -> None:
     branch = {
@@ -181,7 +182,9 @@ async def test_module_executes_count_branch_and_preserves_version_2(
             await module._runner.wait_idle()
 
         assert [item.target for item in switches] == ["straight", "diverge"]
-        assert module.snapshot()["document"] == document
+        expected = {**document, "version": 3}
+        assert module.snapshot()["document"] == expected
+        assert json.loads(path.read_text()) == expected
     finally:
         await module.stop()
 
@@ -214,6 +217,163 @@ async def test_replacement_cancels_old_tree_and_persists_new_document(
         assert [command.speed for command in speeds] == [30]
     finally:
         await module.stop()
+
+
+async def test_api_replacement_migrates_legacy_document_before_activation(
+    bus: EventBus, tmp_path: Path
+) -> None:
+    path = tmp_path / "automations.json"
+    original = _document(_speed(10))
+    _write(path, original)
+    module = AutomationModule(bus, path=path, tagged_trains={"express"})
+    await module.start()
+
+    try:
+        legacy = _document(_speed(30), version=1)
+        snapshot = await module.replace_json(json.dumps(legacy))
+        expected = {**legacy, "version": 3}
+        assert snapshot["document"] == expected
+        assert json.loads(path.read_text()) == expected
+        assert module._runner.document.version == 3
+    finally:
+        await module.stop()
+
+
+async def test_post_rename_failure_restores_previous_document(
+    bus: EventBus, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "automations.json"
+    original = _document(_speed(10))
+    _write(path, original)
+    module = AutomationModule(bus, path=path, tagged_trains={"express"})
+    await module.start()
+    replace_document = automation_module._replace_document
+    calls = 0
+
+    def fail_after_first_rename(staged: Path, destination: Path) -> None:
+        nonlocal calls
+        calls += 1
+        replace_document(staged, destination)
+        if calls == 1:
+            raise OSError("directory fsync failed")
+
+    monkeypatch.setattr(
+        automation_module,
+        "_replace_document",
+        fail_after_first_rename,
+    )
+    try:
+        with pytest.raises(OSError, match="directory fsync failed"):
+            await module.replace_json(json.dumps(_document(_speed(30))))
+        assert json.loads(path.read_text()) == original
+        assert module.snapshot()["document"] == original
+        assert module.healthy
+    finally:
+        await module.stop()
+
+
+async def test_unreconciled_persistence_closes_module_before_admission(
+    bus: EventBus, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "automations.json"
+    original = _document(_speed(10))
+    _write(path, original)
+    speeds, _ = await _acknowledge_commands(bus)
+    module = AutomationModule(bus, path=path, tagged_trains={"express"})
+    await module.start()
+    replace_document = automation_module._replace_document
+
+    def fail_after_every_rename(staged: Path, destination: Path) -> None:
+        replace_document(staged, destination)
+        raise OSError("directory fsync failed")
+
+    monkeypatch.setattr(
+        automation_module,
+        "_replace_document",
+        fail_after_every_rename,
+    )
+    try:
+        with pytest.raises(RuntimeError, match="could not be restored"):
+            await module.replace_json(json.dumps(_document(_speed(30))))
+        assert not module.healthy
+        assert module.snapshot()["document"] == original
+        with pytest.raises(RuntimeError, match="terminal"):
+            await module.replace_json(json.dumps(_document(_speed(40))))
+        await bus.publish(TagDetected(
+            hub_name="yard", detector_name="D1", train_id="express"
+        ))
+        assert speeds == []
+    finally:
+        await module.stop()
+
+
+async def test_activation_and_file_rollback_failure_keeps_candidate_inadmissible(
+    bus: EventBus, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "automations.json"
+    original = _document(_speed(10))
+    candidate = _document(_speed(30))
+    _write(path, original)
+    speeds, _ = await _acknowledge_commands(bus)
+    module = AutomationModule(bus, path=path, tagged_trains={"express"})
+    await module.start()
+    runner_replace = module._runner.replace
+    persist = automation_module._persist_with_rollback
+    persistence_calls = 0
+
+    async def fail_candidate_activation(document, **kwargs: object) -> None:
+        if document.rules[0].children[0].config.speed == 30:
+            raise RuntimeError("activation failed")
+        await runner_replace(document, **kwargs)
+
+    def fail_file_rollback(*args: object, **kwargs: object) -> None:
+        nonlocal persistence_calls
+        persistence_calls += 1
+        if persistence_calls == 2:
+            raise OSError("file rollback failed")
+        persist(*args, **kwargs)
+
+    monkeypatch.setattr(module._runner, "replace", fail_candidate_activation)
+    monkeypatch.setattr(
+        automation_module,
+        "_persist_with_rollback",
+        fail_file_rollback,
+    )
+    try:
+        with pytest.raises(RuntimeError, match="could not be restored"):
+            await module.replace_json(json.dumps(candidate))
+        assert not module.healthy
+        assert module.snapshot()["document"] == original
+        assert module._runner.document.rules[0].children[0].config.speed == 10
+        with pytest.raises(RuntimeError, match="terminal"):
+            await module.replace_json(json.dumps(_document(_speed(40))))
+        await bus.publish(TagDetected(
+            hub_name="yard", detector_name="D1", train_id="express"
+        ))
+        assert speeds == []
+    finally:
+        await module.stop()
+
+
+async def test_startup_activation_failure_restores_legacy_file_and_closes_runner(
+    bus: EventBus, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "automations.json"
+    legacy = _document(_speed(10), version=1)
+    _write(path, legacy)
+    module = AutomationModule(bus, path=path, tagged_trains={"express"})
+
+    async def fail_activation(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("activation failed")
+
+    monkeypatch.setattr(module._runner, "replace", fail_activation)
+    with pytest.raises(RuntimeError, match="activation failed"):
+        await module.start()
+
+    assert json.loads(path.read_text()) == legacy
+    assert not module.healthy
+    with pytest.raises(RuntimeError, match="closed"):
+        await module._runner.trigger(automation_module.Trigger("yard", "D1", "express"))
 
 
 async def test_reapplying_same_document_cancels_its_active_execution(
@@ -275,6 +435,54 @@ async def test_replacement_keeps_old_document_visible_until_cancellation_finishe
         finish_cancellation.set()
         snapshot = await update
         assert snapshot["document"] == replacement
+    finally:
+        finish_cancellation.set()
+        await module.stop()
+
+
+async def test_detection_during_replacement_is_dropped_instead_of_replayed(
+    bus: EventBus, tmp_path: Path
+) -> None:
+    path = tmp_path / "automations.json"
+    original = _document(_wait(10, _speed(10)))
+    replacement = _document(_speed(30))
+    _write(path, original)
+    speeds, _ = await _acknowledge_commands(bus)
+    module = AutomationModule(bus, path=path, tagged_trains={"express"})
+    cancellation_started = asyncio.Event()
+    finish_cancellation = asyncio.Event()
+
+    async def blocking_sleep(seconds: float) -> None:
+        try:
+            await asyncio.sleep(seconds)
+        finally:
+            cancellation_started.set()
+            await finish_cancellation.wait()
+
+    module._runner._sleep = blocking_sleep
+    await module.start()
+
+    try:
+        await bus.publish(TagDetected(
+            hub_name="yard", detector_name="D1", train_id="express"
+        ))
+        await asyncio.sleep(0)
+        update = asyncio.create_task(module.replace_json(json.dumps(replacement)))
+        await cancellation_started.wait()
+
+        await bus.publish(TagDetected(
+            hub_name="yard", detector_name="D1", train_id="express"
+        ))
+        finish_cancellation.set()
+        await update
+        await module._runner.wait_idle()
+        assert speeds == []
+
+        await bus.publish(TagDetected(
+            hub_name="yard", detector_name="D1", train_id="express"
+        ))
+        await module._runner.wait_idle()
+        assert [command.speed for command in speeds] == [30]
     finally:
         finish_cancellation.set()
         await module.stop()

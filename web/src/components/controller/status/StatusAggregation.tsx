@@ -1,7 +1,10 @@
 import { Alert, Badge, Button, Group, Paper, Stack, Text } from "@mantine/core";
 import { useMemo, useState } from "react";
 
-import { serializeAutomation } from "@/src/components/automation/automation-json";
+import {
+  currentAutomationDocument,
+  serializeAutomation,
+} from "@/src/components/automation/automation-json";
 import { validateAutomationTopology } from "@/src/components/automation/automation-validation";
 import type {
   AutomationDocument,
@@ -24,12 +27,16 @@ export function StatusAggregation({
     document: AutomationDocument,
   ) => Promise<AutomationDocument>;
 }) {
-  const authoritativeJson = useMemo(
-    () => serializeAutomation(system.automationDocument),
+  const authoritativeDocument = useMemo(
+    () => currentAutomationDocument(system.automationDocument),
     [system.automationDocument],
   );
+  const authoritativeJson = useMemo(
+    () => serializeAutomation(authoritativeDocument),
+    [authoritativeDocument],
+  );
   const [automationDocument, setAutomationDocument] = useState<AutomationDocument>(
-    system.automationDocument,
+    authoritativeDocument,
   );
   const [baseJson, setBaseJson] = useState(authoritativeJson);
   const draftJson = useMemo(
@@ -57,14 +64,16 @@ export function StatusAggregation({
   );
 
   const saveAutomation = async () => {
-    const saved = await onReplaceAutomation(automationDocument);
+    const saved = currentAutomationDocument(
+      await onReplaceAutomation(currentAutomationDocument(automationDocument)),
+    );
     const savedJson = serializeAutomation(saved);
     setAutomationDocument(saved);
     setBaseJson(savedJson);
   };
 
   const reloadAutomation = () => {
-    setAutomationDocument(system.automationDocument);
+    setAutomationDocument(authoritativeDocument);
     setBaseJson(authoritativeJson);
   };
   return (
@@ -110,7 +119,9 @@ export function StatusAggregation({
             topology={topology}
             automationDocument={automationDocument}
             automationSaving={automationSaving}
-            onAutomationDocumentChange={setAutomationDocument}
+            onAutomationDocumentChange={(document) =>
+              setAutomationDocument(currentAutomationDocument(document))
+            }
           />
         ))}
       </StatusGroup>
@@ -177,7 +188,7 @@ export function StatusAggregation({
                   onClick={() => {
                     const invalidRules = new Set(invalidDormantRules);
                     setAutomationDocument({
-                      version: automationDocument.version,
+                      version: 3,
                       rules: automationDocument.rules.filter((rule) => !invalidRules.has(rule)),
                     });
                   }}

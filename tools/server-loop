@@ -28,7 +28,7 @@ RUNTIME_DATA_FILES = {
     "data/trains.json",
     "data/arduinos.json",
 }
-EMPTY_AUTOMATIONS = b'{"version": 1, "rules": []}\n'
+EMPTY_AUTOMATIONS = b'{"version": 3, "rules": []}\n'
 
 
 class ReleaseError(RuntimeError):
