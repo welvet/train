@@ -48,7 +48,7 @@ export function SetSwitchEditor({
       {(switches.length > 1 || !targetIsConfigured) && (
         <NativeSelect
           aria-label="Choose switch"
-          size="lg"
+          size="md"
           data={options}
           value={switchValue({ hubId: node.hub_id, switchId: node.switch_id })}
           disabled={switches.length === 0}
@@ -63,7 +63,7 @@ export function SetSwitchEditor({
         <SimpleGrid cols={2} spacing="xs">
           <Button
             variant={node.position === "straight" ? "filled" : "light"}
-            size="lg"
+            size="md"
             className={classes.choiceButton}
             onClick={() => onChange({ ...node, position: "straight" })}
             aria-label="Set switch straight"
@@ -74,7 +74,7 @@ export function SetSwitchEditor({
           </Button>
           <Button
             variant={node.position === "diverge" ? "filled" : "light"}
-            size="lg"
+            size="md"
             className={classes.choiceButton}
             onClick={() => onChange({ ...node, position: "diverge" })}
             aria-label="Set switch to turn"

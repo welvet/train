@@ -24,7 +24,7 @@ export function WaitEditor({
           <Button
             key={seconds}
             variant={node.seconds === seconds ? "filled" : "light"}
-            size="lg"
+            size="md"
             className={classes.choiceButton}
             onClick={() => onChange({ ...node, seconds })}
             aria-label={`Wait ${seconds} seconds`}

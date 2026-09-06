@@ -83,22 +83,22 @@ function AutomationNodeEditor({
 
   return (
     <li className={classes.nodeItem}>
-      <Paper withBorder radius="lg" p={{ base: "sm", sm: "md" }} className={classes.nodeCard}>
-        <Stack gap="md">
-          <Group justify="space-between" align="center" wrap="nowrap">
+      <Paper withBorder radius="lg" p="sm" className={classes.nodeCard}>
+        <Stack gap="sm">
+          <Group justify="space-between" align="center" wrap="wrap">
             <Group gap="xs" wrap="nowrap">
-              <Badge variant="filled" color={hasChildren ? "violet" : "blue"} circle size="lg">
+              <Badge variant="filled" color={hasChildren ? "violet" : "blue"} circle size="md">
                 {index + 1}
               </Badge>
               <Text className={classes.stepEmoji} aria-hidden>{heading.emoji}</Text>
-              <Text fw={800}>{heading.label}</Text>
+              <Text fw={800} size="sm">{heading.label}</Text>
             </Group>
             <Group gap={6} wrap="nowrap">
               <Tooltip label="Move up">
                 <ActionIcon
                   variant="light"
                   color="gray"
-                  size="lg"
+                  size="md"
                   disabled={index === 0}
                   aria-label={`Move ${heading.label} step ${index + 1} up`}
                   onClick={() => onMove(-1)}
@@ -110,7 +110,7 @@ function AutomationNodeEditor({
                 <ActionIcon
                   variant="light"
                   color="gray"
-                  size="lg"
+                  size="md"
                   disabled={index === count - 1}
                   aria-label={`Move ${heading.label} step ${index + 1} down`}
                   onClick={() => onMove(1)}
@@ -122,7 +122,7 @@ function AutomationNodeEditor({
                 <ActionIcon
                   variant="light"
                   color="red"
-                  size="lg"
+                  size="md"
                   aria-label={`Remove ${heading.label} step ${index + 1}`}
                   onClick={onRemove}
                 >
