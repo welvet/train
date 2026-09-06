@@ -150,7 +150,6 @@ def openapi_document() -> dict[str, object]:
                 "maximum": 4294967295,
             },
             "event_logger_enabled": {"type": "boolean"},
-            "allow_legacy_hello": {"type": "boolean"},
             "switches": {
                 "type": "array",
                 "maxItems": 8,
@@ -172,7 +171,6 @@ def openapi_document() -> dict[str, object]:
             "servo_settle_ms",
             "reconnect_ms",
             "event_logger_enabled",
-            "allow_legacy_hello",
             "switches",
             "readers",
         ],
@@ -434,6 +432,18 @@ def openapi_document() -> dict[str, object]:
                 },
                 "put": {
                     "operationId": "replaceConfiguration",
+                    "parameters": [
+                        {
+                            "name": "X-Train-Restart-After-Save",
+                            "in": "header",
+                            "required": False,
+                            "description": (
+                                "Restart the supervised backend after the saved "
+                                "response is sent"
+                            ),
+                            "schema": {"type": "boolean", "default": False},
+                        }
+                    ],
                     "requestBody": {
                         "required": True,
                         "content": {

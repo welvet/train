@@ -26,6 +26,8 @@ from train.modules.web_api.static_files import PACKAGED_STATIC_ROOT, StaticFileR
 
 COMMAND_TIMEOUT = 3.0
 STREAM_KEEPALIVE_INTERVAL = 15.0
+CONFIGURATION_RESTART_DELAY = 0.25
+CONFIGURATION_RESTART_HEADER = "X-Train-Restart-After-Save"
 
 
 class WebApiServer:
@@ -42,6 +44,7 @@ class WebApiServer:
         automation_unsubscribe: Callable[[Callable[[], None]], None] | None = None,
         configuration_snapshot: Callable[[], dict[str, object]] | None = None,
         configuration_update: Callable[[str], Awaitable[dict[str, object]]] | None = None,
+        configuration_restart: Callable[[], None] | None = None,
         static_root: Path | None = None,
     ) -> None:
         self._bus = bus
@@ -54,6 +57,7 @@ class WebApiServer:
         self._automation_unsubscribe = automation_unsubscribe
         self._configuration_snapshot = configuration_snapshot
         self._configuration_update = configuration_update
+        self._configuration_restart = configuration_restart
         self._static_files = StaticFileResolver(
             static_root if static_root is not None else PACKAGED_STATIC_ROOT
         )
@@ -299,7 +303,16 @@ class WebApiServer:
             return web.json_response(
                 {"error": "could not persist configuration"}, status=500
             )
-        return web.json_response(configuration)
+        response = web.json_response(configuration)
+        if (
+            self._configuration_restart is not None
+            and request.headers.get(CONFIGURATION_RESTART_HEADER) == "true"
+        ):
+            asyncio.get_running_loop().call_later(
+                CONFIGURATION_RESTART_DELAY,
+                self._configuration_restart,
+            )
+        return response
 
 
 def _empty_automation_snapshot() -> dict[str, object]:

@@ -63,8 +63,9 @@ The complete train document is available through `GET /api/configuration` and
 can be replaced atomically with `PUT /api/configuration`. The API uses a
 versioned `documents` envelope so more editable workspace files can be added
 without creating a separate top-level protocol. Updates are validated and
-written to `trains.json`; restart the backend before expecting the new topology
-to control hardware.
+written to `trains.json`. After a successful API save, the backend exits cleanly
+so `server-loop` restarts it with the new topology; restart it manually after a
+direct file edit.
 
 ### `arduinos.json`
 
@@ -84,7 +85,6 @@ switches and multiple PN532 readers sharing the hardware SPI bus:
       "servo_settle_ms": 500,
       "reconnect_ms": 2000,
       "event_logger_enabled": true,
-      "allow_legacy_hello": true,
       "switches": [
         {"id": "S1", "pin": 9, "straight": 58, "diverge": 100}
       ],
@@ -101,18 +101,19 @@ connection settings, serial baud rate, reconnect delay, and event-logger flag.
 After connecting, the Arduino identifies itself by device ID and fetches its
 hub ID, switch pins and angles, reader SS pins and timings, and servo settle
 time from the backend. The backend uses the configuration loaded at startup;
-restart it after changing `arduinos.json`, and connected devices will reconnect
-and fetch the new configuration automatically.
+an API save triggers a clean supervised restart, while a direct `arduinos.json`
+edit requires a manual restart. Connected devices then reconnect and fetch the
+new configuration automatically.
 
 The complete non-secret Arduino document is also available through
 `GET /api/configuration` and can be replaced as the single `arduinos` document
 in `PUT /api/configuration`. The web Configuration page groups fields by how
 they become active:
 
-- hub identity, servo timing, compatibility policy, switches, and readers need
-  a backend restart; boards reconnect and fetch them automatically;
+- hub identity, servo timing, switches, and readers activate after the
+  save-triggered backend restart; boards reconnect and fetch them automatically;
 - device identity also needs the matching local `secrets.json` key, a firmware
-  upload, and a backend restart;
+  upload, and the save-triggered backend restart;
 - backend connection, baud, reconnect, and event-logger settings need local
   synchronization followed by a firmware upload; and
 - serial port and FQBN affect only the canonical provisioning workstation and
@@ -130,12 +131,8 @@ remain reserved for SPI and the activity LED. When readers are configured the
 firmware disables activity-LED blinking before starting SPI. Device IDs are
 routing identities on the trusted operator LAN, not authentication secrets.
 
-Deploy the backend version supporting runtime configuration before uploading
-the new firmware. The backend continues to accept the legacy compiled-topology
-hello during this compatibility window when `allow_legacy_hello` is omitted or
-`true`, but a legacy connection cannot replace a runtime-configured connection.
-Set the option to `false` after upgrading that device. New firmware requires
-the configuration handshake.
+Firmware must request and acknowledge its runtime configuration before the
+backend registers the hub.
 
 `read_timeout_ms` may be at most 1000 ms so NFC polling cannot block heartbeat
 responses long enough for the backend to disconnect a healthy Arduino hub.

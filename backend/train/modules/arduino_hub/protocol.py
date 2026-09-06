@@ -23,8 +23,8 @@ class Hello:
     switches: tuple[str, ...]
     detectors: tuple[str, ...]
     detected_tags: tuple[DetectedTag, ...]
-    revision: str | None = None
-    applied: dict[str, object] | None = None
+    revision: str
+    applied: dict[str, object]
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,12 +88,10 @@ def parse_message(line: bytes) -> InboundMessage | None:
         ):
             return None
         revision = payload.get("revision")
-        if revision is not None and (
-            not isinstance(revision, str) or len(revision) != 64
-        ):
+        if not isinstance(revision, str) or len(revision) != 64:
             return None
         applied = payload.get("applied")
-        if applied is not None and not isinstance(applied, dict):
+        if not isinstance(applied, dict):
             return None
         return Hello(hub_name, switches, detectors, detected_tags, revision, applied)
 

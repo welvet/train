@@ -95,7 +95,6 @@ def test_load_runtime_config_from_explicit_workspace(tmp_path: Path) -> None:
                 "removal_delay_ms": 750,
             }
         },
-        "allow_legacy_hello": True,
     }
 
 
@@ -145,7 +144,6 @@ def test_normalized_arduinos_document_includes_all_non_secret_fields(
         "servo_settle_ms": 500,
         "reconnect_ms": 2000,
         "event_logger_enabled": False,
-        "allow_legacy_hello": True,
         "switches": [
             {"id": "S1", "pin": 9, "straight": 58, "diverge": 100}
         ],
@@ -169,6 +167,15 @@ def test_normalized_arduinos_document_rejects_unknown_fields(
     source["devices"]["arduino_1"]["secret"] = "nope"
 
     with pytest.raises(ConfigError, match="unsupported field"):
+        normalized_arduinos_document(source)
+
+
+def test_legacy_hello_option_is_rejected(tmp_path: Path) -> None:
+    _write_config(tmp_path)
+    source = json.loads((tmp_path / "arduinos.json").read_text())
+    source["devices"]["arduino_1"]["allow_legacy_hello"] = True
+
+    with pytest.raises(ConfigError, match="allow_legacy_hello"):
         normalized_arduinos_document(source)
 
 

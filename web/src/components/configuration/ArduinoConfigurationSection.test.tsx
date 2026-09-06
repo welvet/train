@@ -41,7 +41,7 @@ it("edits and saves the complete Arduino document independently", async () => {
     target: { value: "yard_hub" },
   });
   fireEvent.click(screen.getByRole("button", {
-    name: "Save Arduino configuration",
+    name: "Save Arduino configuration and restart",
   }));
 
   await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
@@ -168,7 +168,6 @@ function configurationSnapshot(): ConfigurationSnapshot {
               servo_settle_ms: 500,
               reconnect_ms: 2000,
               event_logger_enabled: false,
-              allow_legacy_hello: true,
               switches: [{ id: "S1", pin: 9, straight: 60, diverge: 120 }],
               readers: [{
                 id: "D1",

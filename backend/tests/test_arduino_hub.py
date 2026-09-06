@@ -35,18 +35,30 @@ HUB_CONFIG = {
         },
     },
     "HUB_A": {
+        "device_id": "arduino_a",
+        "servo_settle_ms": 500,
         "switches": {
-            "S1": {"straight": 58, "diverge": 100},
-            "S2": {"straight": 58, "diverge": 100},
+            "S1": {"pin": 9, "straight": 58, "diverge": 100},
+            "S2": {"pin": 10, "straight": 58, "diverge": 100},
         },
         "detectors": ("D1", "D2"),
+        "readers": {
+            "D1": {"ss_pin": 4, "read_timeout_ms": 250, "removal_delay_ms": 750},
+            "D2": {"ss_pin": 5, "read_timeout_ms": 250, "removal_delay_ms": 750},
+        },
     },
     "HUB_B": {
+        "device_id": "arduino_b",
+        "servo_settle_ms": 500,
         "switches": {
-            "S1": {"straight": 58, "diverge": 100},
-            "S2": {"straight": 58, "diverge": 100},
+            "S1": {"pin": 9, "straight": 58, "diverge": 100},
+            "S2": {"pin": 10, "straight": 58, "diverge": 100},
         },
         "detectors": ("D1", "D2"),
+        "readers": {
+            "D1": {"ss_pin": 4, "read_timeout_ms": 250, "removal_delay_ms": 750},
+            "D2": {"ss_pin": 5, "read_timeout_ms": 250, "removal_delay_ms": 750},
+        },
     },
 }
 
@@ -99,18 +111,57 @@ async def _connect_hub(
     port: int,
     hub_name: str = "A_HUB_1",
     *,
+    switches: list[str] | None = None,
+    detectors: list[str] | None = None,
     detected_tags: list[dict[str, str]] | None = None,
 ):
     reader, writer = await asyncio.open_connection("127.0.0.1", port)
+    await _provision_hub(
+        reader,
+        writer,
+        hub_name,
+        switches=switches,
+        detectors=detectors,
+        detected_tags=detected_tags,
+    )
+    await asyncio.sleep(0.05)
+    return reader, writer
+
+
+async def _provision_hub(
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
+    hub_name: str = "A_HUB_1",
+    *,
+    switches: list[str] | None = None,
+    detectors: list[str] | None = None,
+    detected_tags: list[dict[str, str]] | None = None,
+) -> dict:
+    device_id = HUB_CONFIG[hub_name]["device_id"]
+    await _send_line(writer, {
+        "event": "config_request",
+        "schema": 1,
+        "device_id": device_id,
+    })
+    configuration = await _read_line(reader)
     await _send_line(writer, {
         "event": "hello",
         "hub": hub_name,
-        "switches": ["S1", "S2"],
-        "detectors": ["D1", "D2"],
+        "revision": configuration["revision"],
+        "applied": {
+            key: value
+            for key, value in configuration.items()
+            if key not in {"cmd", "revision"}
+        },
+        "switches": switches if switches is not None else [
+            value["id"] for value in configuration["switches"]
+        ],
+        "detectors": detectors if detectors is not None else [
+            value["id"] for value in configuration["readers"]
+        ],
         "detected_tags": detected_tags or [],
     })
-    await asyncio.sleep(0.05)
-    return reader, writer
+    return configuration
 
 
 async def test_hello_publishes_hub_connected(bus: EventBus, hub) -> None:
@@ -169,10 +220,15 @@ async def test_device_fetches_runtime_configuration_before_registration(
     await writer.wait_closed()
 
 
-async def test_unconfigured_hub_is_rejected(bus: EventBus, hub) -> None:
+async def test_unknown_device_is_rejected(bus: EventBus, hub) -> None:
     mod, port = hub
     events = _collect_events(bus)
-    reader, writer = await _connect_hub(port, hub_name="unknown")
+    reader, writer = await asyncio.open_connection("127.0.0.1", port)
+    await _send_line(writer, {
+        "event": "config_request",
+        "schema": 1,
+        "device_id": "unknown",
+    })
 
     assert await asyncio.wait_for(reader.read(), timeout=2.0) == b""
     assert "unknown" not in mod._clients
@@ -182,17 +238,34 @@ async def test_unconfigured_hub_is_rejected(bus: EventBus, hub) -> None:
     await writer.wait_closed()
 
 
-async def test_mismatched_switch_topology_is_rejected(bus: EventBus, hub) -> None:
+async def test_hello_without_configuration_is_ignored(bus: EventBus, hub) -> None:
     mod, port = hub
     events = _collect_events(bus)
     reader, writer = await asyncio.open_connection("127.0.0.1", port)
     await _send_line(writer, {
         "event": "hello",
         "hub": "A_HUB_1",
-        "switches": ["S1", "unexpected"],
-        "detectors": ["D1"],
+        "switches": ["S1", "S2"],
+        "detectors": ["D1", "D2"],
         "detected_tags": [],
     })
+    await asyncio.sleep(0.05)
+
+    assert "A_HUB_1" not in mod._clients
+    assert not [event for event in events if isinstance(event, HubConnected)]
+
+    writer.close()
+    await writer.wait_closed()
+
+
+async def test_mismatched_switch_topology_is_rejected(bus: EventBus, hub) -> None:
+    mod, port = hub
+    events = _collect_events(bus)
+    reader, writer = await _connect_hub(
+        port,
+        switches=["S1", "unexpected"],
+        detectors=["D1"],
+    )
 
     assert await asyncio.wait_for(reader.read(), timeout=2.0) == b""
     assert "A_HUB_1" not in mod._clients
@@ -445,15 +518,7 @@ async def test_events_from_unavailable_detector_are_ignored(
 ) -> None:
     mod, port = hub
     events = _collect_events(bus)
-    reader, writer = await asyncio.open_connection("127.0.0.1", port)
-    await _send_line(writer, {
-        "event": "hello",
-        "hub": "A_HUB_1",
-        "switches": ["S1", "S2"],
-        "detectors": ["D1"],
-        "detected_tags": [],
-    })
-    await asyncio.sleep(0.05)
+    reader, writer = await _connect_hub(port, detectors=["D1"])
     events.clear()
 
     await _send_line(writer, {
@@ -611,27 +676,19 @@ async def test_duplicate_hub_registration_is_serialized(
 
     bus.subscribe(HubConnected, delay_first_registration)
     reader1, writer1 = await asyncio.open_connection("127.0.0.1", port)
-    await _send_line(writer1, {
-        "event": "hello",
-        "hub": "A_HUB_1",
-        "switches": ["S1", "S2"],
-        "detectors": ["D1", "D2"],
-        "detected_tags": [
-            {"detector": "D1", "tag_id": "04:A1:B2:C3"}
-        ],
-    })
+    await _provision_hub(
+        reader1,
+        writer1,
+        detected_tags=[{"detector": "D1", "tag_id": "04:A1:B2:C3"}],
+    )
     await asyncio.wait_for(first_started.wait(), timeout=2.0)
 
     reader2, writer2 = await asyncio.open_connection("127.0.0.1", port)
-    await _send_line(writer2, {
-        "event": "hello",
-        "hub": "A_HUB_1",
-        "switches": ["S1", "S2"],
-        "detectors": ["D1", "D2"],
-        "detected_tags": [
-            {"detector": "D1", "tag_id": "04:11:22:33"}
-        ],
-    })
+    await _provision_hub(
+        reader2,
+        writer2,
+        detected_tags=[{"detector": "D1", "tag_id": "04:11:22:33"}],
+    )
     await asyncio.sleep(0.05)
 
     assert registrations == 1
