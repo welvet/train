@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -131,13 +131,22 @@ def default_trains_path() -> Path:
     return default_data_dir() / "trains.json"
 
 
+def default_arduinos_path() -> Path:
+    configured = os.environ.get("TRAIN_ARDUINOS_PATH")
+    if configured:
+        return Path(configured).expanduser().resolve()
+    return default_data_dir() / "arduinos.json"
+
+
 def load_runtime_config(data_dir: Path | None = None) -> RuntimeConfig:
     root = data_dir or default_data_dir()
     backend_data = _read_json(root / "backend.json")
     trains_data = _read_json(
         root / "trains.json" if data_dir is not None else default_trains_path()
     )
-    arduinos_data = _read_json(root / "arduinos.json")
+    arduinos_data = _read_json(
+        root / "arduinos.json" if data_dir is not None else default_arduinos_path()
+    )
 
     api = _mapping(backend_data, "api", "backend.json")
     arduino = _mapping(backend_data, "arduino_server", "backend.json")
@@ -151,19 +160,14 @@ def load_runtime_config(data_dir: Path | None = None) -> RuntimeConfig:
 
     trains = parse_trains_document(trains_data)
 
-    devices = _parse_arduino_devices(arduinos_data)
+    devices = parse_arduinos_document(arduinos_data)
 
     runtime = RuntimeConfig(
         backend=backend,
         trains=trains,
         arduinos=devices,
     )
-    for hub_id, hub_config in runtime.arduino_hubs.items():
-        try:
-            encode_configuration(hub_id, hub_config)
-            validate_hello_frame_size(hub_id, hub_config)
-        except ValueError as exc:
-            raise ConfigError(str(exc)) from exc
+    _validate_arduino_protocol(runtime)
     return runtime
 
 
@@ -244,9 +248,15 @@ def normalized_trains_document(
     }
 
 
-def _parse_arduino_devices(
+def parse_arduinos_document(
     arduinos_data: dict[str, Any],
 ) -> tuple[ArduinoDeviceConfig, ...]:
+    unexpected_root_fields = set(arduinos_data) - {"devices"}
+    if unexpected_root_fields:
+        raise ConfigError(
+            "arduinos.json: unsupported field(s): "
+            + ", ".join(sorted(unexpected_root_fields))
+        )
     raw_devices = _mapping(arduinos_data, "devices", "arduinos.json")
     if not raw_devices:
         raise ConfigError("arduinos.json: 'devices' must not be empty")
@@ -258,6 +268,25 @@ def _parse_arduino_devices(
             raise ConfigError("arduinos.json: device IDs must be non-empty strings")
         if not isinstance(value, dict):
             raise ConfigError(f"{source} must be an object")
+        unexpected_fields = set(value) - {
+            "port",
+            "fqbn",
+            "baudrate",
+            "hub_id",
+            "backend_host",
+            "backend_port",
+            "servo_settle_ms",
+            "reconnect_ms",
+            "event_logger_enabled",
+            "allow_legacy_hello",
+            "switches",
+            "readers",
+        }
+        if unexpected_fields:
+            raise ConfigError(
+                f"{source}: unsupported field(s): "
+                + ", ".join(sorted(unexpected_fields))
+            )
         normalized_device_id = _runtime_id(device_id, "arduinos.json: device ID")
         hub_id = _runtime_id(_string(value, "hub_id", source), f"{source}.hub_id")
         _unique(hub_id, hub_ids, f"{source}.hub_id")
@@ -274,6 +303,12 @@ def _parse_arduino_devices(
             item_source = f"{source}.switches[{index}]"
             if not isinstance(switch, dict):
                 raise ConfigError(f"{item_source} must be an object")
+            unexpected_fields = set(switch) - {"id", "pin", "straight", "diverge"}
+            if unexpected_fields:
+                raise ConfigError(
+                    f"{item_source}: unsupported field(s): "
+                    + ", ".join(sorted(unexpected_fields))
+                )
             switch_id = _runtime_id(
                 _string(switch, "id", item_source), f"{item_source}.id"
             )
@@ -291,6 +326,17 @@ def _parse_arduino_devices(
             item_source = f"{source}.readers[{index}]"
             if not isinstance(reader, dict):
                 raise ConfigError(f"{item_source} must be an object")
+            unexpected_fields = set(reader) - {
+                "id",
+                "ss_pin",
+                "read_timeout_ms",
+                "removal_delay_ms",
+            }
+            if unexpected_fields:
+                raise ConfigError(
+                    f"{item_source}: unsupported field(s): "
+                    + ", ".join(sorted(unexpected_fields))
+                )
             reader_id = _runtime_id(
                 _string(reader, "id", item_source), f"{item_source}.id"
             )
@@ -328,6 +374,82 @@ def _parse_arduino_devices(
     return tuple(devices)
 
 
+def normalized_arduinos_document(
+    arduinos_data: dict[str, Any],
+) -> dict[str, dict[str, dict[str, object]]]:
+    """Validate and return the stable editable representation of arduinos.json."""
+    devices = parse_arduinos_document(arduinos_data)
+    raw_devices = _mapping(arduinos_data, "devices", "arduinos.json")
+    normalized: dict[str, dict[str, object]] = {}
+    for device in devices:
+        raw = raw_devices[device.device_id]
+        source = f"arduinos.json: devices.{device.device_id}"
+        port = _string(raw, "port", source)
+        fqbn = _string(raw, "fqbn", source)
+        baudrate = _bounded_int(raw, "baudrate", source, maximum=0xFFFFFFFF)
+        backend_host = _string(raw, "backend_host", source)
+        backend_port = _port(raw, "backend_port", source)
+        reconnect_ms = _bounded_int(
+            raw, "reconnect_ms", source, maximum=0xFFFFFFFF
+        )
+        event_logger_enabled = raw.get("event_logger_enabled", False)
+        if not isinstance(event_logger_enabled, bool):
+            raise ConfigError(f"{source}.event_logger_enabled must be a boolean")
+        normalized[device.device_id] = {
+            "port": port,
+            "fqbn": fqbn,
+            "baudrate": baudrate,
+            "hub_id": device.hub_id,
+            "backend_host": backend_host,
+            "backend_port": backend_port,
+            "servo_settle_ms": device.servo_settle_ms,
+            "reconnect_ms": reconnect_ms,
+            "event_logger_enabled": event_logger_enabled,
+            "allow_legacy_hello": device.allow_legacy_hello,
+            "switches": [
+                {
+                    "id": switch.switch_id,
+                    "pin": switch.pin,
+                    "straight": switch.straight,
+                    "diverge": switch.diverge,
+                }
+                for switch in device.switches
+            ],
+            "readers": [
+                {
+                    "id": reader.reader_id,
+                    "ss_pin": reader.ss_pin,
+                    "read_timeout_ms": reader.read_timeout_ms,
+                    "removal_delay_ms": reader.removal_delay_ms,
+                }
+                for reader in device.readers
+            ],
+        }
+    runtime = RuntimeConfig(
+        backend=BackendConfig("", 1, "", "", 1),
+        trains=(),
+        arduinos=devices,
+    )
+    _validate_arduino_protocol(runtime)
+    return {"devices": normalized}
+
+
+def runtime_config_from_documents(
+    base: RuntimeConfig,
+    *,
+    trains: dict[str, Any],
+    arduinos: dict[str, Any],
+) -> RuntimeConfig:
+    """Build and validate the runtime represented by persisted editable documents."""
+    runtime = replace(
+        base,
+        trains=parse_trains_document(trains),
+        arduinos=parse_arduinos_document(arduinos),
+    )
+    _validate_arduino_protocol(runtime)
+    return runtime
+
+
 def _train_tag_ids(value: dict[str, Any], source: str) -> tuple[str, ...]:
     if "tag_id" in value and "tag_ids" in value:
         raise ConfigError(f"{source} must not define both tag_id and tag_ids")
@@ -355,24 +477,16 @@ def _train_tag_ids(value: dict[str, Any], source: str) -> tuple[str, ...]:
 def validate_arduino_upload_config(data_dir: Path | None = None) -> None:
     root = data_dir or default_data_dir()
     load_runtime_config(root)
-    devices = _mapping(_read_json(root / "arduinos.json"), "devices", "arduinos.json")
-    for device_id, device in devices.items():
-        if not isinstance(device, dict):
-            raise ConfigError(
-                f"arduinos.json: devices.{device_id} must be an object"
-            )
-        source = f"arduinos.json: devices.{device_id}"
-        for key in ("port", "fqbn", "backend_host"):
-            _string(device, key, source)
-        _bounded_int(device, "baudrate", source, maximum=0xFFFFFFFF)
-        _port(device, "backend_port", source)
-        for key in ("reconnect_ms",):
-            _bounded_int(device, key, source, maximum=0xFFFFFFFF)
-        logger_enabled = device.get("event_logger_enabled", False)
-        if not isinstance(logger_enabled, bool):
-            raise ConfigError(
-                f"{source}.event_logger_enabled must be a boolean"
-            )
+    normalized_arduinos_document(_read_json(root / "arduinos.json"))
+
+
+def _validate_arduino_protocol(runtime: RuntimeConfig) -> None:
+    for hub_id, hub_config in runtime.arduino_hubs.items():
+        try:
+            encode_configuration(hub_id, hub_config)
+            validate_hello_frame_size(hub_id, hub_config)
+        except ValueError as exc:
+            raise ConfigError(str(exc)) from exc
 
 
 def _runtime_pin(

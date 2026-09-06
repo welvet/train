@@ -13,6 +13,84 @@
         ],
         "type": "object"
       },
+      "ArduinoDeviceConfiguration": {
+        "additionalProperties": false,
+        "properties": {
+          "allow_legacy_hello": {
+            "type": "boolean"
+          },
+          "backend_host": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "backend_port": {
+            "maximum": 65535,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "baudrate": {
+            "maximum": 4294967295,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "event_logger_enabled": {
+            "type": "boolean"
+          },
+          "fqbn": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "hub_id": {
+            "maxLength": 16,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "type": "string"
+          },
+          "port": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "readers": {
+            "items": {
+              "$ref": "#/components/schemas/ArduinoReaderConfiguration"
+            },
+            "maxItems": 8,
+            "type": "array"
+          },
+          "reconnect_ms": {
+            "maximum": 4294967295,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "servo_settle_ms": {
+            "maximum": 4294967295,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "switches": {
+            "items": {
+              "$ref": "#/components/schemas/ArduinoSwitchConfiguration"
+            },
+            "maxItems": 8,
+            "type": "array"
+          }
+        },
+        "required": [
+          "port",
+          "fqbn",
+          "baudrate",
+          "hub_id",
+          "backend_host",
+          "backend_port",
+          "servo_settle_ms",
+          "reconnect_ms",
+          "event_logger_enabled",
+          "allow_legacy_hello",
+          "switches",
+          "readers"
+        ],
+        "type": "object"
+      },
       "ArduinoHubState": {
         "additionalProperties": false,
         "properties": {
@@ -51,6 +129,130 @@
           "connected",
           "switches",
           "detectors"
+        ],
+        "type": "object"
+      },
+      "ArduinoReaderConfiguration": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "maxLength": 16,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "type": "string"
+          },
+          "read_timeout_ms": {
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "removal_delay_ms": {
+            "maximum": 4294967295,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "ss_pin": {
+            "maximum": 10,
+            "minimum": 2,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "ss_pin",
+          "read_timeout_ms",
+          "removal_delay_ms"
+        ],
+        "type": "object"
+      },
+      "ArduinoSwitchConfiguration": {
+        "additionalProperties": false,
+        "properties": {
+          "diverge": {
+            "maximum": 180,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "id": {
+            "maxLength": 16,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "type": "string"
+          },
+          "pin": {
+            "maximum": 10,
+            "minimum": 2,
+            "type": "integer"
+          },
+          "straight": {
+            "maximum": 180,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "pin",
+          "straight",
+          "diverge"
+        ],
+        "type": "object"
+      },
+      "ArduinosConfiguration": {
+        "additionalProperties": false,
+        "properties": {
+          "devices": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ArduinoDeviceConfiguration"
+            },
+            "minProperties": 1,
+            "type": "object"
+          }
+        },
+        "required": [
+          "devices"
+        ],
+        "type": "object"
+      },
+      "ArduinosConfigurationDocument": {
+        "additionalProperties": false,
+        "properties": {
+          "modified_at": {
+            "exclusiveMinimum": 0,
+            "type": "number"
+          },
+          "restart_required": {
+            "type": "boolean"
+          },
+          "value": {
+            "$ref": "#/components/schemas/ArduinosConfiguration"
+          }
+        },
+        "required": [
+          "modified_at",
+          "restart_required",
+          "value"
+        ],
+        "type": "object"
+      },
+      "ArduinosConfigurationUpdate": {
+        "additionalProperties": false,
+        "properties": {
+          "base_modified_at": {
+            "exclusiveMinimum": 0,
+            "type": "number"
+          },
+          "modified_at": {
+            "exclusiveMinimum": 0,
+            "type": "number"
+          },
+          "value": {
+            "$ref": "#/components/schemas/ArduinosConfiguration"
+          }
+        },
+        "required": [
+          "base_modified_at",
+          "value"
         ],
         "type": "object"
       },
@@ -178,6 +380,9 @@
           "documents": {
             "additionalProperties": false,
             "properties": {
+              "arduinos": {
+                "$ref": "#/components/schemas/ArduinosConfigurationDocument"
+              },
               "trains": {
                 "$ref": "#/components/schemas/TrainsConfigurationDocument"
               }
@@ -202,18 +407,32 @@
         "additionalProperties": false,
         "properties": {
           "documents": {
-            "additionalProperties": false,
-            "maxProperties": 1,
-            "minProperties": 1,
-            "properties": {
-              "trains": {
-                "$ref": "#/components/schemas/TrainsConfigurationUpdate"
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "trains": {
+                    "$ref": "#/components/schemas/TrainsConfigurationUpdate"
+                  }
+                },
+                "required": [
+                  "trains"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "arduinos": {
+                    "$ref": "#/components/schemas/ArduinosConfigurationUpdate"
+                  }
+                },
+                "required": [
+                  "arduinos"
+                ],
+                "type": "object"
               }
-            },
-            "required": [
-              "trains"
-            ],
-            "type": "object"
+            ]
           },
           "version": {
             "const": 1,

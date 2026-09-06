@@ -90,6 +90,118 @@ def openapi_document() -> dict[str, object]:
         "required": ["modified_at", "restart_required", "value"],
         "additionalProperties": False,
     }
+    runtime_id = {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 16,
+        "pattern": "^[A-Za-z0-9_-]+$",
+    }
+    schemas["ArduinoSwitchConfiguration"] = {
+        "type": "object",
+        "properties": {
+            "id": runtime_id,
+            "pin": {"type": "integer", "minimum": 2, "maximum": 10},
+            "straight": {"type": "integer", "minimum": 0, "maximum": 180},
+            "diverge": {"type": "integer", "minimum": 0, "maximum": 180},
+        },
+        "required": ["id", "pin", "straight", "diverge"],
+        "additionalProperties": False,
+    }
+    schemas["ArduinoReaderConfiguration"] = {
+        "type": "object",
+        "properties": {
+            "id": runtime_id,
+            "ss_pin": {"type": "integer", "minimum": 2, "maximum": 10},
+            "read_timeout_ms": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1000,
+            },
+            "removal_delay_ms": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 4294967295,
+            },
+        },
+        "required": ["id", "ss_pin", "read_timeout_ms", "removal_delay_ms"],
+        "additionalProperties": False,
+    }
+    schemas["ArduinoDeviceConfiguration"] = {
+        "type": "object",
+        "properties": {
+            "port": {"type": "string", "minLength": 1},
+            "fqbn": {"type": "string", "minLength": 1},
+            "baudrate": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 4294967295,
+            },
+            "hub_id": runtime_id,
+            "backend_host": {"type": "string", "minLength": 1},
+            "backend_port": {"type": "integer", "minimum": 1, "maximum": 65535},
+            "servo_settle_ms": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 4294967295,
+            },
+            "reconnect_ms": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 4294967295,
+            },
+            "event_logger_enabled": {"type": "boolean"},
+            "allow_legacy_hello": {"type": "boolean"},
+            "switches": {
+                "type": "array",
+                "maxItems": 8,
+                "items": {"$ref": "#/components/schemas/ArduinoSwitchConfiguration"},
+            },
+            "readers": {
+                "type": "array",
+                "maxItems": 8,
+                "items": {"$ref": "#/components/schemas/ArduinoReaderConfiguration"},
+            },
+        },
+        "required": [
+            "port",
+            "fqbn",
+            "baudrate",
+            "hub_id",
+            "backend_host",
+            "backend_port",
+            "servo_settle_ms",
+            "reconnect_ms",
+            "event_logger_enabled",
+            "allow_legacy_hello",
+            "switches",
+            "readers",
+        ],
+        "additionalProperties": False,
+    }
+    schemas["ArduinosConfiguration"] = {
+        "type": "object",
+        "properties": {
+            "devices": {
+                "type": "object",
+                "minProperties": 1,
+                "additionalProperties": {
+                    "$ref": "#/components/schemas/ArduinoDeviceConfiguration"
+                },
+            }
+        },
+        "required": ["devices"],
+        "additionalProperties": False,
+    }
+    schemas["ArduinosConfigurationDocument"] = {
+        "type": "object",
+        "properties": {
+            "modified_at": {"type": "number", "exclusiveMinimum": 0},
+            "restart_required": {"type": "boolean"},
+            "value": {"$ref": "#/components/schemas/ArduinosConfiguration"},
+        },
+        "required": ["modified_at", "restart_required", "value"],
+        "additionalProperties": False,
+    }
     schemas["ConfigurationSnapshot"] = {
         "type": "object",
         "properties": {
@@ -99,7 +211,10 @@ def openapi_document() -> dict[str, object]:
                 "properties": {
                     "trains": {
                         "$ref": "#/components/schemas/TrainsConfigurationDocument"
-                    }
+                    },
+                    "arduinos": {
+                        "$ref": "#/components/schemas/ArduinosConfigurationDocument"
+                    },
                 },
                 "required": ["trains"],
                 "additionalProperties": False,
@@ -118,21 +233,43 @@ def openapi_document() -> dict[str, object]:
         "required": ["base_modified_at", "value"],
         "additionalProperties": False,
     }
+    schemas["ArduinosConfigurationUpdate"] = {
+        "type": "object",
+        "properties": {
+            "base_modified_at": {"type": "number", "exclusiveMinimum": 0},
+            "modified_at": {"type": "number", "exclusiveMinimum": 0},
+            "value": {"$ref": "#/components/schemas/ArduinosConfiguration"},
+        },
+        "required": ["base_modified_at", "value"],
+        "additionalProperties": False,
+    }
     schemas["ConfigurationUpdate"] = {
         "type": "object",
         "properties": {
             "version": {"type": "integer", "const": 1},
             "documents": {
-                "type": "object",
-                "properties": {
-                    "trains": {
-                        "$ref": "#/components/schemas/TrainsConfigurationUpdate"
-                    }
-                },
-                "required": ["trains"],
-                "minProperties": 1,
-                "maxProperties": 1,
-                "additionalProperties": False,
+                "oneOf": [
+                    {
+                        "type": "object",
+                        "properties": {
+                            "trains": {
+                                "$ref": "#/components/schemas/TrainsConfigurationUpdate"
+                            }
+                        },
+                        "required": ["trains"],
+                        "additionalProperties": False,
+                    },
+                    {
+                        "type": "object",
+                        "properties": {
+                            "arduinos": {
+                                "$ref": "#/components/schemas/ArduinosConfigurationUpdate"
+                            }
+                        },
+                        "required": ["arduinos"],
+                        "additionalProperties": False,
+                    },
+                ]
             },
         },
         "required": ["version", "documents"],

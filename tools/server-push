@@ -27,17 +27,15 @@ def main() -> None:
     workspace = data_dir()
     try:
         config = load_deployment(workspace)
-        sync_result = synchronize_configuration(config, workspace)
+        sync_results = synchronize_configuration(config, workspace)
         messages = {
-            "downloaded": "Fetched newer trains configuration from the backend.",
-            "uploaded": "Uploaded newer local trains configuration to the backend.",
-            "unchanged": "Train configuration is already synchronized.",
-            "unavailable": (
-                "Backend does not support configuration sync yet; "
-                "using local trains.json for bootstrap."
-            ),
+            "downloaded": "Fetched newer {name} configuration from the backend.",
+            "uploaded": "Uploaded newer local {name} configuration to the backend.",
+            "unchanged": "{title} configuration is already synchronized.",
+            "unavailable": "Backend does not expose {name}; using local {name}.json for bootstrap.",
         }
-        print(messages[sync_result])
+        for name, result in sync_results.items():
+            print(messages[result].format(name=name, title=name.title()))
         with tempfile.TemporaryDirectory(prefix="train-release-") as directory:
             bundle = Path(directory) / "backend.tar.gz"
             print("Building backend release...")

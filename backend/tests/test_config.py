@@ -7,9 +7,11 @@ import pytest
 
 from train.config import (
     ConfigError,
+    default_arduinos_path,
     default_automation_path,
     default_trains_path,
     load_runtime_config,
+    normalized_arduinos_document,
     validate_arduino_upload_config,
 )
 
@@ -113,6 +115,61 @@ def test_trains_path_can_be_separate_from_immutable_runtime_data(
     monkeypatch.setenv("TRAIN_TRAINS_PATH", str(path))
 
     assert default_trains_path() == path
+
+
+def test_arduinos_path_can_be_separate_from_immutable_runtime_data(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "persistent" / "arduinos.json"
+    monkeypatch.setenv("TRAIN_ARDUINOS_PATH", str(path))
+
+    assert default_arduinos_path() == path
+
+
+def test_normalized_arduinos_document_includes_all_non_secret_fields(
+    tmp_path: Path,
+) -> None:
+    _write_config(tmp_path)
+    source = json.loads((tmp_path / "arduinos.json").read_text())
+
+    normalized = normalized_arduinos_document(source)
+
+    first = normalized["devices"]["arduino_1"]
+    assert first == {
+        "port": "/dev/test",
+        "fqbn": "vendor:board:model",
+        "baudrate": 9600,
+        "hub_id": "hub_1",
+        "backend_host": "127.0.0.1",
+        "backend_port": 9000,
+        "servo_settle_ms": 500,
+        "reconnect_ms": 2000,
+        "event_logger_enabled": False,
+        "allow_legacy_hello": True,
+        "switches": [
+            {"id": "S1", "pin": 9, "straight": 58, "diverge": 100}
+        ],
+        "readers": [
+            {
+                "id": "D1",
+                "ss_pin": 4,
+                "read_timeout_ms": 250,
+                "removal_delay_ms": 750,
+            }
+        ],
+    }
+    assert "wifi_ssid" not in json.dumps(normalized)
+
+
+def test_normalized_arduinos_document_rejects_unknown_fields(
+    tmp_path: Path,
+) -> None:
+    _write_config(tmp_path)
+    source = json.loads((tmp_path / "arduinos.json").read_text())
+    source["devices"]["arduino_1"]["secret"] = "nope"
+
+    with pytest.raises(ConfigError, match="unsupported field"):
+        normalized_arduinos_document(source)
 
 
 def test_default_runtime_load_uses_persistent_trains_override(

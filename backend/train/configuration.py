@@ -41,8 +41,11 @@ class ConfigurationStore:
     def __init__(
         self,
         documents: Mapping[str, ConfigurationDocument],
+        *,
+        validate: Callable[[Mapping[str, dict[str, object]]], None] | None = None,
     ) -> None:
         self._documents = dict(documents)
+        self._validate = validate
         self._lock = asyncio.Lock()
 
     @classmethod
@@ -151,13 +154,17 @@ class ConfigurationStore:
             )
 
         async with self._lock:
+            current_documents = {
+                name: self._snapshot_document(name, definition)
+                for name, definition in self._documents.items()
+            }
             for name, (
                 definition,
                 base_modified_at,
                 modified_at,
                 normalized,
             ) in replacements.items():
-                current = self._snapshot_document(name, definition)
+                current = current_documents[name]
                 if current["value"] != normalized:
                     if base_modified_at != current["modified_at"]:
                         raise ConfigurationConflict(
@@ -174,6 +181,21 @@ class ConfigurationStore:
                             f"$.documents.{name}.modified_at",
                             "must be newer than the stored document",
                         )
+            if self._validate is not None:
+                candidates: dict[str, dict[str, object]] = {}
+                for name, current in current_documents.items():
+                    current_value = current["value"]
+                    if not isinstance(current_value, dict):
+                        raise RuntimeError(
+                            "configuration document normalization returned a non-object"
+                        )
+                    candidates[name] = copy.deepcopy(current_value)
+                for name, (_, _, _, normalized) in replacements.items():
+                    candidates[name] = copy.deepcopy(normalized)
+                try:
+                    self._validate(candidates)
+                except ValueError as exc:
+                    raise ConfigurationError("$.documents", str(exc)) from exc
             for definition, _, modified_at, normalized in replacements.values():
                 if self._read_document(definition) != normalized:
                     current_modified_at = definition.path.stat().st_mtime_ns / 1e9

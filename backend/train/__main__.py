@@ -1,15 +1,18 @@
 import asyncio
 import logging
-from dataclasses import replace
+from collections.abc import Mapping
 
 from train.config import (
+    RuntimeConfig,
+    default_arduinos_path,
     default_automation_path,
     default_trains_path,
     load_runtime_config,
+    normalized_arduinos_document,
     normalized_trains_document,
-    parse_trains_document,
+    runtime_config_from_documents,
 )
-from train.configuration import ConfigurationStore
+from train.configuration import ConfigurationDocument, ConfigurationStore
 from train.core.app import App
 from train.domain import SystemState
 from train.modules.arduino_hub import ArduinoHubModule
@@ -37,16 +40,32 @@ def main() -> None:
         tagged_trains={train.train_id for train in config.trains if train.tag_ids},
     )
 
-    def normalize_trains(document: dict[str, object]) -> dict[str, object]:
-        normalized = normalized_trains_document(document)
-        automation_module.validate_runtime_config(
-            replace(config, trains=parse_trains_document(normalized))
+    def runtime_from_documents(
+        documents: Mapping[str, dict[str, object]],
+    ) -> RuntimeConfig:
+        return runtime_config_from_documents(
+            config,
+            trains=documents["trains"],
+            arduinos=documents["arduinos"],
         )
-        return normalized
 
-    configuration = ConfigurationStore.for_trains(
-        default_trains_path(),
-        normalize=normalize_trains,
+    def validate_documents(
+        documents: Mapping[str, dict[str, object]],
+    ) -> None:
+        automation_module.validate_runtime_config(runtime_from_documents(documents))
+
+    configuration = ConfigurationStore(
+        {
+            "trains": ConfigurationDocument(
+                path=default_trains_path(),
+                normalize=normalized_trains_document,
+            ),
+            "arduinos": ConfigurationDocument(
+                path=default_arduinos_path(),
+                normalize=normalized_arduinos_document,
+            ),
+        },
+        validate=validate_documents,
     )
     configuration_update_lock = asyncio.Lock()
 
@@ -56,12 +75,13 @@ def main() -> None:
 
     async def update_automation(text: str) -> dict[str, object]:
         async with configuration_update_lock:
-            persisted_trains = parse_trains_document(
-                configuration.document_value("trains")
-            )
+            persisted_runtime = runtime_from_documents({
+                "trains": configuration.document_value("trains"),
+                "arduinos": configuration.document_value("arduinos"),
+            })
             automation_module.validate_json_for_runtime_config(
                 text,
-                replace(config, trains=persisted_trains),
+                persisted_runtime,
             )
             return await automation_module.replace_json(text)
 

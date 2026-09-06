@@ -93,6 +93,20 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        ArduinoDeviceConfiguration: {
+            allow_legacy_hello: boolean;
+            backend_host: string;
+            backend_port: number;
+            baudrate: number;
+            event_logger_enabled: boolean;
+            fqbn: string;
+            hub_id: string;
+            port: string;
+            readers: components["schemas"]["ArduinoReaderConfiguration"][];
+            reconnect_ms: number;
+            servo_settle_ms: number;
+            switches: components["schemas"]["ArduinoSwitchConfiguration"][];
+        };
         ArduinoHubState: {
             connected: boolean;
             detectors: {
@@ -103,6 +117,33 @@ export interface components {
             switches: {
                 [key: string]: components["schemas"]["SwitchState"];
             };
+        };
+        ArduinoReaderConfiguration: {
+            id: string;
+            read_timeout_ms: number;
+            removal_delay_ms: number;
+            ss_pin: number;
+        };
+        ArduinoSwitchConfiguration: {
+            diverge: number;
+            id: string;
+            pin: number;
+            straight: number;
+        };
+        ArduinosConfiguration: {
+            devices: {
+                [key: string]: components["schemas"]["ArduinoDeviceConfiguration"];
+            };
+        };
+        ArduinosConfigurationDocument: {
+            modified_at: number;
+            restart_required: boolean;
+            value: components["schemas"]["ArduinosConfiguration"];
+        };
+        ArduinosConfigurationUpdate: {
+            base_modified_at: number;
+            modified_at?: number;
+            value: components["schemas"]["ArduinosConfiguration"];
         };
         /** @description Versioned configurable automation tree document */
         AutomationDocument: {
@@ -147,6 +188,7 @@ export interface components {
         };
         ConfigurationSnapshot: {
             documents: {
+                arduinos?: components["schemas"]["ArduinosConfigurationDocument"];
                 trains: components["schemas"]["TrainsConfigurationDocument"];
             };
             /** @constant */
@@ -155,6 +197,8 @@ export interface components {
         ConfigurationUpdate: {
             documents: {
                 trains: components["schemas"]["TrainsConfigurationUpdate"];
+            } | {
+                arduinos: components["schemas"]["ArduinosConfigurationUpdate"];
             };
             /** @constant */
             version: 1;

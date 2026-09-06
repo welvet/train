@@ -142,36 +142,58 @@ def load_deployment(root: Path | None = None) -> DeploymentConfig:
 def synchronize_configuration(
     config: DeploymentConfig,
     workspace: Path,
-) -> str:
-    """Synchronize editable configuration with the running backend."""
-    local_path = workspace / "trains.json"
+) -> dict[str, str]:
+    """Synchronize editable documents with the running backend."""
     endpoint = config.health_url.rstrip("/") + "/api/configuration"
+    return {
+        name: _synchronize_document(endpoint, workspace, name)
+        for name in ("trains", "arduinos")
+    }
+
+
+def _synchronize_document(endpoint: str, workspace: Path, name: str) -> str:
+    local_path = workspace / f"{name}.json"
     for _ in range(3):
-        local = _local_trains_document(local_path, workspace)
+        local = _local_configuration_document(local_path, workspace, name)
         remote = _fetch_configuration(endpoint)
         if remote is None:
             return "unavailable"
-        if local != _local_trains_document(local_path, workspace):
+        remote_document = _configuration_document(
+            remote,
+            name,
+            missing_ok=name == "arduinos",
+        )
+        if remote_document is None:
+            return "unavailable"
+        if local != _local_configuration_document(local_path, workspace, name):
             continue
-        if remote.value == local.value:
+        if remote_document.value == local.value:
             return "unchanged"
-        if remote.modified_at > local.modified_at:
-            if local != _local_trains_document(local_path, workspace):
+        if remote_document.modified_at > local.modified_at:
+            if local != _local_configuration_document(local_path, workspace, name):
                 continue
             _atomic_write_json(
                 local_path,
-                remote.value,
-                remote.modified_at,
+                remote_document.value,
+                remote_document.modified_at,
             )
             return "downloaded"
-        if remote.modified_at == local.modified_at:
+        if remote_document.modified_at == local.modified_at:
             raise RuntimeError(
-                "Configuration sync found different trains.json documents with the "
+                f"Configuration sync found different {name}.json documents with the "
                 "same timestamp; touch the intended winner and retry"
             )
 
-        uploaded = _upload_configuration(endpoint, local, remote.modified_at)
-        if uploaded is None or local != _local_trains_document(local_path, workspace):
+        uploaded = _upload_configuration(
+            endpoint,
+            name,
+            local,
+            remote_document.modified_at,
+        )
+        if (
+            uploaded is None
+            or local != _local_configuration_document(local_path, workspace, name)
+        ):
             continue
         _atomic_write_json(
             local_path,
@@ -180,19 +202,23 @@ def synchronize_configuration(
         )
         return "uploaded"
     raise RuntimeError(
-        "Configuration changed repeatedly during synchronization; retry when edits stop"
+        f"{name}.json changed repeatedly during synchronization; retry when edits stop"
     )
 
 
-def _local_trains_document(path: Path, workspace: Path) -> SyncedDocument:
+def _local_configuration_document(
+    path: Path,
+    workspace: Path,
+    name: str,
+) -> SyncedDocument:
     for _ in range(3):
         before = path.stat()
-        value = read_json("trains.json", workspace)
+        value = read_json(f"{name}.json", workspace)
         after = path.stat()
         if _file_identity(before) == _file_identity(after):
             return SyncedDocument(after.st_mtime_ns / 1_000_000_000, value)
     raise RuntimeError(
-        "Local trains.json changed repeatedly while being read; retry when edits stop"
+        f"Local {name}.json changed repeatedly while being read; retry when edits stop"
     )
 
 
@@ -200,7 +226,7 @@ def _file_identity(value: os.stat_result) -> tuple[int, int, int, int]:
     return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns)
 
 
-def _fetch_configuration(endpoint: str) -> SyncedDocument | None:
+def _fetch_configuration(endpoint: str) -> dict[str, object] | None:
     try:
         request = urllib.request.Request(
             endpoint,
@@ -224,18 +250,21 @@ def _fetch_configuration(endpoint: str) -> SyncedDocument | None:
         raise RuntimeError(
             "Configuration sync failed: backend returned invalid JSON"
         ) from exc
-    return _configuration_trains_document(remote)
+    if not isinstance(remote, dict):
+        raise RuntimeError("Backend returned an unsupported configuration format")
+    return remote
 
 
 def _upload_configuration(
     endpoint: str,
+    name: str,
     local: SyncedDocument,
     base_modified_at: float,
 ) -> SyncedDocument | None:
     payload = {
         "version": 1,
         "documents": {
-            "trains": {
+            name: {
                 "base_modified_at": base_modified_at,
                 "modified_at": local.modified_at,
                 "value": local.value,
@@ -253,7 +282,7 @@ def _upload_configuration(
     )
     try:
         with urllib.request.urlopen(request, timeout=5) as response:
-            return _configuration_trains_document(json.loads(response.read()))
+            return _configuration_document(json.loads(response.read()), name)
     except urllib.error.HTTPError as exc:
         if exc.code == 409:
             return None
@@ -272,15 +301,27 @@ def _upload_configuration(
         raise RuntimeError("Configuration upload failed") from exc
 
 
-def _configuration_trains_document(value: object) -> SyncedDocument:
+def _configuration_document(
+    value: object,
+    name: str,
+    *,
+    missing_ok: bool = False,
+) -> SyncedDocument | None:
     if not isinstance(value, dict) or value.get("version") != 1:
         raise RuntimeError("Backend returned an unsupported configuration format")
     documents = value.get("documents")
-    trains = documents.get("trains") if isinstance(documents, dict) else None
-    if not isinstance(trains, dict):
-        raise RuntimeError("Backend configuration is missing trains")
-    modified_at = trains.get("modified_at")
-    document = trains.get("value")
+    if not isinstance(documents, dict):
+        raise RuntimeError("Backend returned an unsupported configuration format")
+    if name not in documents and missing_ok:
+        if set(documents) != {"trains"}:
+            raise RuntimeError("Backend returned an unsupported configuration format")
+        _configuration_document(value, "trains")
+        return None
+    document_entry = documents.get(name)
+    if not isinstance(document_entry, dict):
+        raise RuntimeError(f"Backend configuration is missing {name}")
+    modified_at = document_entry.get("modified_at")
+    document = document_entry.get("value")
     if (
         not isinstance(modified_at, (int, float))
         or isinstance(modified_at, bool)
@@ -288,7 +329,7 @@ def _configuration_trains_document(value: object) -> SyncedDocument:
         or modified_at <= 0
         or not isinstance(document, dict)
     ):
-        raise RuntimeError("Backend returned an invalid trains configuration")
+        raise RuntimeError(f"Backend returned an invalid {name} configuration")
     return SyncedDocument(float(modified_at), document)
 
 
