@@ -1,6 +1,6 @@
 import type { AutomationNode, SwitchOption } from "./types";
 
-export type AutomationNodeType = AutomationNode["type"];
+export type AutomationNodeType = Exclude<AutomationNode["type"], "branch">;
 
 export function createNode(
   type: AutomationNodeType,
@@ -30,6 +30,15 @@ export function createNode(
         type,
         count: 2,
         children: [],
+      };
+    case "if_count":
+      return {
+        type,
+        count: 5,
+        children: [
+          { type: "branch", when: "match", children: [] },
+          { type: "branch", when: "otherwise", children: [] },
+        ],
       };
   }
 }

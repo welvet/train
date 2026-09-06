@@ -27,8 +27,8 @@ export function parseAutomation(source: string): AutomationDocument {
 
   const value = object(input, "Automation document");
   exactKeys(value, ["version", "rules"], "Automation document");
-  if (value.version !== 1) {
-    throw new Error("Only automation document version 1 is supported.");
+  if (value.version !== 1 && value.version !== 2) {
+    throw new Error("Only automation document versions 1 and 2 are supported.");
   }
   if (!Array.isArray(value.rules)) {
     throw new Error("Automation document rules must be an array.");
@@ -37,7 +37,7 @@ export function parseAutomation(source: string): AutomationDocument {
     throw new Error(`Automation document may contain at most ${MAX_RULES} rules.`);
   }
 
-  const rules = value.rules.map(parseRule);
+  const rules = value.rules.map((rule, index) => parseRule(rule, index, value.version as 1 | 2));
   const ids = new Set<string>();
   const enabledTriggers = new Set<string>();
   for (const rule of rules) {
@@ -52,10 +52,10 @@ export function parseAutomation(source: string): AutomationDocument {
     }
   }
 
-  return { version: 1, rules };
+  return { version: value.version as 1 | 2, rules };
 }
 
-function parseRule(input: unknown, index: number): AutomationRule {
+function parseRule(input: unknown, index: number, version: 1 | 2): AutomationRule {
   const label = `Rule ${index + 1}`;
   const value = object(input, label);
   exactKeys(value, ["id", "enabled", "root"], label);
@@ -74,7 +74,14 @@ function parseRule(input: unknown, index: number): AutomationRule {
     throw new Error(`${label} root must have type train_detected.`);
   }
   const nodeCount = { value: 0 };
-  const children = childrenOf(root.children, `${label} root`, nodeCount, 1);
+  const children = childrenOf(
+    root.children,
+    `${label} root`,
+    nodeCount,
+    1,
+    version,
+    "train_detected",
+  );
   if (children.length === 0) throw new Error(`${label} root needs at least one step.`);
   return {
     id,
@@ -94,6 +101,8 @@ function parseNode(
   path: string,
   nodeCount: { value: number },
   depth: number,
+  version: 1 | 2,
+  parentType: string,
 ): AutomationNode {
   if (depth > MAX_TREE_DEPTH) {
     throw new Error(`${path} tree depth must not exceed ${MAX_TREE_DEPTH}.`);
@@ -103,6 +112,12 @@ function parseNode(
     throw new Error(`Rule may contain at most ${MAX_NODES_PER_RULE} nodes.`);
   }
   const value = object(input, path);
+  if ((value.type === "if_count" || value.type === "branch") && version < 2) {
+    throw new Error(`${path} type ${String(value.type)} requires automation document version 2.`);
+  }
+  if (value.type === "branch" && parentType !== "if_count") {
+    throw new Error(`${path} branch is only allowed directly under if_count.`);
+  }
   switch (value.type) {
     case "set_train_speed": {
       exactKeys(value, ["type", "speed", "children"], path);
@@ -146,7 +161,7 @@ function parseNode(
       ) {
         throw new Error(`${path} seconds must be a finite number from 0 to 3600.`);
       }
-      const children = childrenOf(value.children, path, nodeCount, depth + 1);
+      const children = childrenOf(value.children, path, nodeCount, depth + 1, version, "wait");
       if (children.length === 0) throw new Error(`${path} needs at least one child step.`);
       return { type: "wait", seconds: value.seconds, children };
     }
@@ -155,13 +170,47 @@ function parseNode(
       if (!Number.isInteger(value.count) || Number(value.count) < 1) {
         throw new Error(`${path} count must be a positive whole number.`);
       }
-      const children = childrenOf(value.children, path, nodeCount, depth + 1);
+      const children = childrenOf(value.children, path, nodeCount, depth + 1, version, "on_count");
       if (children.length === 0) throw new Error(`${path} needs at least one child step.`);
       return {
         type: "on_count",
         count: Number(value.count),
         children,
       };
+    }
+    case "if_count": {
+      exactKeys(value, ["type", "count", "children"], path);
+      if (!Number.isInteger(value.count) || Number(value.count) < 1) {
+        throw new Error(`${path} count must be a positive whole number.`);
+      }
+      if (!Array.isArray(value.children) || value.children.length !== 2) {
+        throw new Error(`${path} must contain one match branch and one otherwise branch.`);
+      }
+      const children = childrenOf(
+        value.children,
+        path,
+        nodeCount,
+        depth + 1,
+        version,
+        "if_count",
+      );
+      if (!children.every((child) => child.type === "branch")) {
+        throw new Error(`${path} children must be branch steps.`);
+      }
+      const branches = children as [Extract<AutomationNode, { type: "branch" }>, Extract<AutomationNode, { type: "branch" }>];
+      if (new Set(branches.map((branch) => branch.when)).size !== 2) {
+        throw new Error(`${path} needs one match branch and one otherwise branch.`);
+      }
+      return { type: "if_count", count: Number(value.count), children: branches };
+    }
+    case "branch": {
+      exactKeys(value, ["type", "when", "children"], path);
+      if (value.when !== "match" && value.when !== "otherwise") {
+        throw new Error(`${path} when must be match or otherwise.`);
+      }
+      const children = childrenOf(value.children, path, nodeCount, depth + 1, version, "branch");
+      if (children.length === 0) throw new Error(`${path} needs at least one child step.`);
+      return { type: "branch", when: value.when, children };
     }
     default:
       throw new Error(`${path} has an unsupported node type.`);
@@ -173,10 +222,12 @@ function childrenOf(
   path: string,
   nodeCount: { value: number },
   depth: number,
+  version: 1 | 2,
+  parentType: string,
 ): AutomationNode[] {
   if (!Array.isArray(input)) throw new Error(`${path} children must be an array.`);
   return input.map((child, index) =>
-    parseNode(child, `${path} child ${index + 1}`, nodeCount, depth),
+    parseNode(child, `${path} child ${index + 1}`, nodeCount, depth, version, parentType),
   );
 }
 

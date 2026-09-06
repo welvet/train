@@ -2,7 +2,9 @@
 
 from automation_tree.errors import AutomationParseError, DuplicateFunctionError
 from automation_tree.functions import (
+    BranchFunction,
     FunctionRegistry,
+    IfCountFunction,
     OnCountFunction,
     SetSwitchFunction,
     SetTrainSpeedFunction,
@@ -25,8 +27,10 @@ __all__ = [
     "AutomationParseError",
     "AutomationParser",
     "AutomationRunner",
+    "BranchFunction",
     "DuplicateFunctionError",
     "FunctionRegistry",
+    "IfCountFunction",
     "Node",
     "NodeFailure",
     "OnCountFunction",

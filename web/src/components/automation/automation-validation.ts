@@ -45,7 +45,12 @@ export function visitAutomationNodes(
 ): void {
   for (const node of nodes) {
     visit(node);
-    if (node.type === "wait" || node.type === "on_count") {
+    if (
+      node.type === "wait" ||
+      node.type === "on_count" ||
+      node.type === "if_count" ||
+      node.type === "branch"
+    ) {
       visitAutomationNodes(node.children, visit);
     }
   }

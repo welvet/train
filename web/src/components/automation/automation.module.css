@@ -98,6 +98,15 @@
   border-left: 3px solid var(--mantine-color-violet-light-color);
 }
 
+.branchGroup {
+  margin-left: var(--mantine-spacing-sm);
+}
+
+.branchCard {
+  background: color-mix(in srgb, var(--mantine-color-violet-light) 18%, transparent);
+  border-left: 3px solid var(--mantine-color-violet-light-color);
+}
+
 @media (max-width: 48em) {
   .children {
     margin-left: 2px;

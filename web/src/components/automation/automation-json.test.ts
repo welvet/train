@@ -216,3 +216,129 @@ it("matches backend node count and tree depth limits", () => {
     "tree depth must not exceed 64",
   );
 });
+
+it("round-trips version 2 count branches", () => {
+  const input = {
+    version: 2,
+    rules: [
+      {
+        id: "route_fifth",
+        enabled: true,
+        root: {
+          type: "train_detected",
+          hub_id: "yard",
+          detector_id: "D1",
+          train_id: "express",
+          children: [
+            {
+              type: "if_count",
+              count: 5,
+              children: [
+                {
+                  type: "branch",
+                  when: "match",
+                  children: [{ type: "set_train_speed", speed: 50, children: [] }],
+                },
+                {
+                  type: "branch",
+                  when: "otherwise",
+                  children: [{ type: "set_train_speed", speed: 10, children: [] }],
+                },
+              ],
+            },
+          ],
+        },
+      },
+    ],
+  };
+
+  const parsed = parseAutomation(JSON.stringify(input));
+  expect(parsed).toEqual(input);
+  expect(JSON.parse(serializeAutomation(parsed))).toEqual(input);
+});
+
+it("rejects count branches in version 1", () => {
+  const input = countBranchDocument(1);
+  expect(() => parseAutomation(JSON.stringify(input))).toThrow(
+    "requires automation document version 2",
+  );
+});
+
+it("rejects malformed or misplaced branches", () => {
+  const misplaced = countBranchDocument(2);
+  const misplacedRoot = misplaced.rules[0].root as { children: unknown[] };
+  misplacedRoot.children = [
+    {
+      type: "branch",
+      when: "match",
+      children: [{ type: "set_train_speed", speed: 10, children: [] }],
+    },
+  ];
+  expect(() => parseAutomation(JSON.stringify(misplaced))).toThrow(
+    "branch is only allowed directly under if_count",
+  );
+
+  const duplicate = countBranchDocument(2);
+  const duplicateIfCount = duplicate.rules[0].root.children[0] as {
+    children: Array<{ when: string }>;
+  };
+  duplicateIfCount.children[1].when = "match";
+  expect(() => parseAutomation(JSON.stringify(duplicate))).toThrow(
+    "needs one match branch and one otherwise branch",
+  );
+
+  const empty = countBranchDocument(2);
+  const emptyIfCount = empty.rules[0].root.children[0] as {
+    children: Array<{ children: unknown[] }>;
+  };
+  emptyIfCount.children[0].children = [];
+  expect(() => parseAutomation(JSON.stringify(empty))).toThrow(
+    "needs at least one child step",
+  );
+});
+
+it.each([0, -1, 1.5, true])("rejects invalid count branch interval %s", (count) => {
+  const input = countBranchDocument(2);
+  const node = input.rules[0].root.children[0] as { count: unknown };
+  node.count = count;
+
+  expect(() => parseAutomation(JSON.stringify(input))).toThrow(
+    "count must be a positive whole number",
+  );
+});
+
+function countBranchDocument(version: number) {
+  return {
+    version,
+    rules: [
+      {
+        id: "route_fifth",
+        enabled: true,
+        root: {
+          type: "train_detected",
+          hub_id: "yard",
+          detector_id: "D1",
+          train_id: "express",
+          children: [
+            {
+              type: "if_count",
+              count: 5,
+              children: [
+                {
+                  type: "branch",
+                  when: "match",
+                  children: [{ type: "set_train_speed", speed: 50, children: [] }],
+                },
+                {
+                  type: "branch",
+                  when: "otherwise",
+                  children: [{ type: "set_train_speed", speed: 10, children: [] }],
+                },
+              ],
+            },
+          ],
+        },
+      },
+    ],
+  };
+}
