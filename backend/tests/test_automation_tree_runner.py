@@ -91,13 +91,11 @@ def _speed(speed: int) -> dict[str, object]:
 
 def _count(
     count: int,
-    mode: str,
     *children: object,
 ) -> dict[str, object]:
     return {
         "type": "on_count",
         "count": count,
-        "mode": mode,
         "children": list(children),
     }
 
@@ -242,32 +240,25 @@ async def test_wait_marks_rule_waiting_and_delays_children() -> None:
     assert runner.statuses()[0].state is RuleState.IDLE
 
 
-@pytest.mark.parametrize(
-    ("mode", "expected"),
-    [
-        ("once", [3]),
-        ("repeat", [3, 3, 3]),
-    ],
-)
-async def test_occurrence_count_modes(mode: str, expected: list[int]) -> None:
+async def test_occurrence_count_repeats() -> None:
     actions = _Actions()
     runner = AutomationRunner(_functions(actions))
     await runner.replace(_parser(actions).parse(
-        _document(_count(3, mode, _speed(3)))
+        _document(_count(3, _speed(3)))
     ))
 
     for _ in range(9):
         assert await _run_once(runner) == "departure"
 
-    assert [call[-1] for call in actions.calls] == expected
+    assert [call[-1] for call in actions.calls] == [3, 3, 3]
 
 
 async def test_nested_counters_are_private_to_node_paths() -> None:
     actions = _Actions()
     runner = AutomationRunner(_functions(actions))
     await runner.replace(_parser(actions).parse(_document(
-        _count(2, "repeat", _speed(20)),
-        _count(3, "repeat", _speed(30)),
+        _count(2, _speed(20)),
+        _count(3, _speed(30)),
     )))
 
     for _ in range(6):
@@ -303,28 +294,33 @@ async def test_qualifying_count_is_consumed_when_child_fails() -> None:
     actions.fail_speed = RuntimeError("failed")
     runner = AutomationRunner(_functions(actions))
     await runner.replace(_parser(actions).parse(
-        _document(_count(2, "once", _speed(20)))
+        _document(_count(2, _speed(20)))
     ))
 
     await _run_once(runner)
     await _run_once(runner)
     actions.fail_speed = None
     await _run_once(runner)
+    await _run_once(runner)
 
-    assert len(actions.calls) == 1
+    assert [call[-1] for call in actions.calls] == [20, 20]
 
 
 async def test_pause_cancels_execution_and_preserves_counters() -> None:
     actions = _Actions()
     sleep_started = asyncio.Event()
+    sleep_calls = 0
 
     async def sleep(seconds: float) -> None:
+        nonlocal sleep_calls
+        sleep_calls += 1
         sleep_started.set()
-        await asyncio.Event().wait()
+        if sleep_calls == 1:
+            await asyncio.Event().wait()
 
     runner = AutomationRunner(_functions(actions), sleep=sleep)
     await runner.replace(_parser(actions).parse(_document(
-        _count(2, "once", _wait(10, _speed(20)))
+        _count(2, _wait(10, _speed(20)))
     )))
     await _run_once(runner)
     await runner.trigger(TRIGGER)
@@ -336,20 +332,22 @@ async def test_pause_cancels_execution_and_preserves_counters() -> None:
     assert await runner.trigger(TRIGGER) is None
     await runner.resume()
     await _run_once(runner)
+    await _run_once(runner)
 
-    assert actions.calls == []
+    assert sleep_calls == 2
+    assert [call[-1] for call in actions.calls] == [20]
 
 
 async def test_disable_then_enable_resets_counters() -> None:
     actions = _Actions()
     parser = _parser(actions)
     runner = AutomationRunner(_functions(actions))
-    enabled = parser.parse(_document(_count(2, "once", _speed(20))))
+    enabled = parser.parse(_document(_count(2, _speed(20))))
     await runner.replace(enabled)
     await _run_once(runner)
 
     await runner.replace(parser.parse(_document(
-        _count(2, "once", _speed(20)), enabled=False
+        _count(2, _speed(20)), enabled=False
     )))
     await runner.replace(enabled)
     await _run_once(runner)
@@ -366,10 +364,10 @@ async def test_semantically_unchanged_replace_keeps_counters() -> None:
         '{"version":1,"rules":[{"id":"departure","enabled":true,'
         '"root":{"type":"train_detected","hub_id":"hub",'
         '"detector_id":"station","train_id":"red","children":['
-        '{"type":"on_count","count":2,"mode":"once","children":['
+        '{"type":"on_count","count":2,"children":['
         '{"type":"set_train_speed","speed":20,"children":[]}]}]}}]}'
     )
-    formatted = parser.parse(_document(_count(2, "once", _speed(20))))
+    formatted = parser.parse(_document(_count(2, _speed(20))))
     await runner.replace(first)
     await _run_once(runner)
     await runner.replace(formatted)

@@ -2,7 +2,6 @@ import type {
   AutomationDocument,
   AutomationNode,
   AutomationRule,
-  CountMode,
   SwitchPosition,
 } from "./types";
 
@@ -148,19 +147,15 @@ function parseNode(
       return { type: "wait", seconds: value.seconds, children };
     }
     case "on_count": {
-      exactKeys(value, ["type", "count", "mode", "children"], path);
+      exactKeys(value, ["type", "count", "children"], path);
       if (!Number.isInteger(value.count) || Number(value.count) < 1) {
         throw new Error(`${path} count must be a positive whole number.`);
-      }
-      if (value.mode !== "once" && value.mode !== "repeat") {
-        throw new Error(`${path} mode must be once or repeat.`);
       }
       const children = childrenOf(value.children, path, nodeCount, depth + 1);
       if (children.length === 0) throw new Error(`${path} needs at least one child step.`);
       return {
         type: "on_count",
         count: Number(value.count),
-        mode: value.mode as CountMode,
         children,
       };
     }

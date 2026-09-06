@@ -111,6 +111,8 @@ it("starts every nested action list empty and lets it return to empty", () => {
     { type: "wait", children: [] },
     { type: "on_count", children: [] },
   ]);
+  expect(screen.queryByRole("button", { name: "Run once" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Repeat forever" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Stop train" })).not.toBeInTheDocument();
 
   const waitSteps = screen.getByRole("group", { name: "Steps after Wait step 1" });

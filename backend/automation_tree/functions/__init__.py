@@ -6,7 +6,6 @@ from automation_tree.functions.base import (
     require_node_config,
 )
 from automation_tree.functions.on_count import (
-    CountMode,
     OnCountConfig,
     OnCountFunction,
 )
@@ -26,7 +25,6 @@ from automation_tree.functions.wait import WaitConfig, WaitFunction
 
 __all__ = [
     "ChildrenPolicy",
-    "CountMode",
     "FunctionContext",
     "FunctionRegistry",
     "NodeDecision",

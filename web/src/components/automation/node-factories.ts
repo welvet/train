@@ -29,7 +29,6 @@ export function createNode(
       return {
         type,
         count: 2,
-        mode: "once",
         children: [],
       };
   }
