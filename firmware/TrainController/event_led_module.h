@@ -2,6 +2,7 @@
 #define TRAIN_CONTROLLER_EVENT_LED_MODULE_H
 
 #include "event_bus.h"
+#include "generated_config.h"
 #include "model.h"
 #include "module.h"
 
@@ -11,8 +12,11 @@ class EventLedModule : public Module {
  public:
   static constexpr unsigned long kBlipMs = 50;
 
-  EventLedModule(EventBus& bus, ControllerModel& model)
-      : bus_(bus), model_(model) {}
+  EventLedModule(
+      EventBus& bus,
+      ControllerModel& model,
+      bool enabled = EVENT_LOGGER_ENABLED)
+      : bus_(bus), model_(model), enabled_(enabled) {}
 
   bool setup() override;
   void trigger() override;
@@ -20,6 +24,7 @@ class EventLedModule : public Module {
  private:
   EventBus& bus_;
   ControllerModel& model_;
+  bool enabled_;
   bool lit_ = false;
   unsigned long litAt_ = 0;
 

@@ -7,7 +7,10 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from train.modules.arduino_hub.timing import MAX_READER_READ_TIMEOUT_MS
+from train.modules.arduino_hub.timing import (
+    MAX_READER_READ_TIMEOUT_MS,
+    MAX_READER_TIMEOUT_TOTAL_MS,
+)
 from train.modules.arduino_hub.protocol import (
     MAX_COMPONENTS,
     MAX_ID_BYTES,
@@ -348,6 +351,12 @@ def parse_arduinos_document(
             readers.append(ArduinoReaderConfig(
                 reader_id, ss_pin, read_timeout_ms, removal_delay_ms
             ))
+        total_read_timeout_ms = sum(reader.read_timeout_ms for reader in readers)
+        if total_read_timeout_ms > MAX_READER_TIMEOUT_TOTAL_MS:
+            raise ConfigError(
+                f"{source}.readers total read_timeout_ms must be at most "
+                f"{MAX_READER_TIMEOUT_TOTAL_MS}"
+            )
         if len(switches) > MAX_COMPONENTS:
             raise ConfigError(
                 f"{source}.switches supports at most {MAX_COMPONENTS} entries"

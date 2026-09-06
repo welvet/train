@@ -419,6 +419,28 @@ def test_reader_timeout_must_stay_below_heartbeat_budget(
             validate_arduino_upload_config(tmp_path)
 
 
+@pytest.mark.parametrize(("second_timeout", "valid"), [(750, True), (751, False)])
+def test_reader_timeout_total_must_stay_below_heartbeat_budget(
+    tmp_path: Path, second_timeout: int, valid: bool
+) -> None:
+    _write_config(tmp_path)
+    devices = json.loads((tmp_path / "arduinos.json").read_text())
+    first = devices["devices"]["arduino_1"]["readers"][0]
+    devices["devices"]["arduino_1"]["readers"].append({
+        **first,
+        "id": "D2",
+        "ss_pin": 6,
+        "read_timeout_ms": second_timeout,
+    })
+    (tmp_path / "arduinos.json").write_text(json.dumps(devices))
+
+    if valid:
+        validate_arduino_upload_config(tmp_path)
+    else:
+        with pytest.raises(ConfigError, match="total read_timeout_ms"):
+            validate_arduino_upload_config(tmp_path)
+
+
 def test_event_logger_flag_must_be_boolean(tmp_path: Path) -> None:
     _write_config(tmp_path)
     devices = json.loads((tmp_path / "arduinos.json").read_text())

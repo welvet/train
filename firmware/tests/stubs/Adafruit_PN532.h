@@ -28,10 +28,14 @@ struct Device {
 
 inline std::vector<Device> devices;
 inline size_t nextDevice = 0;
+inline bool advanceWorstCaseTime = false;
+inline std::vector<uint16_t> readTimeouts;
 
 inline void reset(size_t count = 2) {
   devices.assign(count, Device{});
   nextDevice = 0;
+  advanceWorstCaseTime = false;
+  readTimeouts.clear();
   SPI.began = false;
 }
 
@@ -65,7 +69,13 @@ class Adafruit_PN532 {
       uint8_t,
       uint8_t* uid,
       uint8_t* uidLength,
-      uint16_t) {
+      uint16_t timeout) {
+    fake_pn532::readTimeouts.push_back(timeout);
+    if (fake_pn532::advanceWorstCaseTime) {
+      const unsigned long rounded =
+          ((static_cast<unsigned long>(timeout) + 9) / 10) * 10;
+      fake_arduino::now += 2 * rounded + 2;
+    }
     fake_pn532::Device& device = fake_pn532::devices[index_];
     if (device.reads.empty()) return false;
     fake_pn532::Read read = device.reads.front();

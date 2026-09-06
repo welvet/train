@@ -63,7 +63,6 @@ void ProtocolModule::onEvent(const Event& event) {
 void ProtocolModule::trigger() {
   const unsigned long elapsed = millis() - phaseStartedAt_;
   if (waitingForConfiguration_ && elapsed >= kConfigWaitTimeoutMs) {
-    Serial.println("Configuration request timed out");
     bus_.publish(DisconnectRequestedEvent());
     waitingForConfiguration_ = false;
   } else if (applyingConfiguration_ && elapsed >= kConfigApplyTimeoutMs) {
@@ -152,6 +151,7 @@ bool ProtocolModule::parseConfiguration(
     }
   }
   config.readerCount = static_cast<int>(readers.size());
+  int totalReadTimeoutMs = 0;
   for (int index = 0; index < config.readerCount; ++index) {
     JsonObjectConst value = readers[index];
     ReaderConfig& item = config.readers[index];
@@ -164,7 +164,10 @@ bool ProtocolModule::parseConfiguration(
     item.removalDelayMs = value["removal_delay_ms"];
     if (ssPin < MIN_COMPONENT_PIN || ssPin > MAX_COMPONENT_PIN ||
         pins[ssPin] || readTimeoutMs <= 0 ||
-        readTimeoutMs > 1000 || item.removalDelayMs == 0) return false;
+        readTimeoutMs > MAX_READER_TIMEOUT_TOTAL_MS ||
+        item.removalDelayMs == 0) return false;
+    totalReadTimeoutMs += readTimeoutMs;
+    if (totalReadTimeoutMs > MAX_READER_TIMEOUT_TOTAL_MS) return false;
     item.ssPin = static_cast<uint8_t>(ssPin);
     item.readTimeoutMs = static_cast<uint16_t>(readTimeoutMs);
     pins[ssPin] = true;

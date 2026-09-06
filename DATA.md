@@ -134,11 +134,17 @@ routing identities on the trusted operator LAN, not authentication secrets.
 Firmware must request and acknowledge its runtime configuration before the
 backend registers the hub.
 
-`read_timeout_ms` may be at most 1000 ms so NFC polling cannot block heartbeat
-responses long enough for the backend to disconnect a healthy Arduino hub.
+Each `read_timeout_ms` may be at most 1000 ms, and their sum for one device may
+also be at most 1000 ms. The firmware polls all readers in one batch, so this
+aggregate budget keeps the blocking PN532 cycle below the hub heartbeat expiry.
+This timing contract and the build tools require Adafruit PN532 library 1.3.4;
+`tools/arduino compile` and the firmware test runner fail clearly on a different
+or missing version.
 
 `event_logger_enabled` is optional and defaults to `false`. When enabled, the
-firmware prints one line for every internal event to the Arduino serial output.
+firmware prints one line for every internal event to the Arduino serial output
+and blinks the event activity LED. When disabled, firmware produces neither
+serial diagnostic lines nor event LED activity.
 
 ### `secrets.json`
 

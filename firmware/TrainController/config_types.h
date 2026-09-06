@@ -8,6 +8,7 @@ constexpr size_t MAX_ID_BYTES = 16;
 constexpr size_t CONFIG_REVISION_BYTES = 64;
 constexpr int MAX_SWITCHES = 8;
 constexpr int MAX_READERS = 8;
+constexpr int MAX_READER_TIMEOUT_TOTAL_MS = 1000;
 constexpr int MIN_COMPONENT_PIN = 2;
 constexpr int MAX_COMPONENT_PIN = 10;
 constexpr size_t MAX_CONFIG_FRAME_BYTES = 2048;
