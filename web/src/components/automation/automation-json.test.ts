@@ -17,7 +17,6 @@ it("serializes and parses a nested detector automation", () => {
               {
                 type: "on_count",
                 count: 5,
-                mode: "repeat",
                 children: [
                   {
                     type: "wait",
@@ -38,7 +37,6 @@ it("serializes and parses a nested detector automation", () => {
   expect(document.rules[0].root.children[0]).toMatchObject({
     type: "on_count",
     count: 5,
-    mode: "repeat",
   });
   expect(JSON.parse(serializeAutomation(document))).toMatchObject({
     version: 1,
@@ -84,6 +82,31 @@ it("supports an empty document", () => {
   const empty = parseAutomation('{"version":1,"rules":[]}');
   expect(empty).toEqual({ version: 1, rules: [] });
   expect(JSON.parse(serializeAutomation(empty))).toEqual({ version: 1, rules: [] });
+});
+
+it("rejects the removed count mode field", () => {
+  const document = {
+    version: 1,
+    rules: [
+      {
+        id: "legacy_count",
+        enabled: true,
+        root: {
+          type: "train_detected",
+          hub_id: "yard",
+          detector_id: "D1",
+          train_id: "express",
+          children: [
+            { type: "on_count", count: 2, mode: "repeat", children: [] },
+          ],
+        },
+      },
+    ],
+  };
+
+  expect(() => parseAutomation(JSON.stringify(document))).toThrow(
+    "contains unknown field mode",
+  );
 });
 
 it("round-trips ordered rules for multiple detectors", () => {

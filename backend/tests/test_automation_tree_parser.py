@@ -99,7 +99,6 @@ def test_parses_complete_nested_document(parser: AutomationParser) -> None:
             "children": [{
                 "type": "on_count",
                 "count": 5,
-                "mode": "repeat",
                 "children": [_speed(-35)],
             }],
         },
@@ -288,21 +287,20 @@ def test_rejects_invalid_count(parser: AutomationParser, count: object) -> None:
     node = {
         "type": "on_count",
         "count": count,
-        "mode": "once",
         "children": [_speed()],
     }
     with pytest.raises(AutomationParseError, match=r"\.count: must be"):
         parser.parse(_document(_rule(node)))
 
 
-def test_rejects_invalid_count_mode(parser: AutomationParser) -> None:
+def test_rejects_removed_count_mode(parser: AutomationParser) -> None:
     node = {
         "type": "on_count",
         "count": 1,
-        "mode": "sometimes",
+        "mode": "repeat",
         "children": [_speed()],
     }
-    with pytest.raises(AutomationParseError, match=r"must be once or repeat"):
+    with pytest.raises(AutomationParseError, match=r"\.mode: unknown field"):
         parser.parse(_document(_rule(node)))
 
 

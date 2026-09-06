@@ -1,4 +1,4 @@
-import { Button, SimpleGrid, Stack, VisuallyHidden } from "@mantine/core";
+import { Button, SimpleGrid, VisuallyHidden } from "@mantine/core";
 
 import type { OnCountNode } from "../types";
 import classes from "../automation.module.css";
@@ -17,53 +17,26 @@ export function OnCountEditor({
     : [...STANDARD_COUNTS, node.count];
 
   return (
-    <Stack gap="xs">
-      <fieldset className={classes.choiceFieldset}>
-        <VisuallyHidden component="legend">Choose detection count</VisuallyHidden>
-        <SimpleGrid cols={{ base: 3, sm: counts.length }} spacing="xs">
-          {counts.map((count) => (
-            <Button
-              key={count}
-              variant={node.count === count ? "filled" : "light"}
-              size="md"
-              className={classes.choiceButton}
-              onClick={() => onChange({ ...node, count })}
-              aria-label={`Run on detection ${count}`}
-              aria-pressed={node.count === count}
-            >
-              <span aria-hidden>🔢</span>
-              <span>{count}</span>
-            </Button>
-          ))}
-        </SimpleGrid>
-      </fieldset>
-      <fieldset className={classes.choiceFieldset}>
-        <VisuallyHidden component="legend">Choose repeat behavior</VisuallyHidden>
-        <SimpleGrid cols={2} spacing="xs">
+    <fieldset className={classes.choiceFieldset}>
+      <VisuallyHidden component="legend">Choose repeat interval</VisuallyHidden>
+      <SimpleGrid cols={{ base: 3, sm: counts.length }} spacing="xs">
+        {counts.map((count) => (
           <Button
-            variant={node.mode === "once" ? "filled" : "light"}
+            key={count}
+            variant={node.count === count ? "filled" : "light"}
             size="md"
             className={classes.choiceButton}
-            onClick={() => onChange({ ...node, mode: "once" })}
-            aria-label="Run once"
-            aria-pressed={node.mode === "once"}
+            onClick={() => onChange({ ...node, count })}
+            aria-label={
+              count === 1 ? "Run on every detection" : `Run every ${count} detections`
+            }
+            aria-pressed={node.count === count}
           >
-            <span aria-hidden>1️⃣</span>
-            <span>Once</span>
+            <span aria-hidden>🔢</span>
+            <span>{count}</span>
           </Button>
-          <Button
-            variant={node.mode === "repeat" ? "filled" : "light"}
-            size="md"
-            className={classes.choiceButton}
-            onClick={() => onChange({ ...node, mode: "repeat" })}
-            aria-label="Repeat forever"
-            aria-pressed={node.mode === "repeat"}
-          >
-            <span aria-hidden>🔁</span>
-            <span>Repeat</span>
-          </Button>
-        </SimpleGrid>
-      </fieldset>
-    </Stack>
+        ))}
+      </SimpleGrid>
+    </fieldset>
   );
 }

@@ -1,4 +1,3 @@
-export type CountMode = "once" | "repeat";
 export type SwitchPosition = "straight" | "diverge";
 
 export interface SetTrainSpeedNode {
@@ -24,7 +23,6 @@ export interface WaitNode {
 export interface OnCountNode {
   readonly type: "on_count";
   readonly count: number;
-  readonly mode: CountMode;
   readonly children: readonly AutomationNode[];
 }
 

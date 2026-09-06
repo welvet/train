@@ -114,7 +114,7 @@ terminal hardware nodes are leaves and require an empty `children` array.
 | `set_train_speed` | terminal | `speed`, `children` | Sets the train from the root to a signed speed from `-100` to `100`. Zero stops it. |
 | `set_switch` | terminal | `hub_id`, `switch_id`, `position`, `children` | Moves a configured switch to `straight` or `diverge`. |
 | `wait` | control | `seconds`, `children` | Waits, then runs its children in order. |
-| `on_count` | conditional | `count`, `mode`, `children` | Runs its children only when this node reaches the configured occurrence. |
+| `on_count` | conditional | `count`, `children` | Runs its children on every configured occurrence. |
 
 ### Set the detected train's speed
 
@@ -174,7 +174,6 @@ so hardware connections and the web API continue running while this rule waits.
 {
   "type": "on_count",
   "count": 5,
-  "mode": "once",
   "children": [
     {
       "type": "set_train_speed",
@@ -186,13 +185,11 @@ so hardware connections and the web API continue running while this rule waits.
 ```
 
 Each time execution reaches an `on_count` node, its private counter advances.
-With `mode: "once"`, its children run only when the counter reaches `count`;
-the node remains closed afterward. With `mode: "repeat"`, its children run on
-every multiple of `count`, such as the 5th, 10th, and 15th occurrences. `count`
-must be a positive integer. A qualifying occurrence is consumed before its
-children run. If a child later fails or is cancelled, `once` remains closed
-and `repeat` waits for the next multiple; an arrival is never relabeled as the
-fifth one after the fact.
+Its children run on every multiple of `count`, such as the 5th, 10th, and 15th
+occurrences. `count` must be a positive integer. A qualifying occurrence is
+consumed before its children run. If a child later fails or is cancelled, the
+node waits for the next multiple; an arrival is never relabeled as the fifth
+one after the fact.
 
 Counters belong to the node's path within a rule, not just to its displayed
 contents. They are runtime state and are not written back to JSON. They reset
@@ -290,8 +287,8 @@ selection.
 
 This rule does nothing for the first four accepted detections. On the fifth it
 waits five seconds, sets speed to `50`, waits five seconds, stops, waits another
-five seconds, and sets speed to `20`. It runs only once because the count mode
-is `once`.
+five seconds, and sets speed to `20`. The sequence repeats on every fifth
+accepted detection.
 
 ```json
 {
@@ -306,7 +303,6 @@ is `once`.
       {
         "type": "on_count",
         "count": 5,
-        "mode": "once",
         "children": [
           {
             "type": "wait",
