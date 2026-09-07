@@ -5,13 +5,13 @@
 Replace installation-written Python automation with a small JSON state tree
 that can later be edited by the web UI. A rule starts with one concrete event:
 a configured train is detected by a configured detector. That detector is the
-root node. Control nodes below it can wait or act only on a particular
-occurrence, while terminal leaves move switches or change the detected train's
-speed.
+root node. Control nodes below it can wait, inspect named integer signals, or
+act only on a particular occurrence, while terminal leaves update signals,
+move switches, or change the detected train's speed.
 
-The first version is deliberately small. It is for a LEGO railway, so it does
+The format is deliberately small. It is for a LEGO railway, so it does
 not try to be a general workflow language or a railway interlocking system.
-There are no expressions, variables, loops, priorities, or arbitrary code.
+There are no general expressions, loops, priorities, or arbitrary code.
 
 The workspace file is `data/automations.json`. Like the other files
 under `data/`, it belongs to one installation and must remain outside Git.
@@ -20,7 +20,8 @@ under `data/`, it belongs to one installation and must remain outside Git.
 
 ```json
 {
-  "version": 3,
+  "version": 4,
+  "signals": ["segment_1_clear"],
   "rules": [
     {
       "id": "send_red_train_from_station",
@@ -56,18 +57,16 @@ under `data/`, it belongs to one installation and must remain outside Git.
 }
 ```
 
-`version` selects the file format and execution contract. Version 1 contains
-the original linear and filtering nodes with ordered children. Version 2 adds
-exclusive count branching while retaining version 1 behavior. Version 3 starts
-every entered sibling set concurrently at every tree depth. The current backend
-can read versions 1 and 2 only as migration input: it validates and atomically
-persists the same tree as version 3 before activation. API replacements follow
-the same rule, and the editor always saves version 3. The standalone runner
-executes only version 3.
+`version` selects the file format and execution contract. Version 4 is the only
+supported format. It starts every entered sibling set concurrently at every
+tree depth and adds document-defined integer signals. Older documents are
+rejected rather than migrated or guessed.
 
-Rolling back to a version-1-or-2-only backend therefore fails closed until an
-operator deliberately changes the document version and accepts the old ordered
-semantics. Unsupported versions are rejected instead of guessed.
+`signals` declares the unique non-empty names available to every rule. Values
+are runtime-only and start at `0` whenever the backend activates a document.
+They survive pause/resume but reset on backend restart or any complete document
+replacement, including Save in the editor.
+
 `rules` is an ordered list for stable UI
 display; list order does not give a rule priority. An empty `rules` list is
 valid and means that no configurable automation is active.
@@ -116,7 +115,7 @@ before saving.
 
 Every node has a `type` discriminator and a `children` array, so the UI can
 render and edit the complete structure with one recursive tree component.
-In version 3, children start concurrently; array order is structural and keeps
+In version 4, children start concurrently; array order is structural and keeps
 node paths, counters, errors, branch identity, and editor display stable. It is
 not execution order. Control nodes own one or more children; terminal hardware
 nodes are leaves and require an empty `children` array.
@@ -128,8 +127,12 @@ nodes are leaves and require an empty `children` array.
 | `set_switch` | terminal | `hub_id`, `switch_id`, `position`, `children` | Moves a configured switch to `straight` or `diverge`, or `flip`s its last-known position. |
 | `wait` | control | `seconds`, `children` | Waits, then starts all of its children concurrently. |
 | `on_count` | conditional | `count`, `children` | Runs its children on every configured occurrence. |
-| `if_count` | conditional, v2+ | `count`, `children` | Selects its `match` branch on every configured occurrence and `otherwise` on the rest. |
-| `branch` | control, v2+ | `when`, `children` | Labels the `match` or `otherwise` subtree directly beneath `if_count`. |
+| `if_count` | conditional | `count`, `children` | Selects its `match` branch on every configured occurrence and `otherwise` on the rest. |
+| `set_signal` | terminal | `signal`, `value`, `children` | Stores a safe integer in a declared signal. |
+| `on_signal` | conditional | `signal`, `operator`, `value`, `children` | Runs its children when the comparison currently matches, otherwise skips them. |
+| `if_signal` | conditional | `signal`, `operator`, `value`, `children` | Selects its `match` branch when the comparison currently matches and `otherwise` when it does not. |
+| `when_signal_is` | control | `signal`, `operator`, `value`, `children` | Enters its children immediately when matched, otherwise waits until a later matching value. |
+| `branch` | control | `when`, `children` | Labels the `match` or `otherwise` subtree directly beneath `if_count` or `if_signal`. |
 
 ### Set the detected train's speed
 
@@ -165,7 +168,7 @@ diverge. This option belongs to the automation document; the public
 manual-control event continues to accept explicit positions and raw angles only.
 
 A successful command means the Arduino accepted the target; the switch has no
-physical position sensor. In version 3, sibling commands and waits start
+physical position sensor. In version 4, sibling commands and waits start
 together. A delayed action must be nested under its `wait`; for example, a
 `set_switch` sibling and a `wait` containing `set_train_speed` begin together,
 then the speed command begins when that wait expires. The current vocabulary
@@ -218,7 +221,7 @@ Counters belong to the node's path within a rule, not just to its displayed
 contents. They are runtime state and are not written back to JSON. They reset
 when the backend starts or a complete document is applied through the API.
 
-### Count branch (introduced in version 2)
+### Count branch
 
 Use `if_count` when both the matching and non-matching occurrences need an
 action. It requires exactly one `match` branch and one `otherwise` branch, and
@@ -273,6 +276,87 @@ Switch acknowledgement means the Arduino accepted the command, not that a
 physical position sensor observed completion. Place the detector far enough
 before the switch for it to settle before the train arrives.
 
+### Signals
+
+Signal values and comparison thresholds are integers from
+`-9007199254740991` through `9007199254740991`. Conditions accept `eq`,
+`not_eq`, `less` (strict `<`), and `more` (strict `>`).
+
+```json
+{
+  "type": "set_signal",
+  "signal": "segment_1_clear",
+  "value": 1,
+  "children": []
+}
+```
+
+`on_signal` is a filter like `on_count`: it either enters or skips one child
+subtree. `if_signal` has exactly one `match` and one `otherwise` branch, using
+the same branch shape as `if_count`.
+
+`when_signal_is` is a level-triggered wait, not a loop and not a remembered
+edge queue. When reached, it enters its children immediately if the comparison
+already matches. Otherwise the active rule waits until a later `set_signal`
+makes it match. A signal changed during an earlier delay is therefore still
+observed when the node is reached, provided its current value still matches.
+
+For a train that should run briefly, stop, and later resume when a segment is
+clear, put three paths together in the blocked branch. They start concurrently:
+one starts the train, one stops it after one second, and the third waits two
+seconds before either resuming immediately or waiting for the signal.
+
+```json
+{
+  "type": "if_signal",
+  "signal": "segment_1_clear",
+  "operator": "eq",
+  "value": 1,
+  "children": [
+    {
+      "type": "branch",
+      "when": "match",
+      "children": [
+        { "type": "set_train_speed", "speed": 50, "children": [] }
+      ]
+    },
+    {
+      "type": "branch",
+      "when": "otherwise",
+      "children": [
+        { "type": "set_train_speed", "speed": 50, "children": [] },
+        {
+          "type": "wait",
+          "seconds": 1,
+          "children": [
+            { "type": "set_train_speed", "speed": 0, "children": [] }
+          ]
+        },
+        {
+          "type": "wait",
+          "seconds": 2,
+          "children": [
+            {
+              "type": "when_signal_is",
+              "signal": "segment_1_clear",
+              "operator": "eq",
+              "value": 1,
+              "children": [
+                { "type": "set_train_speed", "speed": 50, "children": [] }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
+```
+
+Halting automation, replacing the document, disabling the rule, or shutting
+down cancels pending signal waits. Resume does not resurrect them. Manual train
+commands remain independent, so halt automation before taking manual control.
+
 ## Execution model
 
 Each rule is a small state machine:
@@ -294,9 +378,11 @@ idle -- matching TagDetected --> running
 When a matching detection arrives in `idle`, the rule enters its root and
 starts every root child concurrently. The same rule applies recursively to
 every child set. A blocked `on_count` skips its subtree and returns to its
-parent; a passing node starts its children together. An `if_count` selects only
-one branch, whose children then start together. A `wait` sleeps before starting
-its own children, without delaying sibling paths. Terminal commands use the
+parent; a passing node starts its children together. `on_signal` behaves the
+same way for a signal comparison. `if_count` and `if_signal` select one branch,
+whose children then start together. A `wait` sleeps before starting its own
+children; `when_signal_is` waits for its comparison. Neither delays sibling
+paths. Terminal commands use the
 backend's existing acknowledged
 `SetTrainSpeed` and `SetSwitchPosition` command paths.
 
@@ -316,13 +402,15 @@ Different rules may run concurrently. A rule reports `waiting` whenever at
 least one of its active paths is sleeping, even if another path is running a
 command at the same time.
 
-Disabling a rule cancels its complete execution, including a pending wait or
-an awaited command, and prevents any later nodes from running. A command which
+Replacing the document to disable a rule cancels its complete execution,
+including a pending timed or signal wait or an awaited command, and prevents
+any later nodes from running. A command which
 was already sent may still have affected the hardware even though its wait was
 cancelled. A global automation halt does the same for every rule, but does not
 automatically stop trains or move switches. Resuming returns enabled rules to
 `idle`; events skipped during the halt are not replayed. Halt and resume keep
-occurrence counters; disabling and re-enabling an individual rule resets them.
+occurrence counters and signal values; any document replacement resets all
+counters and signals.
 A future UI should label this control **Pause automation**, not **Stop railway**
 or **Emergency stop**.
 
@@ -339,7 +427,8 @@ hardware failure.
 The complete file is validated before it replaces the active configuration.
 An invalid edit leaves the previous valid configuration running. For every
 valid API update, the engine cancels and awaits all current executions, resets
-all runtime counters, and only then publishes the complete new configuration.
+all runtime counters and signals, and only then publishes the complete new
+configuration.
 Trigger admission is paused for this replacement; detections received during
 the short replacement window are not replayed. This prevents a run of the old
 tree from starting while its replacement is being installed, and prevents an
@@ -357,16 +446,19 @@ Validation checks that:
   not appear below that root;
 - every node contains a `children` array, roots and control nodes have at least
   one child, and terminal nodes have none;
+- signal names are unique and every signal reference names a declaration;
 - unknown versions, node types, fields, and enum values are rejected.
 
-Version 3 does not calculate dependencies or resolve target conflicts. Sibling
+Version 4 does not calculate dependencies or resolve target conflicts. Sibling
 paths in one rule, or paths in different rules, can target the same train or
 switch at about the same time. The existing command bus serializes commands for
 one resource but does not promise which concurrent command acquires its lock
 first, so the final state is unspecified. After a timeout, the physical outcome
 also remains unknown. The editor warns about shared targets across rules and
 about concurrent same-target paths within one rule; mutually exclusive
-`if_count` branches do not conflict with each other. The operator can change or
+`if_count` and `if_signal` branches do not conflict with each other. Concurrent
+signal writes, or a signal read racing a write, are also warned because their
+result depends on scheduling. The operator can change or
 disable a conflicting path. There are no priorities, locks spanning a state
 tree, or automatic winner selection.
 
@@ -438,10 +530,11 @@ installation-written Python. The backend:
 
 1. loads and validates `data/automations.json` against the installation topology;
 2. translates `TagDetected` events into root-node invocations;
-3. keeps rule state, timers, and counters inside one internal automation engine;
+3. keeps rule state, timers, counters, signals, and signal waits inside one
+   internal automation engine;
 4. dispatches the existing acknowledged train and switch commands; and
 5. exposes validated rule configuration and runtime status through the web API.
 
 Arbitrary event subscriptions, Python callbacks, speed ramps, and custom
-background tasks remain outside versions 1 through 3. Further root or node types
-require a later schema version and a concrete UI use case.
+background tasks remain outside version 4. Further root or node types require a
+later schema version and a concrete UI use case.

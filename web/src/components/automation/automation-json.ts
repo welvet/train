@@ -12,7 +12,7 @@ const MAX_TREE_DEPTH = 64;
 export function currentAutomationDocument(
   document: AutomationDocument,
 ): AutomationDocument {
-  return document.version === 3 ? document : { ...document, version: 3 };
+  return document;
 }
 
 export function serializeAutomation(document: AutomationDocument): string {
@@ -32,9 +32,18 @@ export function parseAutomation(source: string): AutomationDocument {
   }
 
   const value = object(input, "Automation document");
-  exactKeys(value, ["version", "rules"], "Automation document");
-  if (value.version !== 1 && value.version !== 2 && value.version !== 3) {
-    throw new Error("Only automation document versions 1, 2, and 3 are supported.");
+  exactKeys(value, ["version", "signals", "rules"], "Automation document");
+  if (value.version !== 4) {
+    throw new Error("Only automation document version 4 is supported.");
+  }
+  if (!Array.isArray(value.signals)) {
+    throw new Error("Automation document signals must be an array.");
+  }
+  const signals = value.signals.map((signal, index) =>
+    nonEmptyString(signal, `Signal ${index + 1}`),
+  );
+  if (new Set(signals).size !== signals.length) {
+    throw new Error("Signal names must be unique.");
   }
   if (!Array.isArray(value.rules)) {
     throw new Error("Automation document rules must be an array.");
@@ -44,7 +53,7 @@ export function parseAutomation(source: string): AutomationDocument {
   }
 
   const rules = value.rules.map((rule, index) =>
-    parseRule(rule, index, value.version as 1 | 2 | 3),
+    parseRule(rule, index, new Set(signals)),
   );
   const ids = new Set<string>();
   const enabledTriggers = new Set<string>();
@@ -60,10 +69,10 @@ export function parseAutomation(source: string): AutomationDocument {
     }
   }
 
-  return { version: value.version as 1 | 2 | 3, rules };
+  return { version: 4, signals, rules };
 }
 
-function parseRule(input: unknown, index: number, version: 1 | 2 | 3): AutomationRule {
+function parseRule(input: unknown, index: number, signals: ReadonlySet<string>): AutomationRule {
   const label = `Rule ${index + 1}`;
   const value = object(input, label);
   exactKeys(value, ["id", "enabled", "root"], label);
@@ -87,7 +96,7 @@ function parseRule(input: unknown, index: number, version: 1 | 2 | 3): Automatio
     `${label} root`,
     nodeCount,
     1,
-    version,
+    signals,
     "train_detected",
   );
   if (children.length === 0) throw new Error(`${label} root needs at least one step.`);
@@ -109,7 +118,7 @@ function parseNode(
   path: string,
   nodeCount: { value: number },
   depth: number,
-  version: 1 | 2 | 3,
+  signals: ReadonlySet<string>,
   parentType: string,
 ): AutomationNode {
   if (depth > MAX_TREE_DEPTH) {
@@ -120,11 +129,8 @@ function parseNode(
     throw new Error(`Rule may contain at most ${MAX_NODES_PER_RULE} nodes.`);
   }
   const value = object(input, path);
-  if ((value.type === "if_count" || value.type === "branch") && version < 2) {
-    throw new Error(`${path} type ${String(value.type)} requires automation document version 2.`);
-  }
-  if (value.type === "branch" && parentType !== "if_count") {
-    throw new Error(`${path} branch is only allowed directly under if_count.`);
+  if (value.type === "branch" && parentType !== "if_count" && parentType !== "if_signal") {
+    throw new Error(`${path} branch is only allowed directly under if_count or if_signal.`);
   }
   switch (value.type) {
     case "set_train_speed": {
@@ -169,7 +175,7 @@ function parseNode(
       ) {
         throw new Error(`${path} seconds must be a finite number from 0 to 3600.`);
       }
-      const children = childrenOf(value.children, path, nodeCount, depth + 1, version, "wait");
+      const children = childrenOf(value.children, path, nodeCount, depth + 1, signals, "wait");
       if (children.length === 0) throw new Error(`${path} needs at least one child step.`);
       return { type: "wait", seconds: value.seconds, children };
     }
@@ -178,7 +184,7 @@ function parseNode(
       if (!Number.isInteger(value.count) || Number(value.count) < 1) {
         throw new Error(`${path} count must be a positive whole number.`);
       }
-      const children = childrenOf(value.children, path, nodeCount, depth + 1, version, "on_count");
+      const children = childrenOf(value.children, path, nodeCount, depth + 1, signals, "on_count");
       if (children.length === 0) throw new Error(`${path} needs at least one child step.`);
       return {
         type: "on_count",
@@ -199,7 +205,7 @@ function parseNode(
         path,
         nodeCount,
         depth + 1,
-        version,
+        signals,
         "if_count",
       );
       if (!children.every((child) => child.type === "branch")) {
@@ -211,12 +217,70 @@ function parseNode(
       }
       return { type: "if_count", count: Number(value.count), children: branches };
     }
+    case "set_signal": {
+      exactKeys(value, ["type", "signal", "value", "children"], path);
+      emptyChildren(value.children, path);
+      return {
+        type: "set_signal",
+        signal: declaredSignal(value.signal, signals, path),
+        value: signalValue(value.value, path),
+        children: [],
+      };
+    }
+    case "on_signal":
+    case "when_signal_is": {
+      exactKeys(value, ["type", "signal", "operator", "value", "children"], path);
+      const children = childrenOf(
+        value.children,
+        path,
+        nodeCount,
+        depth + 1,
+        signals,
+        value.type,
+      );
+      if (children.length === 0) throw new Error(`${path} needs at least one child step.`);
+      return {
+        type: value.type,
+        signal: declaredSignal(value.signal, signals, path),
+        operator: signalOperator(value.operator, path),
+        value: signalValue(value.value, path),
+        children,
+      };
+    }
+    case "if_signal": {
+      exactKeys(value, ["type", "signal", "operator", "value", "children"], path);
+      if (!Array.isArray(value.children) || value.children.length !== 2) {
+        throw new Error(`${path} must contain one match branch and one otherwise branch.`);
+      }
+      const children = childrenOf(
+        value.children,
+        path,
+        nodeCount,
+        depth + 1,
+        signals,
+        "if_signal",
+      );
+      if (!children.every((child) => child.type === "branch")) {
+        throw new Error(`${path} children must be branch steps.`);
+      }
+      const branches = children as [Extract<AutomationNode, { type: "branch" }>, Extract<AutomationNode, { type: "branch" }>];
+      if (new Set(branches.map((branch) => branch.when)).size !== 2) {
+        throw new Error(`${path} needs one match branch and one otherwise branch.`);
+      }
+      return {
+        type: "if_signal",
+        signal: declaredSignal(value.signal, signals, path),
+        operator: signalOperator(value.operator, path),
+        value: signalValue(value.value, path),
+        children: branches,
+      };
+    }
     case "branch": {
       exactKeys(value, ["type", "when", "children"], path);
       if (value.when !== "match" && value.when !== "otherwise") {
         throw new Error(`${path} when must be match or otherwise.`);
       }
-      const children = childrenOf(value.children, path, nodeCount, depth + 1, version, "branch");
+      const children = childrenOf(value.children, path, nodeCount, depth + 1, signals, "branch");
       if (children.length === 0) throw new Error(`${path} needs at least one child step.`);
       return { type: "branch", when: value.when, children };
     }
@@ -230,13 +294,33 @@ function childrenOf(
   path: string,
   nodeCount: { value: number },
   depth: number,
-  version: 1 | 2 | 3,
+  signals: ReadonlySet<string>,
   parentType: string,
 ): AutomationNode[] {
   if (!Array.isArray(input)) throw new Error(`${path} children must be an array.`);
   return input.map((child, index) =>
-    parseNode(child, `${path} child ${index + 1}`, nodeCount, depth, version, parentType),
+    parseNode(child, `${path} child ${index + 1}`, nodeCount, depth, signals, parentType),
   );
+}
+
+function declaredSignal(input: unknown, signals: ReadonlySet<string>, path: string): string {
+  const signal = nonEmptyString(input, `${path} signal`);
+  if (!signals.has(signal)) throw new Error(`${path} signal ${signal} is not declared.`);
+  return signal;
+}
+
+function signalValue(input: unknown, path: string): number {
+  if (typeof input !== "number" || !Number.isSafeInteger(input)) {
+    throw new Error(`${path} value must be a safe integer.`);
+  }
+  return input;
+}
+
+function signalOperator(input: unknown, path: string): "eq" | "not_eq" | "less" | "more" {
+  if (input !== "eq" && input !== "not_eq" && input !== "less" && input !== "more") {
+    throw new Error(`${path} operator must be eq, not_eq, less, or more.`);
+  }
+  return input;
 }
 
 function emptyChildren(input: unknown, path: string) {

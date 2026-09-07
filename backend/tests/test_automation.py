@@ -25,10 +25,11 @@ from train.modules.automation import AutomationModule
 
 def _document(
     *children: dict[str, object],
-    version: int = 3,
+    version: int = 4,
 ) -> dict[str, object]:
     return {
         "version": version,
+        "signals": [],
         "rules": [{
             "id": "station",
             "enabled": True,
@@ -152,7 +153,7 @@ async def test_module_dispatches_flip_switch_target(
         await module.stop()
 
 
-async def test_module_executes_count_branch_and_migrates_version_2(
+async def test_module_executes_count_branch(
     bus: EventBus, tmp_path: Path
 ) -> None:
     branch = {
@@ -167,7 +168,7 @@ async def test_module_executes_count_branch_and_migrates_version_2(
             },
         ],
     }
-    document = _document(branch, version=2)
+    document = _document(branch)
     path = tmp_path / "automations.json"
     _write(path, document)
     _, switches = await _acknowledge_commands(bus)
@@ -182,9 +183,8 @@ async def test_module_executes_count_branch_and_migrates_version_2(
             await module._runner.wait_idle()
 
         assert [item.target for item in switches] == ["straight", "diverge"]
-        expected = {**document, "version": 3}
-        assert module.snapshot()["document"] == expected
-        assert json.loads(path.read_text()) == expected
+        assert module.snapshot()["document"] == document
+        assert json.loads(path.read_text()) == document
     finally:
         await module.stop()
 
@@ -219,7 +219,7 @@ async def test_replacement_cancels_old_tree_and_persists_new_document(
         await module.stop()
 
 
-async def test_api_replacement_migrates_legacy_document_before_activation(
+async def test_api_replacement_rejects_legacy_document(
     bus: EventBus, tmp_path: Path
 ) -> None:
     path = tmp_path / "automations.json"
@@ -230,11 +230,11 @@ async def test_api_replacement_migrates_legacy_document_before_activation(
 
     try:
         legacy = _document(_speed(30), version=1)
-        snapshot = await module.replace_json(json.dumps(legacy))
-        expected = {**legacy, "version": 3}
-        assert snapshot["document"] == expected
-        assert json.loads(path.read_text()) == expected
-        assert module._runner.document.version == 3
+        with pytest.raises(AutomationParseError, match="unsupported version: 1"):
+            await module.replace_json(json.dumps(legacy))
+        assert module.snapshot()["document"] == original
+        assert json.loads(path.read_text()) == original
+        assert module._runner.document.version == 4
     finally:
         await module.stop()
 
@@ -355,12 +355,12 @@ async def test_activation_and_file_rollback_failure_keeps_candidate_inadmissible
         await module.stop()
 
 
-async def test_startup_activation_failure_restores_legacy_file_and_closes_runner(
+async def test_startup_activation_failure_preserves_file_and_closes_runner(
     bus: EventBus, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     path = tmp_path / "automations.json"
-    legacy = _document(_speed(10), version=1)
-    _write(path, legacy)
+    document = _document(_speed(10))
+    _write(path, document)
     module = AutomationModule(bus, path=path, tagged_trains={"express"})
 
     async def fail_activation(*args: object, **kwargs: object) -> None:
@@ -370,7 +370,7 @@ async def test_startup_activation_failure_restores_legacy_file_and_closes_runner
     with pytest.raises(RuntimeError, match="activation failed"):
         await module.start()
 
-    assert json.loads(path.read_text()) == legacy
+    assert json.loads(path.read_text()) == document
     assert not module.healthy
     with pytest.raises(RuntimeError, match="closed"):
         await module._runner.trigger(automation_module.Trigger("yard", "D1", "express"))

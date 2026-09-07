@@ -322,6 +322,7 @@ def _empty_automation_snapshot() -> dict[str, object]:
     return {
         "document": {
             "version": CURRENT_AUTOMATION_DOCUMENT_VERSION,
+            "signals": [],
             "rules": [],
         },
         "eligible_train_ids": [],

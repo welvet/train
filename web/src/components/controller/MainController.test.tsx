@@ -76,7 +76,8 @@ it("renders the full device hierarchy from one state request", async () => {
 it("loads and saves the backend automation document", async () => {
   let envelope = stateEnvelope();
   envelope.automation.document = {
-    version: 1,
+    version: 4,
+    signals: [],
     rules: [
       {
         id: "stop_at_yard",
@@ -222,7 +223,8 @@ it("disables automation editing while a save is in flight", async () => {
 it("keeps a dormant backend rule off when creating an active rule", async () => {
   const envelope = stateEnvelope();
   envelope.automation.document = {
-    version: 1,
+    version: 4,
+    signals: [],
     rules: [
       {
         id: "old_rule",
@@ -288,7 +290,7 @@ function stateEnvelope(): StateEnvelope {
     version: 4,
     snapshot_at: Date.now() / 1000,
     automation: {
-      document: { version: 1, rules: [] },
+      document: { version: 4, signals: [], rules: [] },
       eligible_train_ids: ["express"],
       paused: false,
       statuses: [],

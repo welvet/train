@@ -104,6 +104,14 @@ class FunctionRegistry:
                 f"function {function_type} fields must be a frozenset of "
                 "non-empty strings without surrounding whitespace"
             )
+        if (
+            not isinstance(function.signal_fields, frozenset)
+            or not function.signal_fields <= function.fields
+        ):
+            raise ValueError(
+                f"function {function_type} signal_fields must be a frozenset "
+                "containing only declared fields"
+            )
         reserved_fields = sorted(function.fields & _RESERVED_FIELDS)
         if reserved_fields:
             raise ValueError(

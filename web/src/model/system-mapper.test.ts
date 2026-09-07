@@ -7,7 +7,7 @@ it("maps and sorts the backend state into the UI model", () => {
     version: 4,
     snapshot_at: 13,
     automation: {
-      document: { version: 1, rules: [] },
+      document: { version: 4, signals: [], rules: [] },
       eligible_train_ids: ["zed"],
       paused: false,
       statuses: [],
@@ -60,7 +60,7 @@ it("maps and sorts the backend state into the UI model", () => {
   const model = toSystemModel(envelope);
 
   expect(model.updatedAt).toBe(12_500);
-  expect(model.automationDocument).toEqual({ version: 1, rules: [] });
+  expect(model.automationDocument).toEqual({ version: 4, signals: [], rules: [] });
   expect(model.automationTrainIds).toEqual(["zed"]);
   expect(model.trains.map((train) => train.id)).toEqual(["alpha", "zed"]);
   expect(model.trains[0].legoHub).toMatchObject({

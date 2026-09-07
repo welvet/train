@@ -7,7 +7,8 @@ import {
 it("serializes and parses a nested detector automation", () => {
   const document = parseAutomation(
     JSON.stringify({
-      version: 1,
+      version: 4,
+      signals: [],
       rules: [
         {
           id: "station_departure",
@@ -43,14 +44,16 @@ it("serializes and parses a nested detector automation", () => {
     count: 5,
   });
   expect(JSON.parse(serializeAutomation(document))).toMatchObject({
-    version: 1,
+    version: 4,
+    signals: [],
     rules: [{ id: "station_departure" }],
   });
 });
 
 it("rejects waits outside the document range and duplicate enabled triggers", () => {
   const base = {
-    version: 1,
+    version: 4,
+    signals: [],
     rules: [
       {
         id: "wrong_detector",
@@ -83,23 +86,23 @@ it("rejects waits outside the document range and duplicate enabled triggers", ()
 });
 
 it("supports an empty document", () => {
-  const empty = parseAutomation('{"version":1,"rules":[]}');
-  expect(empty).toEqual({ version: 1, rules: [] });
-  expect(JSON.parse(serializeAutomation(empty))).toEqual({ version: 1, rules: [] });
+  const empty = parseAutomation('{"version":4,"signals":[],"rules":[]}');
+  expect(empty).toEqual({ version: 4, signals: [], rules: [] });
+  expect(JSON.parse(serializeAutomation(empty))).toEqual({ version: 4, signals: [], rules: [] });
 });
 
-it("reads version 3 and upgrades legacy documents without mutating them", () => {
-  const legacy = parseAutomation('{"version":1,"rules":[]}');
-  const upgraded = currentAutomationDocument(legacy);
-
-  expect(legacy.version).toBe(1);
-  expect(upgraded).toEqual({ version: 3, rules: [] });
-  expect(parseAutomation(serializeAutomation(upgraded))).toEqual(upgraded);
+it("rejects legacy documents and keeps version 4 unchanged", () => {
+  expect(() => parseAutomation('{"version":3,"signals":[],"rules":[]}')).toThrow(
+    "Only automation document version 4 is supported",
+  );
+  const current = parseAutomation('{"version":4,"signals":[],"rules":[]}');
+  expect(currentAutomationDocument(current)).toBe(current);
 });
 
 it("rejects the removed count mode field", () => {
   const document = {
-    version: 1,
+    version: 4,
+    signals: [],
     rules: [
       {
         id: "legacy_count",
@@ -125,7 +128,8 @@ it("rejects the removed count mode field", () => {
 it("round-trips ordered rules for multiple detectors", () => {
   const document = parseAutomation(
     JSON.stringify({
-      version: 1,
+      version: 4,
+      signals: [],
       rules: [
         {
           id: "d1_rule",
@@ -171,12 +175,12 @@ it("matches backend scalar and document limits", () => {
   };
 
   expect(() =>
-    parseAutomation(JSON.stringify({ version: 1, rules: [rule] })),
+    parseAutomation(JSON.stringify({ version: 4, signals: [], rules: [rule] })),
   ).toThrow("speed must be an integer from -100 to 100");
 
   rule.root.children[0].speed = 0;
   const parsed = parseAutomation(
-    JSON.stringify({ version: 1, rules: [rule] }),
+    JSON.stringify({ version: 4, signals: [], rules: [rule] }),
   );
   expect(parsed.rules[0].root).toMatchObject({
     hub_id: "yard",
@@ -190,13 +194,14 @@ it("matches backend scalar and document limits", () => {
     enabled: false,
   }));
   expect(() =>
-    parseAutomation(JSON.stringify({ version: 1, rules })),
+    parseAutomation(JSON.stringify({ version: 4, signals: [], rules })),
   ).toThrow("may contain at most 1000 rules");
 });
 
 it("matches backend node count and tree depth limits", () => {
   const document = (children: unknown[]) => ({
-    version: 1,
+    version: 4,
+    signals: [],
     rules: [
       {
         id: "bounded_tree",
@@ -230,9 +235,10 @@ it("matches backend node count and tree depth limits", () => {
   );
 });
 
-it("round-trips version 2 count branches", () => {
+it("round-trips count branches", () => {
   const input = {
-    version: 2,
+    version: 4,
+    signals: [],
     rules: [
       {
         id: "route_fifth",
@@ -270,15 +276,8 @@ it("round-trips version 2 count branches", () => {
   expect(JSON.parse(serializeAutomation(parsed))).toEqual(input);
 });
 
-it("rejects count branches in version 1", () => {
-  const input = countBranchDocument(1);
-  expect(() => parseAutomation(JSON.stringify(input))).toThrow(
-    "requires automation document version 2",
-  );
-});
-
 it("rejects malformed or misplaced branches", () => {
-  const misplaced = countBranchDocument(2);
+  const misplaced = countBranchDocument();
   const misplacedRoot = misplaced.rules[0].root as { children: unknown[] };
   misplacedRoot.children = [
     {
@@ -288,10 +287,10 @@ it("rejects malformed or misplaced branches", () => {
     },
   ];
   expect(() => parseAutomation(JSON.stringify(misplaced))).toThrow(
-    "branch is only allowed directly under if_count",
+    "branch is only allowed directly under if_count or if_signal",
   );
 
-  const duplicate = countBranchDocument(2);
+  const duplicate = countBranchDocument();
   const duplicateIfCount = duplicate.rules[0].root.children[0] as {
     children: Array<{ when: string }>;
   };
@@ -300,7 +299,7 @@ it("rejects malformed or misplaced branches", () => {
     "needs one match branch and one otherwise branch",
   );
 
-  const empty = countBranchDocument(2);
+  const empty = countBranchDocument();
   const emptyIfCount = empty.rules[0].root.children[0] as {
     children: Array<{ children: unknown[] }>;
   };
@@ -310,8 +309,92 @@ it("rejects malformed or misplaced branches", () => {
   );
 });
 
+it("round-trips signal definitions and every signal node", () => {
+  const input = {
+    version: 4,
+    signals: ["S1"],
+    rules: [
+      {
+        id: "signals",
+        enabled: true,
+        root: {
+          type: "train_detected",
+          hub_id: "yard",
+          detector_id: "D1",
+          train_id: "express",
+          children: [
+            { type: "set_signal", signal: "S1", value: 1, children: [] },
+            {
+              type: "on_signal",
+              signal: "S1",
+              operator: "not_eq",
+              value: 0,
+              children: [{ type: "set_train_speed", speed: 10, children: [] }],
+            },
+            {
+              type: "when_signal_is",
+              signal: "S1",
+              operator: "more",
+              value: 0,
+              children: [{ type: "set_train_speed", speed: 20, children: [] }],
+            },
+            {
+              type: "if_signal",
+              signal: "S1",
+              operator: "eq",
+              value: 1,
+              children: [
+                {
+                  type: "branch",
+                  when: "match",
+                  children: [{ type: "set_train_speed", speed: 30, children: [] }],
+                },
+                {
+                  type: "branch",
+                  when: "otherwise",
+                  children: [{ type: "set_train_speed", speed: 0, children: [] }],
+                },
+              ],
+            },
+          ],
+        },
+      },
+    ],
+  };
+
+  const parsed = parseAutomation(JSON.stringify(input));
+  expect(parsed).toEqual(input);
+  expect(JSON.parse(serializeAutomation(parsed))).toEqual(input);
+});
+
+it("rejects duplicate, undeclared, and unsafe signal values", () => {
+  expect(() =>
+    parseAutomation('{"version":4,"signals":["S1"," S1 "],"rules":[]}'),
+  ).toThrow("Signal names must be unique");
+
+  const input = countBranchDocument() as unknown as {
+    signals: string[];
+    rules: Array<{ root: { children: unknown[] } }>;
+  };
+  input.signals = ["S1"];
+  const root = input.rules[0].root;
+  root.children = [
+    { type: "set_signal", signal: "missing", value: 1, children: [] },
+  ];
+  expect(() => parseAutomation(JSON.stringify(input))).toThrow(
+    "signal missing is not declared",
+  );
+
+  root.children = [
+    { type: "set_signal", signal: "S1", value: Number.MAX_SAFE_INTEGER + 1, children: [] },
+  ];
+  expect(() => parseAutomation(JSON.stringify(input))).toThrow(
+    "value must be a safe integer",
+  );
+});
+
 it.each([0, -1, 1.5, true])("rejects invalid count branch interval %s", (count) => {
-  const input = countBranchDocument(2);
+  const input = countBranchDocument();
   const node = input.rules[0].root.children[0] as { count: unknown };
   node.count = count;
 
@@ -320,9 +403,10 @@ it.each([0, -1, 1.5, true])("rejects invalid count branch interval %s", (count) 
   );
 });
 
-function countBranchDocument(version: number) {
+function countBranchDocument() {
   return {
-    version,
+    version: 4,
+    signals: [],
     rules: [
       {
         id: "route_fifth",

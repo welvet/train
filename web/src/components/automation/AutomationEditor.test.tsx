@@ -2,8 +2,8 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
 import { useState } from "react";
 
-import { AutomationEditor } from "./AutomationEditor";
-import type { AutomationDocument } from "./types";
+import { AutomationEditor, sharedTargetWarnings } from "./AutomationEditor";
+import type { AutomationDocument, AutomationNode } from "./types";
 
 const topology = {
   trainIds: ["express", "freight"],
@@ -15,7 +15,7 @@ const topology = {
 };
 
 function renderEditor(
-  initial: AutomationDocument = { version: 1, rules: [] },
+  initial: AutomationDocument = { version: 4, signals: [], rules: [] },
   editorTopology = topology,
 ) {
   let latest = initial;
@@ -105,7 +105,7 @@ it("builds a rule with numeric speed input", () => {
   ]);
 });
 
-it("upgrades version 1 when adding a count branch with two fixed outcomes", () => {
+it("adds a count branch with two fixed outcomes", () => {
   const getDocument = renderEditor();
   fireEvent.click(screen.getByRole("button", { name: "Create automation for yard / D1" }));
   fireEvent.click(screen.getByRole("button", { name: "Add count branch step" }));
@@ -118,7 +118,8 @@ it("upgrades version 1 when adding a count branch with two fixed outcomes", () =
   fireEvent.click(within(otherwiseSteps).getByRole("button", { name: "Add speed step" }));
 
   expect(getDocument()).toMatchObject({
-    version: 2,
+    version: 4,
+    signals: [],
     rules: [
       {
         root: {
@@ -142,9 +143,62 @@ it("upgrades version 1 when adding a count branch with two fixed outcomes", () =
   });
 });
 
-it("preserves document versions during ordinary edits", () => {
+it("builds set, branch, and wait-for-signal steps", () => {
+  const getDocument = renderEditor({ version: 4, signals: ["S1"], rules: [] });
+  fireEvent.click(screen.getByRole("button", { name: "Create automation for yard / D1" }));
+
+  fireEvent.click(screen.getByRole("button", { name: "Add set signal step" }));
+  fireEvent.change(screen.getByRole("textbox", { name: "Value" }), {
+    target: { value: "7" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Add signal branch step" }));
+  fireEvent.click(
+    within(screen.getByRole("group", { name: "Steps when signal matches" }))
+      .getByRole("button", { name: "Add speed step" }),
+  );
+  fireEvent.click(
+    within(screen.getByRole("group", { name: "Steps when signal does not match" }))
+      .getByRole("button", { name: "Add speed step" }),
+  );
+  const waitButtons = screen.getAllByRole("button", { name: "Add wait for signal step" });
+  fireEvent.click(waitButtons[waitButtons.length - 1]);
+  const waitGroup = screen.getByRole("group", { name: "Steps after Wait for signal step 3" });
+  fireEvent.click(within(waitGroup).getByRole("button", { name: "Add speed step" }));
+
+  expect(getDocument().rules[0].root.children).toMatchObject([
+    { type: "set_signal", signal: "S1", value: 7 },
+    {
+      type: "if_signal",
+      signal: "S1",
+      operator: "eq",
+      value: 1,
+      children: [
+        { when: "match", children: [{ type: "set_train_speed" }] },
+        { when: "otherwise", children: [{ type: "set_train_speed" }] },
+      ],
+    },
+    {
+      type: "when_signal_is",
+      signal: "S1",
+      children: [{ type: "set_train_speed" }],
+    },
+  ]);
+});
+
+it("disables signal steps until a signal is declared", () => {
+  renderEditor();
+  fireEvent.click(screen.getByRole("button", { name: "Create automation for yard / D1" }));
+
+  expect(screen.getByRole("button", { name: "Add set signal step" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Add signal step" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Add signal branch step" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Add wait for signal step" })).toBeDisabled();
+});
+
+it("keeps version 4 during ordinary edits", () => {
   const v1Document: AutomationDocument = {
-    version: 1,
+    version: 4,
+    signals: [],
     rules: [
       {
         id: "v1",
@@ -163,12 +217,13 @@ it("preserves document versions during ordinary edits", () => {
   fireEvent.change(screen.getByRole("textbox", { name: "Train speed (%)" }), {
     target: { value: "11" },
   });
-  expect(getV1().version).toBe(1);
+  expect(getV1().version).toBe(4);
 });
 
-it("never downgrades a version 2 document during ordinary edits", () => {
+it("keeps version 4 when editing a count branch document", () => {
   const v2Document: AutomationDocument = {
-    version: 2,
+    version: 4,
+    signals: [],
     rules: [
       {
         id: "v2",
@@ -187,12 +242,13 @@ it("never downgrades a version 2 document during ordinary edits", () => {
   fireEvent.change(screen.getByRole("textbox", { name: "Train speed (%)" }), {
     target: { value: "12" },
   });
-  expect(getV2().version).toBe(2);
+  expect(getV2().version).toBe(4);
 });
 
-it("never downgrades a version 3 document during ordinary edits", () => {
+it("keeps version 4 when editing a concurrent document", () => {
   const v3Document: AutomationDocument = {
-    version: 3,
+    version: 4,
+    signals: [],
     rules: [
       {
         id: "v3",
@@ -211,12 +267,13 @@ it("never downgrades a version 3 document during ordinary edits", () => {
   fireEvent.change(screen.getByRole("textbox", { name: "Train speed (%)" }), {
     target: { value: "13" },
   });
-  expect(getV3().version).toBe(3);
+  expect(getV3().version).toBe(4);
 });
 
 it("warns when concurrent paths in one rule control the same target", () => {
   renderEditor({
-    version: 3,
+    version: 4,
+    signals: [],
     rules: [
       {
         id: "parallel_speed",
@@ -255,6 +312,95 @@ it("does not warn across mutually exclusive count branches", () => {
   expect(screen.queryByText(/concurrent paths in this rule/)).not.toBeInTheDocument();
 });
 
+it("does not warn for nested signal access", () => {
+  const rule = countBranchDocumentForEditor().rules[0];
+  const condition: AutomationNode = {
+    type: "on_signal",
+    signal: "S1",
+    operator: "eq",
+    value: 1,
+    children: [{ type: "set_signal", signal: "S1", value: 0, children: [] }],
+  };
+  const warnings = sharedTargetWarnings({
+    version: 4,
+    signals: ["S1"],
+    rules: [{ ...rule, root: { ...rule.root, children: [condition] } }],
+  });
+
+  expect(warnings).toEqual([]);
+});
+
+it("warns for concurrent signal access", () => {
+  const rule = countBranchDocumentForEditor().rules[0];
+  const warnings = sharedTargetWarnings({
+    version: 4,
+    signals: ["S1"],
+    rules: [{
+      ...rule,
+      root: {
+        ...rule.root,
+        children: [
+          {
+            type: "on_signal",
+            signal: "S1",
+            operator: "eq",
+            value: 1,
+            children: [{ type: "set_signal", signal: "S1", value: 0, children: [] }],
+          },
+          { type: "set_signal", signal: "S1", value: 2, children: [] },
+        ],
+      },
+    }],
+  });
+
+  expect(warnings.map((warning) => warning.message)).toContain(
+    "Signal S1 is changed by concurrent paths in this rule.",
+  );
+});
+
+it.each([
+  [
+    "write/write",
+    { type: "set_signal", signal: "S1", value: 1, children: [] } as AutomationNode,
+  ],
+  [
+    "read/write",
+    {
+      type: "on_signal",
+      signal: "S1",
+      operator: "eq",
+      value: 1,
+      children: [{ type: "set_train_speed", speed: 50, children: [] }],
+    } as AutomationNode,
+  ],
+])("warns for cross-rule signal %s access", (_case, firstNode) => {
+  const base = countBranchDocumentForEditor().rules[0];
+  const warnings = sharedTargetWarnings({
+    version: 4,
+    signals: ["S1"],
+    rules: [
+      {
+        ...base,
+        id: "express_signal",
+        root: { ...base.root, train_id: "express", children: [firstNode] },
+      },
+      {
+        ...base,
+        id: "freight_signal",
+        root: {
+          ...base.root,
+          train_id: "freight",
+          children: [{ type: "set_signal", signal: "S1", value: 2, children: [] }],
+        },
+      },
+    ],
+  });
+
+  expect(warnings.map((warning) => warning.message)).toContain(
+    "Signal S1 is read or changed by concurrent rules.",
+  );
+});
+
 it("compares either count branch with a concurrent outside path", () => {
   const document = countBranchDocumentForEditor();
   const rule = document.rules[0];
@@ -279,13 +425,13 @@ it("compares either count branch with a concurrent outside path", () => {
   ).toBeVisible();
 });
 
-it("keeps version 2 after the last count branch is removed", () => {
+it("keeps version 4 after the last count branch is removed", () => {
   const getDocument = renderEditor();
   fireEvent.click(screen.getByRole("button", { name: "Create automation for yard / D1" }));
   fireEvent.click(screen.getByRole("button", { name: "Add count branch step" }));
   fireEvent.click(screen.getByRole("button", { name: "Remove Count branch step 1" }));
 
-  expect(getDocument()).toMatchObject({ version: 2, rules: [{ root: { children: [] } }] });
+  expect(getDocument()).toMatchObject({ version: 4, signals: [], rules: [{ root: { children: [] } }] });
 });
 
 it("accepts any wait duration allowed by the automation contract", () => {
@@ -461,7 +607,8 @@ it("offers one always-on rule per train", () => {
 
 it("keeps a dormant legacy rule untouched when creating a new rule", () => {
   const getDocument = renderEditor({
-    version: 1,
+    version: 4,
+    signals: [],
     rules: [
       {
         id: "old_rule",
@@ -484,7 +631,8 @@ it("keeps a dormant legacy rule untouched when creating a new rule", () => {
 
 it("shows topology errors without exposing expert JSON controls", () => {
   const getDocument = renderEditor({
-    version: 1,
+    version: 4,
+    signals: [],
     rules: [
       {
         id: "removed_switch",
@@ -527,7 +675,8 @@ it("shows topology errors without exposing expert JSON controls", () => {
 it("distinguishes switches with the same id on different hubs", () => {
   renderEditor(
     {
-      version: 1,
+      version: 4,
+      signals: [],
       rules: [
         {
           id: "shared_switch_ids",
@@ -573,7 +722,8 @@ it("distinguishes switches with the same id on different hubs", () => {
 
 function countBranchDocumentForEditor(): AutomationDocument {
   return {
-    version: 3,
+    version: 4,
+    signals: [],
     rules: [
       {
         id: "exclusive_speed",

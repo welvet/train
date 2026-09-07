@@ -52,7 +52,7 @@ def _write_workspace(root: Path) -> None:
         }
     }))
     (root / "automations.json").write_text(
-        json.dumps({"version": 1, "rules": []})
+        json.dumps({"version": 4, "signals": [], "rules": []})
     )
     (root / "deployment.json").write_text(json.dumps({
         "ftp": {

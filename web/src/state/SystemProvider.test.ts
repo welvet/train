@@ -27,7 +27,7 @@ function stateEnvelope(revision: number, snapshotAt: number): StateEnvelope {
     version: 4,
     snapshot_at: snapshotAt,
     automation: {
-      document: { version: 1, rules: [] },
+      document: { version: 4, signals: [], rules: [] },
       eligible_train_ids: [],
       paused: false,
       statuses: [],
