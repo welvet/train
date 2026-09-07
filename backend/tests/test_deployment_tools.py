@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import ftplib
 import io
 import json
 import sys
 import tarfile
-import urllib.error
 import zipfile
 from pathlib import Path
 
@@ -18,9 +18,12 @@ from _deployment import (
     DeploymentConfig,
     RuntimeTarget,
     build_bundle,
+    prepare_supervisor,
+    pull_configuration,
     publish_bundle,
-    synchronize_configuration,
+    push_configuration,
 )
+from _workspace import WorkspaceError
 
 
 def _runtime_target() -> RuntimeTarget:
@@ -73,7 +76,7 @@ def _write_workspace(root: Path) -> None:
     }))
 
 
-def test_bundle_contains_wheel_and_runtime_data_only(
+def test_bundle_contains_code_without_configuration(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     workspace = tmp_path / "data"
@@ -136,19 +139,10 @@ def test_bundle_contains_wheel_and_runtime_data_only(
             "manifest.json",
             "wheels/train-0.1.0-py3-none-any.whl",
             "wheels/aiohttp-3.14.3-py3-none-any.whl",
-            "data/backend.json",
-            "data/trains.json",
-            "data/arduinos.json",
-            "data/automations.json",
-            "data/automation.py",
         }
         manifest = json.load(archive.extractfile("manifest.json"))
     assert set(manifest["files"]) == names - {"manifest.json"}
     assert manifest["runtime"] == target.as_dict()
-    with tarfile.open(bundle, "r:gz") as archive:
-        legacy_automation = archive.extractfile("data/automation.py")
-        assert legacy_automation is not None
-        assert legacy_automation.read() == b""
     assert commands[:2] == [["npm", "ci"], ["npm", "run", "build"]]
     with tarfile.open(bundle, "r:gz") as archive:
         backend_wheel = archive.extractfile("wheels/train-0.1.0-py3-none-any.whl")
@@ -165,8 +159,9 @@ def test_bundle_contains_wheel_and_runtime_data_only(
 
 
 class FakeFtp:
-    def __init__(self) -> None:
+    def __init__(self, files: dict[str, bytes] | None = None) -> None:
         self.operations: list[tuple] = []
+        self.files = files or {}
 
     def connect(self, *args, **kwargs) -> None:
         self.operations.append(("connect", *args))
@@ -183,22 +178,30 @@ class FakeFtp:
     def storbinary(self, command: str, source: io.BufferedIOBase) -> None:
         self.operations.append(("store", command, source.read()))
 
+    def retrbinary(self, command: str, callback) -> None:
+        self.operations.append(("retrieve", command))
+        name = command.removeprefix("RETR ")
+        try:
+            contents = self.files[name]
+        except KeyError as exc:
+            raise ftplib.error_perm("550 missing") from exc
+        callback(contents)
+
+    def nlst(self) -> list[str]:
+        self.operations.append(("list",))
+        return list(self.files)
+
     def rename(self, source: str, destination: str) -> None:
         self.operations.append(("rename", source, destination))
 
     def delete(self, path: str) -> None:
         self.operations.append(("delete", path))
 
+    def rmd(self, path: str) -> None:
+        self.operations.append(("rmd", path))
+
     def quit(self) -> None:
         self.operations.append(("quit",))
-
-
-class FakeHttpResponse(io.BytesIO):
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *args) -> None:
-        self.close()
 
 
 def _deployment_config() -> DeploymentConfig:
@@ -213,303 +216,244 @@ def _deployment_config() -> DeploymentConfig:
     )
 
 
-def _configuration_snapshot(modified_at: float, train_id: str) -> dict:
-    return {
-        "version": 1,
-        "documents": {
-            "trains": {
-                "modified_at": modified_at,
-                "restart_required": True,
-                "value": {
-                    "trains": [
-                        {
-                            "id": train_id,
-                            "lego_hub_id": train_id,
-                            "ble_address": "AA:BB",
-                            "tag_ids": [],
-                        }
-                    ]
-                },
-            }
-        },
-    }
-
-
-def test_configuration_sync_downloads_newer_backend_document(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_pull_configuration_replaces_all_persistent_files(tmp_path: Path) -> None:
     workspace = tmp_path / "data"
     workspace.mkdir()
     _write_workspace(workspace)
-    trains = workspace / "trains.json"
-    trains.write_text(json.dumps({
-        "trains": [
-            {
-                "id": "local",
-                "lego_hub_id": "local",
-                "ble_address": "CC:DD",
-                "tag_ids": [],
-            }
-        ]
-    }))
-    trains.touch()
-    local_modified_at = trains.stat().st_mtime
-    remote = _configuration_snapshot(local_modified_at + 10, "remote")
-    monkeypatch.setattr(
-        _deployment.urllib.request,
-        "urlopen",
-        lambda request, timeout: FakeHttpResponse(json.dumps(remote).encode()),
+    local_secrets = (workspace / "secrets.json").read_bytes()
+    remote_workspace = tmp_path / "remote"
+    remote_workspace.mkdir()
+    _write_workspace(remote_workspace)
+    (remote_workspace / "secrets.json").write_text('{"remote": "ignored"}')
+    remote_trains = json.loads((remote_workspace / "trains.json").read_text())
+    remote_trains["trains"][0]["id"] = "server_train"
+    remote_trains["trains"][0]["lego_hub_id"] = "server_train"
+    (remote_workspace / "trains.json").write_text(json.dumps(remote_trains))
+    files = {
+        name: (remote_workspace / name).read_bytes()
+        for name in _deployment.PERSISTENT_CONFIGURATION_FILES
+    }
+    ftp = FakeFtp(files)
+
+    pull_configuration(
+        _deployment_config(), workspace, ftp_factory=lambda: ftp
     )
 
-    result = synchronize_configuration(_deployment_config(), workspace)
+    assert {
+        name: (workspace / name).read_bytes()
+        for name in _deployment.PERSISTENT_CONFIGURATION_FILES
+    } == files
+    assert (workspace / "secrets.json").read_bytes() == local_secrets
+    assert [
+        operation[1] for operation in ftp.operations if operation[0] == "retrieve"
+    ] == [
+        f"RETR {name}"
+        for _ in range(2)
+        for name in _deployment.PERSISTENT_CONFIGURATION_FILES
+    ]
 
-    assert result == {"trains": "downloaded", "arduinos": "unavailable"}
-    assert json.loads(trains.read_text()) == remote["documents"]["trains"]["value"]
-    assert trains.stat().st_mtime == pytest.approx(local_modified_at + 10)
 
-
-def test_configuration_sync_uploads_newer_local_document(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_pull_configuration_does_not_replace_any_file_when_validation_fails(
+    tmp_path: Path,
 ) -> None:
     workspace = tmp_path / "data"
     workspace.mkdir()
     _write_workspace(workspace)
-    trains = workspace / "trains.json"
-    local_modified_at = trains.stat().st_mtime
-    remote = _configuration_snapshot(local_modified_at - 10, "remote")
-    requests: list[object] = []
-
-    def urlopen(request, timeout):
-        requests.append(request)
-        if request.get_method() == "GET":
-            return FakeHttpResponse(json.dumps(remote).encode())
-        return FakeHttpResponse(json.dumps(
-            _configuration_snapshot(local_modified_at, "train_1")
-        ).encode())
-
-    monkeypatch.setattr(_deployment.urllib.request, "urlopen", urlopen)
-
-    result = synchronize_configuration(_deployment_config(), workspace)
-
-    assert result == {"trains": "uploaded", "arduinos": "unavailable"}
-    assert [request.get_method() for request in requests] == ["GET", "PUT", "GET"]
-    payload = json.loads(requests[1].data)
-    assert payload["documents"]["trains"]["base_modified_at"] == pytest.approx(
-        local_modified_at - 10
-    )
-    assert payload["documents"]["trains"]["value"] == {
-        "trains": [{"id": "train_1", "ble_address": "AA:BB", "tag_ids": []}]
+    before = {
+        name: (workspace / name).read_bytes()
+        for name in _deployment.PERSISTENT_CONFIGURATION_FILES
     }
-    assert json.loads(trains.read_text()) == (
-        _configuration_snapshot(local_modified_at, "train_1")["documents"]
-        ["trains"]["value"]
-    )
+    files = dict(before)
+    files["trains.json"] = b"not-json"
+
+    with pytest.raises(WorkspaceError, match="invalid JSON"):
+        pull_configuration(
+            _deployment_config(),
+            workspace,
+            ftp_factory=lambda: FakeFtp(files),
+        )
+
+    assert {
+        name: (workspace / name).read_bytes()
+        for name in _deployment.PERSISTENT_CONFIGURATION_FILES
+    } == before
 
 
-def test_configuration_sync_retries_when_local_file_changes_during_fetch(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_pull_configuration_does_not_require_remote_device_secrets(
+    tmp_path: Path,
 ) -> None:
     workspace = tmp_path / "data"
     workspace.mkdir()
     _write_workspace(workspace)
-    trains = workspace / "trains.json"
-    initial_modified_at = trains.stat().st_mtime
-    remote = _configuration_snapshot(initial_modified_at + 10, "remote")
-    newest = _configuration_snapshot(initial_modified_at + 20, "newest")
-    get_count = 0
-
-    def urlopen(request, timeout):
-        nonlocal get_count
-        if request.get_method() == "GET":
-            get_count += 1
-            if get_count == 1:
-                _deployment._atomic_write_json(
-                    trains,
-                    newest["documents"]["trains"]["value"],
-                    initial_modified_at + 20,
-                )
-            return FakeHttpResponse(json.dumps(remote).encode())
-        return FakeHttpResponse(json.dumps(newest).encode())
-
-    monkeypatch.setattr(_deployment.urllib.request, "urlopen", urlopen)
-
-    result = synchronize_configuration(_deployment_config(), workspace)
-
-    assert result == {"trains": "uploaded", "arduinos": "unavailable"}
-    assert get_count == 3
-    assert json.loads(trains.read_text()) == newest["documents"]["trains"]["value"]
-
-
-def test_configuration_sync_ignores_timestamp_when_contents_match(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    workspace = tmp_path / "data"
-    workspace.mkdir()
-    _write_workspace(workspace)
-    trains = workspace / "trains.json"
-    local = json.loads(trains.read_text())
-    remote = {
-        "version": 1,
-        "documents": {
-            "trains": {
-                "modified_at": trains.stat().st_mtime + 10,
-                "restart_required": True,
-                "value": local,
-            }
-        },
-    }
-    monkeypatch.setattr(
-        _deployment.urllib.request,
-        "urlopen",
-        lambda request, timeout: FakeHttpResponse(json.dumps(remote).encode()),
-    )
-
-    assert synchronize_configuration(_deployment_config(), workspace) == {
-        "trains": "unchanged",
-        "arduinos": "unavailable",
-    }
-
-
-def test_configuration_sync_uploads_arduinos_independently(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    workspace = tmp_path / "data"
-    workspace.mkdir()
-    _write_workspace(workspace)
-    trains = json.loads((workspace / "trains.json").read_text())
     arduinos = json.loads((workspace / "arduinos.json").read_text())
-    trains_modified_at = (workspace / "trains.json").stat().st_mtime
-    arduinos_modified_at = (workspace / "arduinos.json").stat().st_mtime
+    arduinos["devices"]["arduino_2"] = {
+        **arduinos["devices"]["arduino_1"],
+        "hub_id": "hub_2",
+    }
     remote = {
-        "version": 1,
-        "documents": {
-            "trains": {
-                "modified_at": trains_modified_at,
-                "restart_required": True,
-                "value": trains,
-            },
-            "arduinos": {
-                "modified_at": arduinos_modified_at - 10,
-                "restart_required": True,
-                "value": {"devices": {"remote": {}}},
-            },
-        },
+        name: (workspace / name).read_bytes()
+        for name in _deployment.PERSISTENT_CONFIGURATION_FILES
     }
-    requests: list[object] = []
+    remote["arduinos.json"] = json.dumps(arduinos).encode()
 
-    def urlopen(request, timeout):
-        requests.append(request)
-        if request.get_method() == "GET":
-            return FakeHttpResponse(json.dumps(remote).encode())
-        uploaded = json.loads(request.data)
-        response = {
-            "version": 1,
-            "documents": {
-                "arduinos": {
-                    "modified_at": arduinos_modified_at,
-                    "restart_required": True,
-                    "value": uploaded["documents"]["arduinos"]["value"],
-                }
-            },
-        }
-        return FakeHttpResponse(json.dumps(response).encode())
+    pull_configuration(
+        _deployment_config(),
+        workspace,
+        ftp_factory=lambda: FakeFtp(remote),
+    )
 
-    monkeypatch.setattr(_deployment.urllib.request, "urlopen", urlopen)
+    assert json.loads((workspace / "arduinos.json").read_text()) == arduinos
 
-    assert synchronize_configuration(_deployment_config(), workspace) == {
-        "trains": "unchanged",
-        "arduinos": "uploaded",
+
+def test_pull_configuration_rolls_back_a_partial_local_replace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "data"
+    workspace.mkdir()
+    _write_workspace(workspace)
+    before = {
+        name: (workspace / name).read_bytes()
+        for name in _deployment.PERSISTENT_CONFIGURATION_FILES
     }
-    put_request = next(
-        request for request in requests if request.get_method() == "PUT"
-    )
-    payload = json.loads(put_request.data)
-    assert set(payload["documents"]) == {"arduinos"}
-    assert payload["documents"]["arduinos"]["value"] == arduinos
+    remote = {name: value + b"\n" for name, value in before.items()}
+    replace = _deployment.os.replace
+    failed = False
+
+    def fail_once(source, destination) -> None:
+        nonlocal failed
+        if (
+            str(source).endswith(".pulling")
+            and Path(destination).name == "trains.json"
+            and not failed
+        ):
+            failed = True
+            raise OSError("disk full")
+        replace(source, destination)
+
+    monkeypatch.setattr(_deployment.os, "replace", fail_once)
+
+    with pytest.raises(OSError, match="disk full"):
+        pull_configuration(
+            _deployment_config(),
+            workspace,
+            ftp_factory=lambda: FakeFtp(remote),
+        )
+
+    assert {
+        name: (workspace / name).read_bytes()
+        for name in _deployment.PERSISTENT_CONFIGURATION_FILES
+    } == before
 
 
-@pytest.mark.parametrize("modified_at", [0, float("nan"), float("inf")])
-def test_configuration_sync_rejects_invalid_backend_timestamp(
+def test_push_configuration_replaces_all_persistent_files_only(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    modified_at: float,
 ) -> None:
     workspace = tmp_path / "data"
     workspace.mkdir()
     _write_workspace(workspace)
-    remote = _configuration_snapshot(modified_at, "remote")
-    monkeypatch.setattr(
-        _deployment.urllib.request,
-        "urlopen",
-        lambda request, timeout: FakeHttpResponse(json.dumps(remote).encode()),
+    ftp = FakeFtp()
+
+    push_configuration(
+        _deployment_config(), workspace, ftp_factory=lambda: ftp
     )
 
-    with pytest.raises(RuntimeError, match="invalid trains configuration"):
-        synchronize_configuration(_deployment_config(), workspace)
+    stores = [operation for operation in ftp.operations if operation[0] == "store"]
+    assert len(stores) == len(_deployment.PERSISTENT_CONFIGURATION_FILES)
+    for name in _deployment.PERSISTENT_CONFIGURATION_FILES:
+        store = next(operation for operation in stores if name in operation[1])
+        assert store[2] == (workspace / name).read_bytes()
+    assert any(
+        operation[0] == "rename" and operation[2] == "data"
+        for operation in ftp.operations
+    )
+    assert all(
+        "secrets.json" not in operation[1] and "deployment.json" not in operation[1]
+        for operation in stores
+    )
 
 
-def test_configuration_sync_rejects_malformed_success_response(
+def test_push_configuration_restores_previous_folder_when_switch_fails(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    class FailedSwitchFtp(FakeFtp):
+        def rename(self, source: str, destination: str) -> None:
+            super().rename(source, destination)
+            if source.endswith(".uploading") and destination == "data":
+                raise ftplib.error_temp("temporary failure")
+
     workspace = tmp_path / "data"
     workspace.mkdir()
     _write_workspace(workspace)
-    monkeypatch.setattr(
-        _deployment.urllib.request,
-        "urlopen",
-        lambda request, timeout: FakeHttpResponse(b"not-json"),
-    )
+    ftp = FailedSwitchFtp()
 
-    with pytest.raises(RuntimeError, match="backend returned invalid JSON"):
-        synchronize_configuration(_deployment_config(), workspace)
+    with pytest.raises(RuntimeError, match="Could not push"):
+        push_configuration(
+            _deployment_config(), workspace, ftp_factory=lambda: ftp
+        )
+
+    renames = [operation for operation in ftp.operations if operation[0] == "rename"]
+    assert renames[-1][2] == "data"
+    assert renames[-1][1].endswith(".previous")
 
 
-def test_arduino_bootstrap_rejects_non_pr32_document_shape(
+def test_push_configuration_reports_incomplete_remote_rollback(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    workspace = tmp_path / "data"
-    workspace.mkdir()
-    _write_workspace(workspace)
-    trains = json.loads((workspace / "trains.json").read_text())
-    modified_at = (workspace / "trains.json").stat().st_mtime
-    response = {
-        "version": 1,
-        "documents": {
-            "trains": {
-                "modified_at": modified_at,
-                "restart_required": True,
-                "value": trains,
-            },
-            "unexpected": {},
-        },
-    }
-    monkeypatch.setattr(
-        _deployment.urllib.request,
-        "urlopen",
-        lambda request, timeout: FakeHttpResponse(json.dumps(response).encode()),
-    )
+    class FailedRollbackFtp(FakeFtp):
+        def rename(self, source: str, destination: str) -> None:
+            super().rename(source, destination)
+            if destination == "data":
+                raise ftplib.error_temp("temporary failure")
 
-    with pytest.raises(RuntimeError, match="unsupported configuration format"):
-        synchronize_configuration(_deployment_config(), workspace)
-
-
-def test_configuration_sync_fails_when_backend_is_unreachable(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
     workspace = tmp_path / "data"
     workspace.mkdir()
     _write_workspace(workspace)
 
-    def fail(request, timeout):
-        raise urllib.error.URLError("offline")
+    with pytest.raises(RuntimeError, match="could not be restored"):
+        push_configuration(
+            _deployment_config(),
+            workspace,
+            ftp_factory=FailedRollbackFtp,
+        )
 
-    monkeypatch.setattr(_deployment.urllib.request, "urlopen", fail)
 
-    with pytest.raises(RuntimeError, match="backend is unreachable"):
-        synchronize_configuration(_deployment_config(), workspace)
+def test_push_configuration_validates_before_connecting(tmp_path: Path) -> None:
+    workspace = tmp_path / "data"
+    workspace.mkdir()
+    _write_workspace(workspace)
+    (workspace / "trains.json").write_text("not-json")
+    connected = False
+
+    def ftp_factory() -> FakeFtp:
+        nonlocal connected
+        connected = True
+        return FakeFtp()
+
+    with pytest.raises(WorkspaceError, match="invalid JSON"):
+        push_configuration(
+            _deployment_config(), workspace, ftp_factory=ftp_factory
+        )
+
+    assert connected is False
+
+
+def test_push_configuration_does_not_require_device_secrets(tmp_path: Path) -> None:
+    workspace = tmp_path / "data"
+    workspace.mkdir()
+    _write_workspace(workspace)
+    secrets = json.loads((workspace / "secrets.json").read_text())
+    secrets["devices"] = {}
+    (workspace / "secrets.json").write_text(json.dumps(secrets))
+    ftp = FakeFtp()
+
+    push_configuration(
+        _deployment_config(), workspace, ftp_factory=lambda: ftp
+    )
+
+    assert len([
+        operation for operation in ftp.operations if operation[0] == "store"
+    ]) == len(_deployment.PERSISTENT_CONFIGURATION_FILES)
 
 
 def test_publish_updates_release_pointer_last(tmp_path: Path) -> None:
@@ -538,17 +482,86 @@ def test_publish_updates_release_pointer_last(tmp_path: Path) -> None:
     assert ftp.operations.index(archive_delete) < ftp.operations.index(
         ("rename", f"{archive_name}.{attempt}.uploading", archive_name)
     )
-    assert (
-        "rename",
-        f"server-loop.{attempt}.uploading",
-        "server-loop",
-    ) in renames
     pointer = next(
         operation[2]
         for operation in ftp.operations
         if operation[:2] == ("store", f"STOR release.{attempt}.json.uploading")
     )
     assert json.loads(pointer) == {"release": digest, "attempt": attempt}
+
+
+def test_prepare_supervisor_requires_running_current_protocol() -> None:
+    ftp = FakeFtp()
+
+    with pytest.raises(RuntimeError, match="Restart server-loop"):
+        prepare_supervisor(_deployment_config(), ftp_factory=lambda: ftp)
+
+    assert any(
+        operation[0] == "rename" and operation[2] == "server-loop"
+        for operation in ftp.operations
+    )
+
+
+def test_prepare_supervisor_accepts_running_current_protocol() -> None:
+    ftp = FakeFtp({
+        "supervisor.json": json.dumps({
+            "protocol": _deployment.SUPERVISOR_PROTOCOL
+        }).encode()
+    })
+
+    prepare_supervisor(_deployment_config(), ftp_factory=lambda: ftp)
+
+
+def test_prepare_supervisor_does_not_downgrade_newer_protocol() -> None:
+    ftp = FakeFtp({
+        "supervisor.json": json.dumps({
+            "protocol": _deployment.SUPERVISOR_PROTOCOL + 1,
+            "capabilities": ["future"],
+        }).encode()
+    })
+
+    prepare_supervisor(_deployment_config(), ftp_factory=lambda: ftp)
+
+    assert not any(operation[0] == "store" for operation in ftp.operations)
+
+
+@pytest.mark.parametrize(
+    "state",
+    [b"not-json", b"[]", b'{"protocol": true}', b'{"protocol": 0}'],
+)
+def test_prepare_supervisor_does_not_overwrite_invalid_state(state: bytes) -> None:
+    ftp = FakeFtp({"supervisor.json": state})
+
+    with pytest.raises(RuntimeError, match="invalid state"):
+        prepare_supervisor(_deployment_config(), ftp_factory=lambda: ftp)
+
+    assert not any(operation[0] == "store" for operation in ftp.operations)
+
+
+def test_prepare_supervisor_does_not_overwrite_after_read_failure() -> None:
+    class ReadFailureFtp(FakeFtp):
+        def retrbinary(self, command: str, callback) -> None:
+            raise ftplib.error_temp("temporary failure")
+
+    ftp = ReadFailureFtp({"supervisor.json": b"unreadable"})
+
+    with pytest.raises(RuntimeError, match="Could not inspect"):
+        prepare_supervisor(_deployment_config(), ftp_factory=lambda: ftp)
+
+    assert not any(operation[0] == "store" for operation in ftp.operations)
+
+
+def test_prepare_supervisor_does_not_treat_permission_denied_as_missing() -> None:
+    class PermissionDeniedFtp(FakeFtp):
+        def retrbinary(self, command: str, callback) -> None:
+            raise ftplib.error_perm("550 Permission denied")
+
+    ftp = PermissionDeniedFtp({"supervisor.json": b"unreadable"})
+
+    with pytest.raises(RuntimeError, match="Could not inspect"):
+        prepare_supervisor(_deployment_config(), ftp_factory=lambda: ftp)
+
+    assert not any(operation[0] == "store" for operation in ftp.operations)
 
 
 def test_pip_target_args_support_a_different_macos_version() -> None:
