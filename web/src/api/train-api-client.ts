@@ -12,6 +12,8 @@ export type ArduinoDeviceConfiguration = components["schemas"]["ArduinoDeviceCon
 export type ArduinoReaderConfiguration = components["schemas"]["ArduinoReaderConfiguration"];
 export type ArduinoSwitchConfiguration = components["schemas"]["ArduinoSwitchConfiguration"];
 export type ArduinosConfiguration = components["schemas"]["ArduinosConfiguration"];
+export type BleDevice = components["schemas"]["BleDevice"];
+export type BleScanResponse = components["schemas"]["BleScanResponse"];
 type TrainsConfigurationUpdate = components["schemas"]["TrainsConfigurationUpdate"];
 type ArduinosConfigurationUpdate = components["schemas"]["ArduinosConfigurationUpdate"];
 
@@ -120,6 +122,24 @@ export class TrainApiClient {
     if (!isConfigurationSnapshot(body)) {
       throw new ApiRequestError(
         "The backend returned an unsupported configuration format",
+        0,
+      );
+    }
+    return body;
+  }
+
+  async scanBleDevices(): Promise<BleScanResponse> {
+    const response = await fetch(this.url("/api/ble/scan"), {
+      method: "POST",
+      headers: { Accept: "application/json" },
+    });
+    if (!response.ok) {
+      throw await this.errorFrom(response);
+    }
+    const body: unknown = await response.json();
+    if (!isBleScanResponse(body)) {
+      throw new ApiRequestError(
+        "The backend returned an unsupported BLE scan result",
         0,
       );
     }
@@ -347,6 +367,19 @@ function isConfigurationSnapshot(
   }
   return Object.entries(arduinos.value.devices).every(([deviceId, device]) =>
     isRuntimeId(deviceId) && isArduinoDevice(device),
+  );
+}
+
+function isBleScanResponse(value: unknown): value is BleScanResponse {
+  return (
+    isRecord(value) &&
+    Array.isArray(value.devices) &&
+    value.devices.every(
+      (device) =>
+        isRecord(device) &&
+        isNonEmptyString(device.address) &&
+        (device.name === null || typeof device.name === "string"),
+    )
   );
 }
 

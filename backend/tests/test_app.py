@@ -6,6 +6,8 @@ from train.core.app import App
 from train.core.event_bus import EventBus
 from train.core.module import Module
 from train.domain import Event, SystemShutdown, SystemStarted
+from train.modules.lego_ble import LegoBleModule
+from train.modules.web_api import WebApiModule
 
 
 class RecorderModule(Module):
@@ -119,3 +121,35 @@ async def test_shutdown_continues_after_module_stop_failure() -> None:
 
     assert stopped == ["second", "first"]
     assert app.bus.state.running is False
+
+
+async def test_app_shutdown_cancels_active_ble_scan_before_web_drain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scan_started = asyncio.Event()
+
+    async def scan() -> list[dict[str, object]]:
+        scan_started.set()
+        await asyncio.Event().wait()
+        return []
+
+    monkeypatch.setattr("train.modules.lego_ble.scan_lego_hubs", scan)
+    app = App()
+    lego = app.add_module(LegoBleModule, train_map={})
+    app.add_module(
+        WebApiModule,
+        host="127.0.0.1",
+        port=0,
+        ble_scan=lego.scan,
+        ble_scan_cancel=lego.cancel_scan,
+    )
+    app_task = asyncio.create_task(app.run())
+    await asyncio.sleep(0.05)
+    scan_task = asyncio.create_task(lego.scan())
+    await scan_started.wait()
+
+    app.request_shutdown()
+    await asyncio.wait_for(app_task, timeout=1)
+
+    with pytest.raises(asyncio.CancelledError):
+        await scan_task

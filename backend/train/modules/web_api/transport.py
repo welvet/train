@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import time
 from collections.abc import Awaitable, Callable
@@ -15,6 +16,7 @@ from automation_tree import (
     CURRENT_AUTOMATION_DOCUMENT_VERSION,
 )
 
+from train.ble_scan import BleScanUnavailable
 from train.configuration import ConfigurationConflict, ConfigurationError
 from train.core.event_bus import CommandFailed, CommandResourceNotFound, EventBus
 from train.domain import (
@@ -31,6 +33,7 @@ COMMAND_TIMEOUT = 3.0
 STREAM_KEEPALIVE_INTERVAL = 15.0
 CONFIGURATION_RESTART_DELAY = 0.25
 CONFIGURATION_RESTART_HEADER = "X-Train-Restart-After-Save"
+LOG = logging.getLogger(__name__)
 
 
 class WebApiServer:
@@ -48,6 +51,8 @@ class WebApiServer:
         configuration_snapshot: Callable[[], dict[str, object]] | None = None,
         configuration_update: Callable[[str], Awaitable[dict[str, object]]] | None = None,
         configuration_restart: Callable[[], None] | None = None,
+        ble_scan: Callable[[], Awaitable[list[dict[str, object]]]] | None = None,
+        ble_scan_cancel: Callable[[], Awaitable[None]] | None = None,
         static_root: Path | None = None,
     ) -> None:
         self._bus = bus
@@ -61,6 +66,8 @@ class WebApiServer:
         self._configuration_snapshot = configuration_snapshot
         self._configuration_update = configuration_update
         self._configuration_restart = configuration_restart
+        self._ble_scan = ble_scan
+        self._ble_scan_cancel = ble_scan_cancel
         self._static_files = StaticFileResolver(
             static_root if static_root is not None else PACKAGED_STATIC_ROOT
         )
@@ -86,6 +93,7 @@ class WebApiServer:
         app.router.add_put("/api/automation", self._handle_automation_update)
         app.router.add_get("/api/configuration", self._handle_configuration)
         app.router.add_put("/api/configuration", self._handle_configuration_update)
+        app.router.add_post("/api/ble/scan", self._handle_ble_scan)
         app.router.add_get("/{path:.*}", self._static_files.handle)
         self._app = app
         self._runner = web.AppRunner(app)
@@ -116,6 +124,8 @@ class WebApiServer:
 
     async def stop(self) -> None:
         self._closing.set()
+        if self._ble_scan_cancel is not None:
+            await self._ble_scan_cancel()
         async with self._state_changed:
             self._state_changed.notify_all()
         if self._subscribed:
@@ -316,6 +326,23 @@ class WebApiServer:
                 self._configuration_restart,
             )
         return response
+
+    async def _handle_ble_scan(self, request: web.Request) -> web.Response:
+        if self._ble_scan is None or self._closing.is_set():
+            return web.json_response(
+                {"error": "BLE scanning is unavailable"}, status=503
+            )
+
+        try:
+            devices = await self._ble_scan()
+        except BleScanUnavailable as exc:
+            return web.json_response({"error": str(exc)}, status=409)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            LOG.exception("BLE scan failed")
+            return web.json_response({"error": "BLE scan failed"}, status=503)
+        return web.json_response({"devices": devices})
 
 
 def _empty_automation_snapshot() -> dict[str, object]:

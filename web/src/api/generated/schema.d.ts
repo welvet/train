@@ -20,6 +20,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/ble/scan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["scanBleDevices"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/configuration": {
         parameters: {
             query?: never;
@@ -177,6 +193,13 @@ export interface components {
         };
         AutomationUpdateResponse: {
             automation: components["schemas"]["AutomationSnapshot"];
+        };
+        BleDevice: {
+            address: string;
+            name: string | null;
+        };
+        BleScanResponse: {
+            devices: components["schemas"]["BleDevice"][];
         };
         CommandResponse: {
             command: {
@@ -340,6 +363,44 @@ export interface operations {
                 };
             };
             /** @description Automation runtime unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+        };
+    };
+    scanBleDevices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Nearby LEGO Powered Up BLE hubs */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BleScanResponse"];
+                };
+            };
+            /** @description BLE adapter is in use */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description BLE scanning unavailable or failed */
             503: {
                 headers: {
                     [name: string]: unknown;

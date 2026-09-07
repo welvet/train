@@ -9,6 +9,7 @@ from aiohttp import ClientResponse
 from aiohttp.test_utils import TestClient, TestServer
 
 from automation_tree import AutomationParseError
+from train.ble_scan import BleScanUnavailable
 import train.modules.web_api.transport as web_transport
 from train.core.event_bus import EventBus
 from train.configuration import ConfigurationConflict, ConfigurationError
@@ -127,7 +128,82 @@ async def test_openapi_exposes_state_and_public_event_contract(
         "/api/events",
         "/api/automation",
         "/api/configuration",
+        "/api/ble/scan",
     }
+
+
+async def test_ble_scan_endpoint_returns_discovered_hubs(bus: EventBus) -> None:
+    async def scan() -> list[dict[str, object]]:
+        return [{"address": "AA:BB", "name": "Express"}]
+
+    module = WebApiModule(
+        bus,
+        host="127.0.0.1",
+        port=0,
+        ble_scan=scan,
+    )
+    await module.start()
+    assert module._app is not None
+    client = TestClient(TestServer(module._app))
+    await client.start_server()
+    try:
+        response = await client.post("/api/ble/scan")
+        assert response.status == 200
+        assert await response.json() == {
+            "devices": [{"address": "AA:BB", "name": "Express"}]
+        }
+    finally:
+        await client.close()
+        await module.stop()
+
+
+async def test_ble_scan_endpoint_reports_unavailable_and_failed(
+    bus: EventBus,
+) -> None:
+    async def fail() -> list[dict[str, object]]:
+        raise RuntimeError("private adapter detail")
+
+    for scan, expected_error in (
+        (None, "BLE scanning is unavailable"),
+        (fail, "BLE scan failed"),
+    ):
+        module = WebApiModule(
+            bus,
+            host="127.0.0.1",
+            port=0,
+            ble_scan=scan,
+        )
+        await module.start()
+        assert module._app is not None
+        client = TestClient(TestServer(module._app))
+        await client.start_server()
+        try:
+            response = await client.post("/api/ble/scan")
+            assert response.status == 503
+            assert await response.json() == {"error": expected_error}
+        finally:
+            await client.close()
+            await module.stop()
+
+
+async def test_ble_scan_endpoint_reports_adapter_conflict(bus: EventBus) -> None:
+    async def scan() -> list[dict[str, object]]:
+        raise BleScanUnavailable("Power down connected hubs before scanning")
+
+    module = WebApiModule(bus, host="127.0.0.1", port=0, ble_scan=scan)
+    await module.start()
+    assert module._app is not None
+    client = TestClient(TestServer(module._app))
+    await client.start_server()
+    try:
+        response = await client.post("/api/ble/scan")
+        assert response.status == 409
+        assert await response.json() == {
+            "error": "Power down connected hubs before scanning"
+        }
+    finally:
+        await client.close()
+        await module.stop()
 
 
 async def test_configuration_endpoint_reads_and_replaces_document(
