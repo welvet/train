@@ -9,8 +9,8 @@ from pathlib import Path
 from _deployment import (
     build_bundle,
     load_deployment,
+    prepare_supervisor,
     publish_bundle,
-    synchronize_configuration,
     wait_until_active,
 )
 from _workspace import WorkspaceError, data_dir
@@ -18,7 +18,7 @@ from _workspace import WorkspaceError, data_dir
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Build and deploy the backend plus local runtime data over FTP"
+        description="Build and deploy the backend release over FTP"
     )
     parser.add_argument(
         "--no-wait", action="store_true", help="Do not wait for server activation"
@@ -27,15 +27,7 @@ def main() -> None:
     workspace = data_dir()
     try:
         config = load_deployment(workspace)
-        sync_results = synchronize_configuration(config, workspace)
-        messages = {
-            "downloaded": "Fetched newer {name} configuration from the backend.",
-            "uploaded": "Uploaded newer local {name} configuration to the backend.",
-            "unchanged": "{title} configuration is already synchronized.",
-            "unavailable": "Backend does not expose {name}; using local {name}.json for bootstrap.",
-        }
-        for name, result in sync_results.items():
-            print(messages[result].format(name=name, title=name.title()))
+        prepare_supervisor(config)
         with tempfile.TemporaryDirectory(prefix="train-release-") as directory:
             bundle = Path(directory) / "backend.tar.gz"
             print("Building backend release...")

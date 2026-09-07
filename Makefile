@@ -1,16 +1,24 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help server-push arduino-list arduino-compile arduino-upload _require-device
+.PHONY: help server-push pull-conf push-conf arduino-list arduino-compile arduino-upload _require-device
 
 help:
 	@printf '%s\n' \
 		'make server-push [SERVER_PUSH_ARGS=--no-wait]' \
+		'make pull-conf' \
+		'make push-conf' \
 		'make arduino-list' \
 		'make arduino-compile DEVICE=<device-id>' \
 		'make arduino-upload DEVICE=<device-id>'
 
 server-push:
 	./tools/server-push $(SERVER_PUSH_ARGS)
+
+pull-conf:
+	./tools/conf pull
+
+push-conf:
+	./tools/conf push
 
 arduino-list:
 	./tools/arduino list

@@ -73,11 +73,15 @@ def arduino_secrets(device_id: str, root: Path | None = None) -> dict[str, str]:
 
 def validate_workspace(root: Path | None = None) -> None:
     workspace = root or data_dir()
-    runtime = _validate_runtime_config(workspace)
+    runtime = validate_runtime_configuration(workspace)
     for device in runtime.arduinos:
         arduino_secrets(device.device_id, workspace)
 
-    validate_automation(workspace, runtime)
+
+def validate_runtime_configuration(root: Path):
+    runtime = _validate_runtime_config(root)
+    validate_automation(root, runtime)
+    return runtime
 
 
 def validate_automation(root: Path, runtime=None) -> None:

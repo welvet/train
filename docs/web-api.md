@@ -90,8 +90,9 @@ hardware acknowledgements, are internal-only and are rejected by this endpoint.
 The web client marks its `PUT /api/configuration` with
 `X-Train-Restart-After-Save: true`; after a successful marked request, the backend
 sends the saved snapshot and exits cleanly so the external `server-loop` restarts
-it with the new values. Unmarked updates, including deployment synchronization,
-persist without interrupting the backend.
+it with the new values. Unmarked API updates persist without interrupting the
+backend. Deployment never invokes this API or transfers configuration unless
+the operator explicitly runs `make pull-conf` or `make push-conf`.
 
 ## Generated contract
 
