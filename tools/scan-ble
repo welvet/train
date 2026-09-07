@@ -2,21 +2,21 @@
 """Scan for nearby LEGO Powered Up BLE hubs."""
 
 import asyncio
+import sys
+from pathlib import Path
 
-from bleak import BleakScanner
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT / "backend"))
 
-LEGO_HUB_SERVICE = "00001623-1212-efde-1623-785feabcd123"
+from train.ble_scan import BLE_SCAN_TIMEOUT, scan_lego_hubs
 
 
 async def scan() -> None:
-    print("Scanning for LEGO hubs (10s)...")
-    results = await BleakScanner.discover(timeout=10.0, return_adv=True)
-    found = False
-    for device, advertisement in results.values():
-        if LEGO_HUB_SERVICE in advertisement.service_uuids:
-            print(f"  {device.address}  {device.name or '(unnamed)'}")
-            found = True
-    if not found:
+    print(f"Scanning for LEGO hubs ({BLE_SCAN_TIMEOUT:g}s)...")
+    hubs = await scan_lego_hubs()
+    for hub in hubs:
+        print(f"  {hub['address']}  {hub['name'] or '(unnamed)'}")
+    if not hubs:
         print("No LEGO hubs found. Make sure the hub is on (LED blinking).")
 
 

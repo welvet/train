@@ -107,6 +107,94 @@ it("keeps an edited train ID input focused", async () => {
   expect(input).toHaveFocus();
 });
 
+it("scans from the backend and shows nearby LEGO hubs", async () => {
+  const fetchMock = vi.fn().mockImplementation(
+    (input: RequestInfo | URL) => Promise.resolve(
+      new Response(
+        JSON.stringify(
+          input.toString() === "/api/ble/scan"
+            ? {
+                devices: [
+                  { address: "AA:BB", name: "Express" },
+                  { address: "CC:DD", name: null },
+                ],
+              }
+            : configurationSnapshot(),
+        ),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    ),
+  );
+  vi.stubGlobal("fetch", fetchMock);
+  renderPage();
+
+  await screen.findByDisplayValue("express");
+  fireEvent.click(screen.getByRole("button", { name: "Scan for LEGO hubs" }));
+
+  expect(await screen.findByText("Express")).toBeInTheDocument();
+  expect(screen.getByText("AA:BB")).toBeInTheDocument();
+  expect(screen.getByText("Unnamed LEGO hub")).toBeInTheDocument();
+  expect(screen.getByText("CC:DD")).toBeInTheDocument();
+  expect(
+    screen.getByRole("list", { name: "Discovered LEGO hubs" }),
+  ).toBeInTheDocument();
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/ble/scan",
+    expect.objectContaining({ method: "POST" }),
+  );
+});
+
+it("shows an actionable empty scan result", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockImplementation((input: RequestInfo | URL) => Promise.resolve(
+      new Response(
+        JSON.stringify(
+          input.toString() === "/api/ble/scan"
+            ? { devices: [] }
+            : configurationSnapshot(),
+        ),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    )),
+  );
+  renderPage();
+
+  await screen.findByDisplayValue("express");
+  fireEvent.click(screen.getByRole("button", { name: "Scan for LEGO hubs" }));
+
+  expect(await screen.findByRole("status")).toHaveTextContent(
+    "Make sure the hub is on and its LED is blinking, then scan again.",
+  );
+});
+
+it("shows backend BLE scan errors", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockImplementation((input: RequestInfo | URL) => Promise.resolve(
+      new Response(
+        JSON.stringify(
+          input.toString() === "/api/ble/scan"
+            ? { error: "Disconnect connected train hubs before scanning" }
+            : configurationSnapshot(),
+        ),
+        {
+          status: input.toString() === "/api/ble/scan" ? 409 : 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    )),
+  );
+  renderPage();
+
+  await screen.findByDisplayValue("express");
+  fireEvent.click(screen.getByRole("button", { name: "Scan for LEGO hubs" }));
+
+  expect(
+    await screen.findByText("Disconnect connected train hubs before scanning"),
+  ).toBeInTheDocument();
+});
+
 it("keeps the original revision when a dirty draft outlives a refresh", async () => {
   const initial = configurationSnapshot();
   const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(

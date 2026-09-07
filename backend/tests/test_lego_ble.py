@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
+from train.ble_scan import BleScanUnavailable
 from train.core.event_bus import EventBus
 from train.domain import (
     Event,
@@ -67,6 +68,166 @@ def _collect_events(bus: EventBus) -> list[Event]:
 
     bus.subscribe(Event, handler)
     return received
+
+
+async def test_scan_coalesces_callers(
+    bus: EventBus,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls = 0
+
+    async def scan() -> list[dict[str, object]]:
+        nonlocal calls
+        calls += 1
+        started.set()
+        await release.wait()
+        return [{"address": "AA:BB", "name": "Express"}]
+
+    monkeypatch.setattr("train.modules.lego_ble.scan_lego_hubs", scan)
+    mod = LegoBleModule(bus, train_map={})
+
+    first = asyncio.create_task(mod.scan())
+    await started.wait()
+    second = asyncio.create_task(mod.scan())
+    release.set()
+
+    assert await asyncio.gather(first, second) == [
+        [{"address": "AA:BB", "name": "Express"}],
+        [{"address": "AA:BB", "name": "Express"}],
+    ]
+    assert calls == 1
+    await mod.stop()
+
+
+async def test_cancelled_caller_does_not_cancel_shared_scan(
+    bus: EventBus,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def scan() -> list[dict[str, object]]:
+        started.set()
+        await release.wait()
+        return [{"address": "AA:BB", "name": "Express"}]
+
+    monkeypatch.setattr("train.modules.lego_ble.scan_lego_hubs", scan)
+    mod = LegoBleModule(bus, train_map={})
+    cancelled_caller = asyncio.create_task(mod.scan())
+    await started.wait()
+
+    cancelled_caller.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await cancelled_caller
+
+    remaining_caller = asyncio.create_task(mod.scan())
+    release.set()
+    assert await remaining_caller == [{"address": "AA:BB", "name": "Express"}]
+    assert mod._scan_task is None
+    await mod.stop()
+
+
+async def test_scan_refuses_to_overlap_connected_hub(
+    bus: EventBus,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    called = False
+
+    async def discover() -> list[dict[str, object]]:
+        nonlocal called
+        called = True
+        return []
+
+    monkeypatch.setattr("train.modules.lego_ble.scan_lego_hubs", discover)
+    mod = LegoBleModule(bus, train_map={})
+    mod._clients["express"] = FakeBleakClient("AA:BB")  # type: ignore[assignment]
+
+    with pytest.raises(BleScanUnavailable, match="power down connected train hubs"):
+        await mod.scan()
+
+    assert not called
+    await mod.stop()
+
+
+@patch(PATCH_TARGET, FakeBleakClient)
+async def test_connection_waits_for_active_scan(
+    bus: EventBus,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def scan() -> list[dict[str, object]]:
+        started.set()
+        await release.wait()
+        return []
+
+    monkeypatch.setattr("train.modules.lego_ble.scan_lego_hubs", scan)
+    mod = LegoBleModule(bus, train_map={"AA:BB": "express"})
+    scan_task = asyncio.create_task(mod.scan())
+    await started.wait()
+
+    await mod.start()
+    await asyncio.sleep(0.01)
+    assert mod._clients == {}
+
+    release.set()
+    await scan_task
+    await asyncio.sleep(0.05)
+    assert "express" in mod._clients
+    await mod.stop()
+
+
+async def test_connection_attempts_remain_parallel(bus: EventBus) -> None:
+    both_connecting = asyncio.Event()
+    release = asyncio.Event()
+    active = 0
+
+    class BlockingBleakClient(FakeBleakClient):
+        async def connect(self) -> None:
+            nonlocal active
+            active += 1
+            if active == 2:
+                both_connecting.set()
+            await release.wait()
+            self.is_connected = True
+
+    with patch(PATCH_TARGET, BlockingBleakClient):
+        mod = LegoBleModule(
+            bus,
+            train_map={"AA:BB": "express", "CC:DD": "cargo"},
+        )
+        await mod.start()
+        await asyncio.wait_for(both_connecting.wait(), timeout=1)
+        release.set()
+        await asyncio.sleep(0.05)
+
+        assert set(mod._clients) == {"express", "cargo"}
+        await mod.stop()
+
+
+async def test_stop_cancels_active_scan(
+    bus: EventBus,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = asyncio.Event()
+
+    async def scan() -> list[dict[str, object]]:
+        started.set()
+        await asyncio.Event().wait()
+        return []
+
+    monkeypatch.setattr("train.modules.lego_ble.scan_lego_hubs", scan)
+    mod = LegoBleModule(bus, train_map={})
+    scan_task = asyncio.create_task(mod.scan())
+    await started.wait()
+
+    await mod.stop()
+
+    with pytest.raises(asyncio.CancelledError):
+        await scan_task
 
 
 @patch(PATCH_TARGET, FakeBleakClient)

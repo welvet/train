@@ -67,6 +67,12 @@ written to `trains.json`. After a successful API save, the backend exits cleanly
 so `server-loop` restarts it with the new topology; restart it manually after a
 direct file edit.
 
+The Configuration page can scan for nearby LEGO Powered Up hubs through
+`POST /api/ble/scan` on the backend host and displays each advertised name and
+BLE address. Connected configured hubs must be disconnected or powered down
+before scanning so the backend does not overlap adapter discovery with an
+active train connection.
+
 ### `arduinos.json`
 
 Defines any number of named Arduino devices. Each device may have multiple

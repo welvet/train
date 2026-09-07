@@ -41,3 +41,16 @@ def test_configuration_contract_supports_optional_arduino_snapshot_and_xor_updat
         ["arduinos"],
     ]
     assert all(option["additionalProperties"] is False for option in update_documents["oneOf"])
+
+
+def test_ble_scan_contract_exposes_devices() -> None:
+    document = openapi_document()
+    operation = document["paths"]["/api/ble/scan"]["post"]
+    assert operation["operationId"] == "scanBleDevices"
+    assert operation["responses"]["200"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/BleScanResponse"
+    }
+    assert document["components"]["schemas"]["BleDevice"]["required"] == [
+        "address",
+        "name",
+    ]

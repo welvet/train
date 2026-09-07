@@ -85,7 +85,7 @@ def main() -> None:
             )
             return await automation_module.replace_json(text)
 
-    app.add_module(
+    lego_ble_module = app.add_module(
         LegoBleModule,
         train_map=config.train_map,
     )
@@ -108,6 +108,8 @@ def main() -> None:
         configuration_snapshot=configuration.snapshot,
         configuration_update=update_configuration,
         configuration_restart=app.request_shutdown,
+        ble_scan=lego_ble_module.scan,
+        ble_scan_cancel=lego_ble_module.cancel_scan,
     )
     asyncio.run(app.run())
 

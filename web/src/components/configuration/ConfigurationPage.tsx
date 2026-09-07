@@ -24,6 +24,7 @@ import {
   TrainApiClient,
 } from "@/src/api/train-api-client";
 import { ArduinoConfigurationSection } from "./ArduinoConfigurationSection";
+import { BleScanner } from "./BleScanner";
 
 const CONFIGURATION_QUERY_KEY = ["configuration"] as const;
 
@@ -138,6 +139,8 @@ export function ConfigurationPage() {
           {errorMessage(saveMutation.error)}
         </Alert>
       )}
+
+      <BleScanner />
 
       <Group justify="space-between">
         <div>

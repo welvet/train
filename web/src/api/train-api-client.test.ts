@@ -66,6 +66,43 @@ describe("TrainApiClient", () => {
     );
   });
 
+  it("scans for BLE devices through the backend", async () => {
+    const scan = {
+      devices: [{ address: "AA:BB", name: "Express" }],
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify(scan), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+
+    await expect(new TrainApiClient().scanBleDevices()).resolves.toEqual(scan);
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/ble/scan",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("rejects malformed BLE scan responses", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ devices: [{ address: "", name: 42 }] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+
+    await expect(new TrainApiClient().scanBleDevices()).rejects.toMatchObject({
+      message: "The backend returned an unsupported BLE scan result",
+    });
+  });
+
   it("accepts a trains-only v1 snapshot during backend rollback", async () => {
     const configuration = configurationSnapshot();
     delete configuration.documents.arduinos;

@@ -273,6 +273,26 @@ def openapi_document() -> dict[str, object]:
         "required": ["version", "documents"],
         "additionalProperties": False,
     }
+    schemas["BleDevice"] = {
+        "type": "object",
+        "properties": {
+            "address": {"type": "string", "minLength": 1},
+            "name": {"type": ["string", "null"]},
+        },
+        "required": ["address", "name"],
+        "additionalProperties": False,
+    }
+    schemas["BleScanResponse"] = {
+        "type": "object",
+        "properties": {
+            "devices": {
+                "type": "array",
+                "items": {"$ref": "#/components/schemas/BleDevice"},
+            }
+        },
+        "required": ["devices"],
+        "additionalProperties": False,
+    }
 
     public_event_refs: list[dict[str, str]] = []
     for spec in PUBLIC_EVENTS:
@@ -471,6 +491,25 @@ def openapi_document() -> dict[str, object]:
                         "503": _error_response("Configuration management unavailable"),
                     },
                 },
+            },
+            "/api/ble/scan": {
+                "post": {
+                    "operationId": "scanBleDevices",
+                    "responses": {
+                        "200": {
+                            "description": "Nearby LEGO Powered Up BLE hubs",
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "$ref": "#/components/schemas/BleScanResponse"
+                                    }
+                                }
+                            },
+                        },
+                        "409": _error_response("BLE adapter is in use"),
+                        "503": _error_response("BLE scanning unavailable or failed"),
+                    },
+                }
             },
         },
         "components": {"schemas": schemas},

@@ -25,6 +25,8 @@ class WebApiModule(Module):
         configuration_snapshot: Callable[[], dict[str, object]] | None = None,
         configuration_update: Callable[[str], Awaitable[dict[str, object]]] | None = None,
         configuration_restart: Callable[[], None] | None = None,
+        ble_scan: Callable[[], Awaitable[list[dict[str, object]]]] | None = None,
+        ble_scan_cancel: Callable[[], Awaitable[None]] | None = None,
         static_root: Path | None = None,
     ) -> None:
         super().__init__(bus)
@@ -40,6 +42,8 @@ class WebApiModule(Module):
             configuration_snapshot=configuration_snapshot,
             configuration_update=configuration_update,
             configuration_restart=configuration_restart,
+            ble_scan=ble_scan,
+            ble_scan_cancel=ble_scan_cancel,
             static_root=static_root,
         )
 

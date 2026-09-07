@@ -352,6 +352,41 @@
         ],
         "type": "object"
       },
+      "BleDevice": {
+        "additionalProperties": false,
+        "properties": {
+          "address": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "address",
+          "name"
+        ],
+        "type": "object"
+      },
+      "BleScanResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "devices": {
+            "items": {
+              "$ref": "#/components/schemas/BleDevice"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "devices"
+        ],
+        "type": "object"
+      },
       "CommandResponse": {
         "additionalProperties": false,
         "properties": {
@@ -873,6 +908,43 @@
               }
             },
             "description": "Automation runtime unavailable"
+          }
+        }
+      }
+    },
+    "/api/ble/scan": {
+      "post": {
+        "operationId": "scanBleDevices",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BleScanResponse"
+                }
+              }
+            },
+            "description": "Nearby LEGO Powered Up BLE hubs"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "BLE adapter is in use"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "BLE scanning unavailable or failed"
           }
         }
       }
