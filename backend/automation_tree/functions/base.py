@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Protocol, TypeVar
@@ -41,6 +41,16 @@ class FunctionContext(Protocol):
 
     def next_count(self, path: tuple[int, ...]) -> int: ...
 
+    def get_signal(self, name: str) -> int: ...
+
+    def set_signal(self, name: str, value: int) -> None: ...
+
+    async def wait_for_signal(
+        self,
+        name: str,
+        predicate: Callable[[int], bool],
+    ) -> None: ...
+
 
 class NodeFunction(ABC):
     """A parseable and executable automation node type.
@@ -54,6 +64,7 @@ class NodeFunction(ABC):
     type: str
     children_policy: ChildrenPolicy
     fields: frozenset[str]
+    signal_fields: frozenset[str] = frozenset()
     allowed_parent_types: frozenset[str] | None = None
     minimum_document_version: int = 1
 

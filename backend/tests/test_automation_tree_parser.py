@@ -11,19 +11,26 @@ from automation_tree import (
     DuplicateFunctionError,
     FunctionRegistry,
     IfCountFunction,
+    IfSignalFunction,
     OnCountFunction,
+    OnSignalFunction,
+    SetSignalFunction,
     SetSwitchFunction,
     SetTrainSpeedFunction,
     WaitFunction,
+    WhenSignalIsFunction,
 )
 from automation_tree.functions import (
     ChildrenPolicy,
     BranchConfig,
     FunctionContext,
     IfCountConfig,
+    IfSignalConfig,
     NodeDecision,
     NodeFunction,
     OnCountConfig,
+    SetSignalConfig,
+    SignalCondition,
     SetSwitchConfig,
     SetTrainSpeedConfig,
     WaitConfig,
@@ -51,14 +58,22 @@ def parser() -> AutomationParser:
         WaitFunction(),
         BranchFunction(),
         IfCountFunction(),
+        IfSignalFunction(),
         OnCountFunction(),
+        OnSignalFunction(),
+        SetSignalFunction(),
         SetTrainSpeedFunction(_set_speed),
         SetSwitchFunction(_set_switch),
+        WhenSignalIsFunction(),
     ]))
 
 
-def _document(*rules: object, version: int = 1) -> dict[str, object]:
-    return {"version": version, "rules": list(rules)}
+def _document(
+    *rules: object,
+    version: int = 4,
+    signals: tuple[str, ...] = (),
+) -> dict[str, object]:
+    return {"version": version, "signals": list(signals), "rules": list(rules)}
 
 
 def _rule(
@@ -110,7 +125,7 @@ def test_parses_complete_nested_document(parser: AutomationParser) -> None:
         },
     )))
 
-    assert parsed.version == 1
+    assert parsed.version == 4
     assert parsed.rules[0].trigger.train_id == "red_train"
     switch, wait = parsed.rules[0].children
     assert isinstance(switch.config, SetSwitchConfig)
@@ -126,22 +141,22 @@ def test_parse_json_reports_syntax_location(parser: AutomationParser) -> None:
         AutomationParseError,
         match=r"^\$: invalid JSON at line 1, column",
     ):
-        parser.parse_json('{"version": 1,}')
+        parser.parse_json('{"version": 4,}')
 
 
 @pytest.mark.parametrize(
     ("text", "message"),
     [
         (
-            '{"version":1,"version":1,"rules":[]}',
+            '{"version":4,"version":4,"signals":[],"rules":[]}',
             "duplicate field in JSON object: version",
         ),
         (
-            '{"version":1,"rules":[],"value":NaN}',
+            '{"version":4,"signals":[],"rules":[],"value":NaN}',
             "non-standard numeric constant: NaN",
         ),
         (
-            '{"version":1,"rules":[],"value":Infinity}',
+            '{"version":4,"signals":[],"rules":[],"value":Infinity}',
             "non-standard numeric constant: Infinity",
         ),
     ],
@@ -158,11 +173,12 @@ def test_parse_json_rejects_non_standard_json(
 @pytest.mark.parametrize(
     ("document", "message"),
     [
-        ({"version": 1}, r"\$: missing required field: rules"),
-        ({"version": 1, "rules": [], "extra": True}, r"\$.extra: unknown"),
-        ({"version": True, "rules": []}, r"\$.version: must be an integer"),
-        ({"version": 4, "rules": []}, r"unsupported version: 4"),
-        ({"version": 1, "rules": {}}, r"\$.rules: must be an array"),
+        ({"version": 4, "signals": []}, r"\$: missing required field: rules"),
+        ({"version": 4, "signals": [], "rules": [], "extra": True}, r"\$.extra: unknown"),
+        ({"version": True, "signals": [], "rules": []}, r"\$.version: must be an integer"),
+        ({"version": 3, "signals": [], "rules": []}, r"unsupported version: 3"),
+        ({"version": 4, "signals": [], "rules": {}}, r"\$.rules: must be an array"),
+        ({"version": 4, "rules": []}, r"\$: missing required field: signals"),
     ],
 )
 def test_rejects_invalid_document_shape(
@@ -198,6 +214,86 @@ def test_trims_identifiers(parser: AutomationParser) -> None:
         "station",
         "red_train",
     )
+
+
+def test_parses_signal_definitions_and_functions(parser: AutomationParser) -> None:
+    document = parser.parse(_document(
+        _rule(
+            {"type": "set_signal", "signal": " S1 ", "value": 1, "children": []},
+            {
+                "type": "on_signal",
+                "signal": "S1",
+                "operator": "not_eq",
+                "value": 0,
+                "children": [_speed(10)],
+            },
+            {
+                "type": "when_signal_is",
+                "signal": "S1",
+                "operator": "more",
+                "value": -1,
+                "children": [_speed(20)],
+            },
+            {
+                "type": "if_signal",
+                "signal": "S1",
+                "operator": "eq",
+                "value": 1,
+                "children": [
+                    {"type": "branch", "when": "match", "children": [_speed(30)]},
+                    {"type": "branch", "when": "otherwise", "children": [_speed(40)]},
+                ],
+            },
+        ),
+        signals=(" S1 ",),
+    ))
+
+    assert document.signals == ("S1",)
+    set_signal, on_signal, when_signal, if_signal = document.rules[0].children
+    assert isinstance(set_signal.config, SetSignalConfig)
+    assert isinstance(on_signal.config, SignalCondition)
+    assert isinstance(when_signal.config, SignalCondition)
+    assert isinstance(if_signal.config, IfSignalConfig)
+
+
+@pytest.mark.parametrize("signals", [("",), ("S1", " S1 ")])
+def test_rejects_invalid_signal_definitions(
+    parser: AutomationParser,
+    signals: tuple[str, ...],
+) -> None:
+    with pytest.raises(AutomationParseError, match=r"signal|non-empty"):
+        parser.parse(_document(signals=signals))
+
+
+def test_rejects_undeclared_signal_reference(parser: AutomationParser) -> None:
+    node = {"type": "set_signal", "signal": "S1", "value": 1, "children": []}
+    with pytest.raises(AutomationParseError, match=r"unknown signal: S1"):
+        parser.parse(_document(_rule(node)))
+
+
+@pytest.mark.parametrize("value", [-(2**53), 2**53, 1.5, True])
+def test_rejects_signal_values_outside_safe_integer_range(
+    parser: AutomationParser,
+    value: object,
+) -> None:
+    node = {"type": "set_signal", "signal": "S1", "value": value, "children": []}
+    with pytest.raises(AutomationParseError, match=r"\.value: must be an integer"):
+        parser.parse(_document(_rule(node), signals=("S1",)))
+
+
+@pytest.mark.parametrize("operator", ["eq", "not_eq", "less", "more"])
+def test_accepts_every_signal_operator(
+    parser: AutomationParser,
+    operator: str,
+) -> None:
+    node = {
+        "type": "on_signal",
+        "signal": "S1",
+        "operator": operator,
+        "value": 0,
+        "children": [_speed()],
+    }
+    parser.parse(_document(_rule(node), signals=("S1",)))
 
 
 def test_rejects_duplicate_rule_ids(parser: AutomationParser) -> None:
@@ -310,7 +406,7 @@ def test_rejects_removed_count_mode(parser: AutomationParser) -> None:
         parser.parse(_document(_rule(node)))
 
 
-def test_parses_version_2_count_branches(parser: AutomationParser) -> None:
+def test_parses_count_branches(parser: AutomationParser) -> None:
     node = {
         "type": "if_count",
         "count": 5,
@@ -328,30 +424,13 @@ def test_parses_version_2_count_branches(parser: AutomationParser) -> None:
         ],
     }
 
-    document = parser.parse(_document(_rule(node), version=2))
+    document = parser.parse(_document(_rule(node)))
 
     count_node = document.rules[0].children[0]
     assert isinstance(count_node.config, IfCountConfig)
     assert count_node.config.otherwise_index == 0
     assert count_node.config.match_index == 1
     assert all(isinstance(child.config, BranchConfig) for child in count_node.children)
-
-
-def test_rejects_version_2_node_in_version_1(parser: AutomationParser) -> None:
-    node = {
-        "type": "if_count",
-        "count": 5,
-        "children": [
-            {"type": "branch", "when": "match", "children": [_speed()]},
-            {"type": "branch", "when": "otherwise", "children": [_speed()]},
-        ],
-    }
-
-    with pytest.raises(
-        AutomationParseError,
-        match=r"\.type: requires automation document version 2 or later",
-    ):
-        parser.parse(_document(_rule(node)))
 
 
 @pytest.mark.parametrize(
@@ -385,13 +464,13 @@ def test_rejects_invalid_if_count_branches(
 ) -> None:
     node = {"type": "if_count", "count": 5, "children": children}
     with pytest.raises(AutomationParseError, match=message):
-        parser.parse(_document(_rule(node), version=2))
+        parser.parse(_document(_rule(node)))
 
 
-def test_rejects_branch_outside_if_count(parser: AutomationParser) -> None:
+def test_rejects_branch_outside_conditional(parser: AutomationParser) -> None:
     node = {"type": "branch", "when": "match", "children": [_speed()]}
-    with pytest.raises(AutomationParseError, match=r"only allowed under: if_count"):
-        parser.parse(_document(_rule(node), version=2))
+    with pytest.raises(AutomationParseError, match=r"only allowed under: if_count, if_signal"):
+        parser.parse(_document(_rule(node)))
 
 
 @pytest.mark.parametrize("count", [0, -1, True, 1.5])
@@ -405,7 +484,7 @@ def test_rejects_invalid_if_count(parser: AutomationParser, count: object) -> No
         ],
     }
     with pytest.raises(AutomationParseError, match=r"\.count: must be"):
-        parser.parse(_document(_rule(node), version=2))
+        parser.parse(_document(_rule(node)))
 
 
 @pytest.mark.parametrize("speed", [-101, 101, True, 1.5])

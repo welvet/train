@@ -125,7 +125,11 @@ def test_release_without_automations_uses_compatible_empty_default(
         release / "data" / "automations.json", destination
     )
 
-    assert json.loads(destination.read_text()) == {"version": 3, "rules": []}
+    assert json.loads(destination.read_text()) == {
+        "version": 4,
+        "signals": [],
+        "rules": [],
+    }
 
 
 def test_remove_tree_does_not_follow_directory_symlinks(tmp_path: Path) -> None:
@@ -148,8 +152,8 @@ def test_automation_seed_is_persistent_across_releases(tmp_path: Path) -> None:
     first = tmp_path / "first.json"
     second = tmp_path / "second.json"
     destination = tmp_path / "data" / "automations.json"
-    first.write_text('{"version": 1, "rules": []}')
-    second.write_text('{"version": 1, "rules": [{"id": "new"}]}')
+    first.write_text('{"version": 4, "signals": [], "rules": []}')
+    second.write_text('{"version": 4, "signals": [], "rules": [{"id": "new"}]}')
 
     server_loop.ServerLoop._seed_automations(first, destination)
     server_loop.ServerLoop._seed_automations(second, destination)
@@ -195,7 +199,7 @@ def test_failed_automation_seed_does_not_leave_partial_destination(
     server_loop = _load_tool("server-loop")
     source = tmp_path / "source.json"
     destination = tmp_path / "data" / "automations.json"
-    source.write_text('{"version": 1, "rules": []}')
+    source.write_text('{"version": 4, "signals": [], "rules": []}')
 
     def fail_read(path: Path) -> bytes:
         raise OSError("read failed")

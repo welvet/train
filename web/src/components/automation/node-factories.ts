@@ -5,6 +5,7 @@ export type AutomationNodeType = Exclude<AutomationNode["type"], "branch">;
 export function createNode(
   type: AutomationNodeType,
   switches: readonly SwitchOption[],
+  signals: readonly string[],
 ): AutomationNode {
   switch (type) {
     case "set_train_speed":
@@ -35,6 +36,28 @@ export function createNode(
       return {
         type,
         count: 5,
+        children: [
+          { type: "branch", when: "match", children: [] },
+          { type: "branch", when: "otherwise", children: [] },
+        ],
+      };
+    case "set_signal":
+      return { type, signal: signals[0] ?? "", value: 1, children: [] };
+    case "on_signal":
+    case "when_signal_is":
+      return {
+        type,
+        signal: signals[0] ?? "",
+        operator: "eq",
+        value: 1,
+        children: [],
+      };
+    case "if_signal":
+      return {
+        type,
+        signal: signals[0] ?? "",
+        operator: "eq",
+        value: 1,
         children: [
           { type: "branch", when: "match", children: [] },
           { type: "branch", when: "otherwise", children: [] },

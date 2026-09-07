@@ -209,14 +209,16 @@ Stores the versioned configurable automation tree:
 
 ```json
 {
-  "version": 3,
+  "version": 4,
+  "signals": [],
   "rules": []
 }
 ```
 
 The backend validates node structure and all train, hub, detector, and switch
-references at startup. Valid version 1 and 2 documents are upgraded atomically
-to version 3 before activation. The complete document is returned in `GET /api/state`
+references at startup. Version 4 is the only supported format; older documents
+are rejected. Signals are declared by name, start at integer zero on activation,
+and are not persisted as live values. The complete document is returned in `GET /api/state`
 and can be replaced with `PUT /api/automation`. See
 [Configurable automations](docs/configurable-automations.md) for the format and
 runtime semantics.

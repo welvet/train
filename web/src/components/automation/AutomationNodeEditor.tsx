@@ -4,6 +4,8 @@ import { AddStepMenu } from "./AddStepMenu";
 import { createNode, type AutomationNodeType } from "./node-factories";
 import { OnCountEditor } from "./nodes/OnCountEditor";
 import { IfCountEditor } from "./nodes/IfCountEditor";
+import { SignalConditionEditor } from "./nodes/SignalConditionEditor";
+import { SetSignalEditor } from "./nodes/SetSignalEditor";
 import { SetSwitchEditor } from "./nodes/SetSwitchEditor";
 import { SetTrainSpeedEditor } from "./nodes/SetTrainSpeedEditor";
 import { WaitEditor } from "./nodes/WaitEditor";
@@ -17,21 +19,27 @@ const NODE_LABELS: Record<AutomationNode["type"], { emoji: string; label: string
   on_count: { emoji: "🔁", label: "Count" },
   if_count: { emoji: "🔀", label: "Count branch" },
   branch: { emoji: "↪️", label: "Branch" },
+  set_signal: { emoji: "📶", label: "Set signal" },
+  on_signal: { emoji: "✅", label: "Signal" },
+  if_signal: { emoji: "↔️", label: "Signal branch" },
+  when_signal_is: { emoji: "👀", label: "Wait for signal" },
 };
 
 export function AutomationNodeList({
   nodes,
   switches,
+  signals,
   accessibleLabel,
   onChange,
 }: {
   readonly nodes: readonly AutomationNode[];
   readonly switches: readonly SwitchOption[];
+  readonly signals: readonly string[];
   readonly accessibleLabel: string;
   readonly onChange: (nodes: readonly AutomationNode[]) => void;
 }) {
   const add = (type: AutomationNodeType) =>
-    onChange([...nodes, createNode(type, switches)]);
+    onChange([...nodes, createNode(type, switches, signals)]);
 
   return (
     <Stack gap="xs" role="group" aria-label={accessibleLabel}>
@@ -44,6 +52,7 @@ export function AutomationNodeList({
               index={index}
               count={nodes.length}
               switches={switches}
+              signals={signals}
               onChange={(next) =>
                 onChange(nodes.map((item, itemIndex) => (itemIndex === index ? next : item)))
               }
@@ -59,7 +68,11 @@ export function AutomationNodeList({
           ))}
         </ol>
       )}
-      <AddStepMenu onAdd={add} hasSwitches={switches.length > 0} />
+      <AddStepMenu
+        onAdd={add}
+        hasSwitches={switches.length > 0}
+        hasSignals={signals.length > 0}
+      />
     </Stack>
   );
 }
@@ -69,6 +82,7 @@ function AutomationNodeEditor({
   index,
   count,
   switches,
+  signals,
   onChange,
   onRemove,
   onMove,
@@ -77,11 +91,16 @@ function AutomationNodeEditor({
   readonly index: number;
   readonly count: number;
   readonly switches: readonly SwitchOption[];
+  readonly signals: readonly string[];
   readonly onChange: (node: AutomationNode) => void;
   readonly onRemove: () => void;
   readonly onMove: (offset: -1 | 1) => void;
 }) {
-  const hasChildren = node.type === "wait" || node.type === "on_count";
+  const hasChildren =
+    node.type === "wait" ||
+    node.type === "on_count" ||
+    node.type === "on_signal" ||
+    node.type === "when_signal_is";
   const heading = NODE_LABELS[node.type];
 
   return (
@@ -144,6 +163,14 @@ function AutomationNodeEditor({
           {node.type === "wait" && <WaitEditor node={node} onChange={onChange} />}
           {node.type === "on_count" && <OnCountEditor node={node} onChange={onChange} />}
           {node.type === "if_count" && <IfCountEditor node={node} onChange={onChange} />}
+          {node.type === "set_signal" && (
+            <SetSignalEditor node={node} signals={signals} onChange={onChange} />
+          )}
+          {(node.type === "on_signal" ||
+            node.type === "if_signal" ||
+            node.type === "when_signal_is") && (
+            <SignalConditionEditor node={node} signals={signals} onChange={onChange} />
+          )}
 
           {hasChildren && (
             <div className={classes.children}>
@@ -151,12 +178,13 @@ function AutomationNodeEditor({
               <AutomationNodeList
                 nodes={node.children}
                 switches={switches}
+                signals={signals}
                 accessibleLabel={`Steps after ${heading.label} step ${index + 1}`}
                 onChange={(children) => onChange({ ...node, children })}
               />
             </div>
           )}
-          {node.type === "if_count" && (
+          {(node.type === "if_count" || node.type === "if_signal") && (
             <Stack gap="sm" className={classes.branchGroup}>
               {node.children.map((branch, branchIndex) => (
                 <Paper
@@ -168,17 +196,26 @@ function AutomationNodeEditor({
                 >
                   <Stack gap="xs">
                     <Text fw={700} size="sm">
-                      {branch.when === "match"
-                        ? `Every ${node.count}${ordinalSuffix(node.count)} time`
-                        : "All other times"}
+                      {node.type === "if_count"
+                        ? branch.when === "match"
+                          ? `Every ${node.count}${ordinalSuffix(node.count)} time`
+                          : "All other times"
+                        : branch.when === "match"
+                          ? "When matched"
+                          : "Otherwise"}
                     </Text>
                     <AutomationNodeList
                       nodes={branch.children}
                       switches={switches}
+                      signals={signals}
                       accessibleLabel={
-                        branch.when === "match"
-                          ? "Steps every configured count"
-                          : "Steps all other times"
+                        node.type === "if_count"
+                          ? branch.when === "match"
+                            ? "Steps every configured count"
+                            : "Steps all other times"
+                          : branch.when === "match"
+                            ? "Steps when signal matches"
+                            : "Steps when signal does not match"
                       }
                       onChange={(children) => {
                         const branches = [...node.children] as [

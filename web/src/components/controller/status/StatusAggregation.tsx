@@ -6,6 +6,7 @@ import {
   serializeAutomation,
 } from "@/src/components/automation/automation-json";
 import { validateAutomationTopology } from "@/src/components/automation/automation-validation";
+import { SignalDefinitions } from "@/src/components/automation/SignalDefinitions";
 import type {
   AutomationDocument,
   AutomationNode,
@@ -54,7 +55,11 @@ export function StatusAggregation({
     (rule) =>
       !rule.enabled &&
       automationValidationError(
-        { version: automationDocument.version, rules: [rule] },
+        {
+          version: automationDocument.version,
+          signals: automationDocument.signals,
+          rules: [rule],
+        },
         topology,
       ) !== null,
   );
@@ -126,6 +131,12 @@ export function StatusAggregation({
         ))}
       </StatusGroup>
 
+      <SignalDefinitions
+        document={automationDocument}
+        disabled={automationSaving}
+        onChange={setAutomationDocument}
+      />
+
       <Paper
         component="section"
         aria-label="Automation save status"
@@ -188,7 +199,8 @@ export function StatusAggregation({
                   onClick={() => {
                     const invalidRules = new Set(invalidDormantRules);
                     setAutomationDocument({
-                      version: 3,
+                      version: 4,
+                      signals: automationDocument.signals,
                       rules: automationDocument.rules.filter((rule) => !invalidRules.has(rule)),
                     });
                   }}
@@ -214,6 +226,7 @@ function documentForVisibleValidation(
 ): AutomationDocument {
   return {
     version: document.version,
+    signals: document.signals,
     rules: document.rules.map((rule) =>
       rule.enabled
         ? {
@@ -235,14 +248,20 @@ function nodesForVisibleValidation(
     return [{ type: "set_train_speed", speed: 0, children: [] }];
   }
   return nodes.map((node) => {
-    if (node.type === "if_count") {
+    if (node.type === "if_count" || node.type === "if_signal") {
       const children = node.children.map((branch) => ({
         ...branch,
         children: nodesForVisibleValidation(branch.children),
       })) as unknown as typeof node.children;
       return { ...node, children };
     }
-    if (node.type === "wait" || node.type === "on_count" || node.type === "branch") {
+    if (
+      node.type === "wait" ||
+      node.type === "on_count" ||
+      node.type === "on_signal" ||
+      node.type === "when_signal_is" ||
+      node.type === "branch"
+    ) {
       return { ...node, children: nodesForVisibleValidation(node.children) };
     }
     return node;

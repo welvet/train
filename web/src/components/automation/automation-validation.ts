@@ -49,6 +49,9 @@ export function visitAutomationNodes(
       node.type === "wait" ||
       node.type === "on_count" ||
       node.type === "if_count" ||
+      node.type === "on_signal" ||
+      node.type === "if_signal" ||
+      node.type === "when_signal_is" ||
       node.type === "branch"
     ) {
       visitAutomationNodes(node.children, visit);

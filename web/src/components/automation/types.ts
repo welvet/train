@@ -26,6 +26,31 @@ export interface OnCountNode {
   readonly children: readonly AutomationNode[];
 }
 
+export type SignalOperator = "eq" | "not_eq" | "less" | "more";
+
+export interface SetSignalNode {
+  readonly type: "set_signal";
+  readonly signal: string;
+  readonly value: number;
+  readonly children: readonly [];
+}
+
+export interface OnSignalNode {
+  readonly type: "on_signal";
+  readonly signal: string;
+  readonly operator: SignalOperator;
+  readonly value: number;
+  readonly children: readonly AutomationNode[];
+}
+
+export interface WhenSignalIsNode {
+  readonly type: "when_signal_is";
+  readonly signal: string;
+  readonly operator: SignalOperator;
+  readonly value: number;
+  readonly children: readonly AutomationNode[];
+}
+
 export type BranchWhen = "match" | "otherwise";
 
 export interface BranchNode {
@@ -40,12 +65,24 @@ export interface IfCountNode {
   readonly children: readonly [BranchNode, BranchNode];
 }
 
+export interface IfSignalNode {
+  readonly type: "if_signal";
+  readonly signal: string;
+  readonly operator: SignalOperator;
+  readonly value: number;
+  readonly children: readonly [BranchNode, BranchNode];
+}
+
 export type AutomationNode =
   | SetTrainSpeedNode
   | SetSwitchNode
   | WaitNode
   | OnCountNode
+  | SetSignalNode
+  | OnSignalNode
+  | WhenSignalIsNode
   | IfCountNode
+  | IfSignalNode
   | BranchNode;
 
 export interface TrainDetectedNode {
@@ -63,7 +100,8 @@ export interface AutomationRule {
 }
 
 export interface AutomationDocument {
-  readonly version: 1 | 2 | 3;
+  readonly version: 4;
+  readonly signals: readonly string[];
   readonly rules: readonly AutomationRule[];
 }
 

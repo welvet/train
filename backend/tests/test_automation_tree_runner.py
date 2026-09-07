@@ -11,12 +11,16 @@ from automation_tree import (
     BranchFunction,
     FunctionRegistry,
     IfCountFunction,
+    IfSignalFunction,
     OnCountFunction,
+    OnSignalFunction,
     RuleState,
     SetSwitchFunction,
     SetTrainSpeedFunction,
+    SetSignalFunction,
     Trigger,
     WaitFunction,
+    WhenSignalIsFunction,
 )
 from automation_tree.functions import (
     ChildrenPolicy,
@@ -76,10 +80,12 @@ def _document(
     enabled: bool = True,
     rule_id: str = "departure",
     detector_id: str = "station",
-    version: int = 3,
+    version: int = 4,
+    signals: tuple[str, ...] = (),
 ) -> dict[str, object]:
     return {
         "version": version,
+        "signals": list(signals),
         "rules": [{
             "id": rule_id,
             "enabled": enabled,
@@ -133,14 +139,87 @@ def _if_count(
     }
 
 
+def _set_signal(value: int) -> dict[str, object]:
+    return {"type": "set_signal", "signal": "S1", "value": value, "children": []}
+
+
+def _on_signal(
+    operator: str,
+    value: int,
+    *children: object,
+) -> dict[str, object]:
+    return {
+        "type": "on_signal",
+        "signal": "S1",
+        "operator": operator,
+        "value": value,
+        "children": list(children),
+    }
+
+
+def _when_signal_is(value: int, *children: object) -> dict[str, object]:
+    return {
+        "type": "when_signal_is",
+        "signal": "S1",
+        "operator": "eq",
+        "value": value,
+        "children": list(children),
+    }
+
+
+def _if_signal(
+    value: int,
+    *,
+    match: tuple[object, ...],
+    otherwise: tuple[object, ...],
+) -> dict[str, object]:
+    return {
+        "type": "if_signal",
+        "signal": "S1",
+        "operator": "eq",
+        "value": value,
+        "children": [
+            {"type": "branch", "when": "match", "children": list(match)},
+            {
+                "type": "branch",
+                "when": "otherwise",
+                "children": list(otherwise),
+            },
+        ],
+    }
+
+
+def _signal_document(
+    setter_value: int,
+    reader: object,
+) -> dict[str, object]:
+    setter = _document(
+        _set_signal(setter_value),
+        detector_id="setter",
+        rule_id="setter",
+        signals=("S1",),
+    )["rules"][0]
+    reader_rule = _document(
+        reader,
+        detector_id="reader",
+        rule_id="reader",
+        signals=("S1",),
+    )["rules"][0]
+    return {"version": 4, "signals": ["S1"], "rules": [setter, reader_rule]}
+
+
 def _functions(actions: _Actions) -> FunctionRegistry:
     return FunctionRegistry([
         BranchFunction(),
         IfCountFunction(),
+        IfSignalFunction(),
         WaitFunction(),
         OnCountFunction(),
+        OnSignalFunction(),
+        SetSignalFunction(),
         SetTrainSpeedFunction(actions.set_speed),
         SetSwitchFunction(actions.set_switch),
+        WhenSignalIsFunction(),
     ])
 
 
@@ -159,19 +238,28 @@ async def _wait_for_call_count(actions: _Actions, count: int) -> None:
         await asyncio.sleep(0)
 
 
+async def _wait_for_rule_state(
+    runner: AutomationRunner,
+    index: int,
+    state: RuleState,
+) -> None:
+    while runner.statuses()[index].state is not state:
+        await asyncio.sleep(0)
+
+
 @pytest.mark.parametrize("version", [1, 2])
 async def test_runner_rejects_legacy_document_versions(version: int) -> None:
     actions = _Actions()
     runner = AutomationRunner(_functions(actions))
-    document = _parser(actions).parse(_document(_speed(10), version=version))
+    document = replace(_parser(actions).parse(_document(_speed(10))), version=version)
 
     with pytest.raises(
         ValueError,
-        match=f"automation runner requires document version 3, got {version}",
+        match=f"automation runner requires document version 4, got {version}",
     ):
         await runner.replace(document)
 
-    assert runner.document.version == 3
+    assert runner.document.version == 4
     assert await runner.trigger(TRIGGER) is None
 
 
@@ -264,7 +352,7 @@ async def test_different_rules_run_concurrently() -> None:
         _speed(20), rule_id="other", detector_id="yard"
     )["rules"][0]
     runner = AutomationRunner(_functions(actions))
-    await runner.replace(parser.parse({"version": 3, "rules": [first, second]}))
+    await runner.replace(parser.parse({"version": 4, "signals": [], "rules": [first, second]}))
 
     assert await runner.trigger(TRIGGER) == "departure"
     assert await runner.trigger(Trigger("hub", "yard", "red")) == "other"
@@ -354,7 +442,7 @@ async def test_if_count_selects_exactly_one_branch_per_visit() -> None:
     runner = AutomationRunner(_functions(actions))
     await runner.replace(_parser(actions).parse(_document(
         _if_count(5, match=(_speed(50),), otherwise=(_speed(10),)),
-        version=3,
+        version=4,
     )))
 
     for _ in range(10):
@@ -376,7 +464,7 @@ async def test_if_count_branch_starts_selected_children_concurrently() -> None:
             match=(_speed(20), _speed(21)),
             otherwise=(_speed(10), _speed(11)),
         ),
-        version=3,
+        version=4,
     )))
 
     await runner.trigger(TRIGGER)
@@ -394,7 +482,7 @@ async def test_nested_if_count_counts_only_visits_that_reach_it() -> None:
             2,
             _if_count(2, match=(_speed(20),), otherwise=(_speed(10),)),
         ),
-        version=3,
+        version=4,
     )))
 
     for _ in range(4):
@@ -409,7 +497,7 @@ async def test_if_count_consumes_occurrence_when_selected_branch_fails() -> None
     runner = AutomationRunner(_functions(actions))
     document = _parser(actions).parse(_document(
         _if_count(2, match=(_speed(20),), otherwise=(_speed(10),)),
-        version=3,
+        version=4,
     ))
     await runner.replace(document)
 
@@ -425,7 +513,7 @@ async def test_if_count_counter_resets_on_complete_replacement() -> None:
     runner = AutomationRunner(_functions(actions))
     document = _parser(actions).parse(_document(
         _if_count(2, match=(_speed(20),), otherwise=(_speed(10),)),
-        version=3,
+        version=4,
     ))
     await runner.replace(document)
     await _run_once(runner)
@@ -434,6 +522,144 @@ async def test_if_count_counter_resets_on_complete_replacement() -> None:
     await _run_once(runner)
 
     assert [call[-1] for call in actions.calls] == [10, 10]
+
+
+@pytest.mark.parametrize(
+    ("operator", "actual", "expected"),
+    [
+        ("eq", 5, True),
+        ("eq", 4, False),
+        ("not_eq", 4, True),
+        ("not_eq", 5, False),
+        ("less", 4, True),
+        ("less", 5, False),
+        ("more", 6, True),
+        ("more", 5, False),
+    ],
+)
+async def test_signal_comparisons(
+    operator: str,
+    actual: int,
+    expected: bool,
+) -> None:
+    actions = _Actions()
+    parser = _parser(actions)
+    runner = AutomationRunner(_functions(actions))
+    await runner.replace(parser.parse(
+        _signal_document(actual, _on_signal(operator, 5, _speed(50)))
+    ))
+
+    await runner.trigger(Trigger("hub", "setter", "red"))
+    await runner.wait_idle()
+    await runner.trigger(Trigger("hub", "reader", "red"))
+    await runner.wait_idle()
+
+    assert [call[-1] for call in actions.calls] == ([50] if expected else [])
+
+
+async def test_signal_starts_at_zero_and_resets_on_replacement() -> None:
+    actions = _Actions()
+    parser = _parser(actions)
+    document = parser.parse(_signal_document(1, _on_signal("eq", 0, _speed(50))))
+    runner = AutomationRunner(_functions(actions))
+    await runner.replace(document)
+
+    await runner.trigger(Trigger("hub", "reader", "red"))
+    await runner.wait_idle()
+    await runner.trigger(Trigger("hub", "setter", "red"))
+    await runner.wait_idle()
+    await runner.trigger(Trigger("hub", "reader", "red"))
+    await runner.wait_idle()
+    await runner.replace(document)
+    await runner.trigger(Trigger("hub", "reader", "red"))
+    await runner.wait_idle()
+
+    assert [call[-1] for call in actions.calls] == [50, 50]
+
+
+async def test_when_signal_is_waits_then_wakes_without_retrigger() -> None:
+    actions = _Actions()
+    parser = _parser(actions)
+    runner = AutomationRunner(_functions(actions))
+    await runner.replace(parser.parse(
+        _signal_document(1, _when_signal_is(1, _speed(50)))
+    ))
+
+    await runner.trigger(Trigger("hub", "reader", "red"))
+    await _wait_for_rule_state(runner, 1, RuleState.WAITING)
+    assert runner.statuses()[1].state is RuleState.WAITING
+
+    await runner.trigger(Trigger("hub", "setter", "red"))
+    await runner.wait_idle()
+
+    assert [call[-1] for call in actions.calls] == [50]
+    assert runner.statuses()[1].state is RuleState.IDLE
+
+
+async def test_when_signal_is_observes_value_changed_before_node_is_reached() -> None:
+    actions = _Actions()
+    delay_started = asyncio.Event()
+    release_delay = asyncio.Event()
+
+    async def sleep(seconds: float) -> None:
+        assert seconds == 2
+        delay_started.set()
+        await release_delay.wait()
+
+    parser = _parser(actions)
+    runner = AutomationRunner(_functions(actions), sleep=sleep)
+    await runner.replace(parser.parse(
+        _signal_document(1, _wait(2, _when_signal_is(1, _speed(50))))
+    ))
+
+    await runner.trigger(Trigger("hub", "reader", "red"))
+    await asyncio.wait_for(delay_started.wait(), timeout=1)
+    await runner.trigger(Trigger("hub", "setter", "red"))
+    await _wait_for_rule_state(runner, 0, RuleState.IDLE)
+    release_delay.set()
+    await runner.wait_idle()
+
+    assert [call[-1] for call in actions.calls] == [50]
+
+
+async def test_if_signal_executes_exactly_one_current_value_branch() -> None:
+    actions = _Actions()
+    parser = _parser(actions)
+    runner = AutomationRunner(_functions(actions))
+    await runner.replace(parser.parse(_signal_document(
+        1,
+        _if_signal(1, match=(_speed(50),), otherwise=(_speed(0),)),
+    )))
+
+    await runner.trigger(Trigger("hub", "reader", "red"))
+    await runner.wait_idle()
+    await runner.trigger(Trigger("hub", "setter", "red"))
+    await runner.wait_idle()
+    await runner.trigger(Trigger("hub", "reader", "red"))
+    await runner.wait_idle()
+
+    assert [call[-1] for call in actions.calls] == [0, 50]
+
+
+async def test_pause_clears_signal_waiter_without_resurrection() -> None:
+    actions = _Actions()
+    parser = _parser(actions)
+    runner = AutomationRunner(_functions(actions))
+    await runner.replace(parser.parse(
+        _signal_document(1, _when_signal_is(1, _speed(50)))
+    ))
+    await runner.trigger(Trigger("hub", "reader", "red"))
+    await _wait_for_rule_state(runner, 1, RuleState.WAITING)
+
+    await runner.pause()
+    await runner.resume()
+    await runner.trigger(Trigger("hub", "setter", "red"))
+    await runner.wait_idle()
+    assert actions.calls == []
+
+    await runner.trigger(Trigger("hub", "reader", "red"))
+    await runner.wait_idle()
+    assert [call[-1] for call in actions.calls] == [50]
 
 
 async def test_nested_counters_are_private_to_node_paths() -> None:
@@ -568,7 +794,7 @@ async def test_semantically_unchanged_replace_keeps_counters() -> None:
     parser = _parser(actions)
     runner = AutomationRunner(_functions(actions))
     first = parser.parse_json(
-        '{"version":3,"rules":[{"id":"departure","enabled":true,'
+        '{"version":4,"signals":[],"rules":[{"id":"departure","enabled":true,'
         '"root":{"type":"train_detected","hub_id":"hub",'
         '"detector_id":"station","train_id":"red","children":['
         '{"type":"on_count","count":2,"children":['
@@ -641,7 +867,7 @@ async def test_detection_during_replacement_is_dropped_not_queued() -> None:
     assert [call[-1] for call in actions.calls] == [30]
 
 
-async def test_unchanged_active_rule_survives_other_rule_replacement() -> None:
+async def test_replacement_cancels_an_unchanged_active_rule() -> None:
     actions = _Actions()
     actions.block_speed = asyncio.Event()
     parser = _parser(actions)
@@ -650,15 +876,15 @@ async def test_unchanged_active_rule_survives_other_rule_replacement() -> None:
         _speed(20), rule_id="other", detector_id="yard"
     )["rules"][0]
     runner = AutomationRunner(_functions(actions))
-    await runner.replace(parser.parse({"version": 3, "rules": [first, old_second]}))
+    await runner.replace(parser.parse({"version": 4, "signals": [], "rules": [first, old_second]}))
     await runner.trigger(TRIGGER)
     await asyncio.wait_for(actions.speed_started.wait(), timeout=1)
 
     new_second = _document(
         _speed(30), rule_id="other", detector_id="yard"
     )["rules"][0]
-    await runner.replace(parser.parse({"version": 3, "rules": [first, new_second]}))
-    assert runner.statuses()[0].state is RuleState.RUNNING
+    await runner.replace(parser.parse({"version": 4, "signals": [], "rules": [first, new_second]}))
+    assert runner.statuses()[0].state is RuleState.IDLE
     actions.block_speed.set()
     await runner.wait_idle()
 

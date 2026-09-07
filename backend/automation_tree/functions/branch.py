@@ -29,7 +29,7 @@ class BranchFunction(NodeFunction):
     type = "branch"
     children_policy = ChildrenPolicy.REQUIRED
     fields = frozenset({"when"})
-    allowed_parent_types = frozenset({"if_count"})
+    allowed_parent_types = frozenset({"if_count", "if_signal"})
     minimum_document_version = 2
 
     def parse(self, value: Mapping[str, object], path: str) -> BranchConfig:

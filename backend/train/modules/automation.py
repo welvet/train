@@ -7,7 +7,7 @@ import logging
 import os
 import tempfile
 from collections.abc import Callable, Iterable, Mapping, Set
-from dataclasses import asdict, replace
+from dataclasses import asdict
 from pathlib import Path
 
 from automation_tree import (
@@ -19,11 +19,15 @@ from automation_tree import (
     CURRENT_AUTOMATION_DOCUMENT_VERSION,
     FunctionRegistry,
     IfCountFunction,
+    IfSignalFunction,
     OnCountFunction,
+    OnSignalFunction,
+    SetSignalFunction,
     SetSwitchFunction,
     SetTrainSpeedFunction,
     Trigger,
     WaitFunction,
+    WhenSignalIsFunction,
 )
 from automation_tree.functions import (
     FunctionContext,
@@ -80,6 +84,7 @@ class AutomationModule(Module):
         )
         self._document_json: dict[str, object] = {
             "version": CURRENT_AUTOMATION_DOCUMENT_VERSION,
+            "signals": [],
             "rules": [],
         }
         self._replace_lock = asyncio.Lock()
@@ -94,7 +99,7 @@ class AutomationModule(Module):
         if self._terminal_error is not None:
             raise RuntimeError("automation module is terminal") from self._terminal_error
         try:
-            document, document_json, original_json = load_automation_file(
+            document, document_json = load_automation_file(
                 self._path,
                 parser=self._parser,
                 state=self.bus.state,
@@ -107,24 +112,9 @@ class AutomationModule(Module):
         try:
             await self._runner.replace(document)
         except BaseException as activation_error:
-            failure: BaseException = activation_error
-            if original_json != document_json:
-                try:
-                    _persist_with_rollback(
-                        self._path,
-                        original_json,
-                        rollback_document=document_json,
-                    )
-                except BaseException as rollback_error:
-                    failure = _ActivationRollbackError(
-                        "automation startup activation failed and the original "
-                        f"document could not be restored: {rollback_error}"
-                    )
-            self._terminal_error = failure
+            self._terminal_error = activation_error
             await self._runner.close()
-            if failure is activation_error:
-                raise
-            raise failure from activation_error
+            raise
         if self.bus.state.automation.halted:
             await self._runner.pause()
         self.bus.subscribe(TagDetected, self._on_tag_detected)
@@ -217,8 +207,6 @@ class AutomationModule(Module):
         raw_document = json.loads(text)
         if not isinstance(raw_document, dict):
             raise AutomationParseError("$", "must be an object")
-        document, raw_document = _upgrade_document(document, raw_document)
-
         self._replacements_pending += 1
         try:
             update: asyncio.Task[dict[str, object]] = asyncio.create_task(
@@ -382,7 +370,6 @@ def load_automation_file(
 ) -> tuple[
     AutomationDocument,
     dict[str, object],
-    dict[str, object],
 ]:
     try:
         text = path.read_text()
@@ -399,14 +386,7 @@ def load_automation_file(
     raw_document = json.loads(text)
     if not isinstance(raw_document, dict):
         raise AutomationParseError("$", "must be an object")
-    document, upgraded_document = _upgrade_document(document, raw_document)
-    if upgraded_document != raw_document:
-        _persist_with_rollback(
-            path,
-            upgraded_document,
-            rollback_document=raw_document,
-        )
-    return document, upgraded_document, raw_document
+    return document, raw_document
 
 
 def create_automation_parser(
@@ -417,10 +397,14 @@ def create_automation_parser(
     functions = FunctionRegistry([
         BranchFunction(),
         IfCountFunction(),
+        IfSignalFunction(),
         OnCountFunction(),
+        OnSignalFunction(),
+        SetSignalFunction(),
         SetSwitchFunction(set_switch or _unavailable_handler),
         SetTrainSpeedFunction(set_train_speed or _unavailable_handler),
         WaitFunction(),
+        WhenSignalIsFunction(),
     ])
     return AutomationParser(functions), functions
 
@@ -499,20 +483,6 @@ def _stage_document(path: Path, document: Mapping[str, object]) -> Path:
         staged.unlink(missing_ok=True)
         raise
     return staged
-
-
-def _upgrade_document(
-    document: AutomationDocument,
-    raw_document: dict[str, object],
-) -> tuple[AutomationDocument, dict[str, object]]:
-    if document.version == CURRENT_AUTOMATION_DOCUMENT_VERSION:
-        return document, raw_document
-    upgraded = copy.deepcopy(raw_document)
-    upgraded["version"] = CURRENT_AUTOMATION_DOCUMENT_VERSION
-    return replace(
-        document,
-        version=CURRENT_AUTOMATION_DOCUMENT_VERSION,
-    ), upgraded
 
 
 def _persist_with_rollback(

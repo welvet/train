@@ -20,7 +20,7 @@ MAX_TREE_DEPTH = 64
 
 
 class AutomationParser:
-    """Strict parser for version 1, 2, and 3 automation documents."""
+    """Strict parser for version 4 automation documents."""
 
     def __init__(
         self,
@@ -72,13 +72,27 @@ class AutomationParser:
         document = require_mapping(value, "$")
         require_fields(
             document,
-            required={"version", "rules"},
-            allowed={"version", "rules"},
+            required={"version", "signals", "rules"},
+            allowed={"version", "signals", "rules"},
             path="$",
         )
         version = require_int(document["version"], "$.version", minimum=1)
-        if version not in (1, 2, 3):
+        if version != 4:
             raise AutomationParseError("$.version", f"unsupported version: {version}")
+        raw_signals = document["signals"]
+        if not isinstance(raw_signals, list):
+            raise AutomationParseError("$.signals", "must be an array")
+        signals = tuple(
+            require_non_empty_string(signal, f"$.signals[{index}]")
+            for index, signal in enumerate(raw_signals)
+        )
+        seen_signals: set[str] = set()
+        for index, signal in enumerate(signals):
+            if signal in seen_signals:
+                raise AutomationParseError(
+                    f"$.signals[{index}]", f"duplicate signal: {signal}"
+                )
+            seen_signals.add(signal)
         raw_rules = document["rules"]
         if not isinstance(raw_rules, list):
             raise AutomationParseError("$.rules", "must be an array")
@@ -89,11 +103,16 @@ class AutomationParser:
             )
 
         rules = tuple(
-            self._parse_rule(raw_rule, index, document_version=version)
+            self._parse_rule(
+                raw_rule,
+                index,
+                document_version=version,
+                signals=frozenset(signals),
+            )
             for index, raw_rule in enumerate(raw_rules)
         )
         self._validate_unique_rules(rules)
-        return AutomationDocument(version=version, rules=rules)
+        return AutomationDocument(version=version, signals=signals, rules=rules)
 
     def _parse_rule(
         self,
@@ -101,6 +120,7 @@ class AutomationParser:
         index: int,
         *,
         document_version: int,
+        signals: frozenset[str],
     ) -> Rule:
         path = f"$.rules[{index}]"
         rule = require_mapping(value, path)
@@ -116,6 +136,7 @@ class AutomationParser:
             rule["root"],
             f"{path}.root",
             document_version=document_version,
+            signals=signals,
         )
         return Rule(
             id=rule_id,
@@ -130,6 +151,7 @@ class AutomationParser:
         path: str,
         *,
         document_version: int,
+        signals: frozenset[str],
     ) -> tuple[Trigger, tuple[Node, ...]]:
         root = require_mapping(value, path)
         require_fields(
@@ -160,6 +182,7 @@ class AutomationParser:
             node_count,
             document_version=document_version,
             parent_type="train_detected",
+            signals=signals,
         )
         if not children:
             raise AutomationParseError(f"{path}.children", "must not be empty")
@@ -174,6 +197,7 @@ class AutomationParser:
         *,
         document_version: int,
         parent_type: str,
+        signals: frozenset[str],
     ) -> tuple[Node, ...]:
         path = f"{parent_path}.children"
         if not isinstance(value, list):
@@ -186,6 +210,7 @@ class AutomationParser:
                 node_count,
                 document_version=document_version,
                 parent_type=parent_type,
+                signals=signals,
             )
             for index, child in enumerate(value)
         )
@@ -199,6 +224,7 @@ class AutomationParser:
         *,
         document_version: int,
         parent_type: str,
+        signals: frozenset[str],
     ) -> Node:
         if len(node_path) > self._max_tree_depth:
             raise AutomationParseError(
@@ -252,6 +278,13 @@ class AutomationParser:
         if function.children_policy is ChildrenPolicy.FORBIDDEN and raw_children:
             raise AutomationParseError(f"{path}.children", "must be empty")
         config = function.parse(node, path)
+        for field in function.signal_fields:
+            raw_signal = node[field]
+            if isinstance(raw_signal, str) and raw_signal.strip() not in signals:
+                raise AutomationParseError(
+                    f"{path}.{field}",
+                    f"unknown signal: {raw_signal.strip()}",
+                )
         children = self._parse_children(
             raw_children,
             path,
@@ -259,6 +292,7 @@ class AutomationParser:
             node_count,
             document_version=document_version,
             parent_type=raw_type,
+            signals=signals,
         )
         return Node(
             type=raw_type,

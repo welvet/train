@@ -7,9 +7,10 @@ import { StatusAggregation } from "./StatusAggregation";
 
 vi.mock("./rows/TrainRow", () => ({ TrainRow: () => null }));
 
-const emptyDocument: AutomationDocument = { version: 1, rules: [] };
+const emptyDocument: AutomationDocument = { version: 4, signals: [], rules: [] };
 const externalDocument: AutomationDocument = {
-  version: 1,
+  version: 4,
+  signals: [],
   rules: [
     {
       id: "external_rule",
@@ -45,6 +46,67 @@ it("renders the automation status with its save control below the editors", () =
     createAutomation.compareDocumentPosition(saveAutomation) &
       Node.DOCUMENT_POSITION_FOLLOWING,
   ).toBeTruthy();
+});
+
+it("creates and saves a document-level signal", async () => {
+  const onReplaceAutomation = vi.fn(
+    async (document: AutomationDocument) => document,
+  );
+  renderStatus(emptyDocument, onReplaceAutomation);
+
+  fireEvent.click(screen.getByRole("button", { name: "Add signal" }));
+  expect(screen.getByRole("textbox", { name: "Signal name signal_1" })).toHaveValue(
+    "signal_1",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Save automation" }));
+
+  await waitFor(() => expect(onReplaceAutomation).toHaveBeenCalledTimes(1));
+  expect(onReplaceAutomation).toHaveBeenCalledWith({
+    version: 4,
+    signals: ["signal_1"],
+    rules: [],
+  });
+});
+
+it("renames a signal and every nested reference atomically", () => {
+  const document: AutomationDocument = {
+    version: 4,
+    signals: ["S1"],
+    rules: [
+      {
+        id: "signal_rule",
+        enabled: true,
+        root: {
+          type: "train_detected",
+          hub_id: "yard",
+          detector_id: "D1",
+          train_id: "express",
+          children: [
+            {
+              type: "on_signal",
+              signal: "S1",
+              operator: "eq",
+              value: 1,
+              children: [
+                { type: "set_signal", signal: "S1", value: 0, children: [] },
+              ],
+            },
+          ],
+        },
+      },
+    ],
+  };
+  renderStatus(document, vi.fn());
+
+  const name = screen.getByRole("textbox", { name: "Signal name S1" });
+  fireEvent.change(name, { target: { value: "segment_clear" } });
+  fireEvent.blur(name);
+  expect(screen.getByRole("button", { name: "Remove signal segment_clear" })).toBeDisabled();
+  const signalSelectors = screen.getAllByRole("combobox", { name: "Signal" });
+  expect(signalSelectors).toHaveLength(2);
+  expect(signalSelectors[0]).toHaveValue("segment_clear");
+  expect(signalSelectors[1]).toHaveValue("segment_clear");
+  expect(screen.getByRole("button", { name: "Save automation" })).toBeEnabled();
 });
 
 it("does not let a local draft overwrite an external automation update", () => {
@@ -150,12 +212,13 @@ it("keeps both count branches unfinished until each has an action", async () => 
   fireEvent.click(save);
 
   await waitFor(() => expect(onReplaceAutomation).toHaveBeenCalledTimes(1));
-  expect(onReplaceAutomation.mock.calls[0][0].version).toBe(3);
+  expect(onReplaceAutomation.mock.calls[0][0].version).toBe(4);
 });
 
 it("still shows unrelated validation errors on an unfinished rule", () => {
   const document: AutomationDocument = {
-    version: 1,
+    version: 4,
+    signals: [],
     rules: [
       {
         id: "missing_train",
@@ -214,7 +277,7 @@ it("removes only invalid dormant rules from the document-level cleanup", async (
     async (document: AutomationDocument) => document,
   );
   renderStatus(
-    { version: 1, rules: [validDormantRule, invalidDormantRule] },
+    { version: 4, signals: [], rules: [validDormantRule, invalidDormantRule] },
     onReplaceAutomation,
   );
 
@@ -227,7 +290,8 @@ it("removes only invalid dormant rules from the document-level cleanup", async (
 
   await waitFor(() => expect(onReplaceAutomation).toHaveBeenCalledTimes(1));
   expect(onReplaceAutomation).toHaveBeenCalledWith({
-    version: 3,
+    version: 4,
+    signals: [],
     rules: [validDormantRule],
   });
 });

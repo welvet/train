@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
-CURRENT_AUTOMATION_DOCUMENT_VERSION = 3
+CURRENT_AUTOMATION_DOCUMENT_VERSION = 4
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,6 +32,7 @@ class Rule:
 @dataclass(frozen=True, slots=True)
 class AutomationDocument:
     version: int
+    signals: tuple[str, ...]
     rules: tuple[Rule, ...]
 
 

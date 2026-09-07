@@ -16,7 +16,6 @@ import {
 import { AutomationNodeList } from "./AutomationNodeEditor";
 import {
   validateAutomationTopology,
-  visitAutomationNodes,
 } from "./automation-validation";
 import type {
   AutomationDocument,
@@ -55,25 +54,22 @@ export function AutomationEditor({
     (trainId) => !indexedRules.some(({ rule }) => rule.root.train_id === trainId),
   );
   const localValidationError = getValidationError(
-    { version: document.version, rules: indexedRules.map(({ rule }) => rule) },
+    {
+      version: document.version,
+      signals: document.signals,
+      rules: indexedRules.map(({ rule }) => rule),
+    },
     topology,
   );
 
   const setDocument = (next: AutomationDocument) => {
-    onDocumentChange({
-      ...next,
-      version:
-        next.version === 3
-          ? 3
-          : next.version === 2 || containsIfCount(next)
-            ? 2
-            : 1,
-    });
+    onDocumentChange(next);
   };
 
   const replaceRule = (index: number, next: AutomationRule) => {
     setDocument({
       version: document.version,
+      signals: document.signals,
       rules: document.rules.map((rule, itemIndex) =>
         itemIndex === index ? { ...next, enabled: true } : rule,
       ),
@@ -93,7 +89,11 @@ export function AutomationEditor({
         children: [],
       },
     };
-    setDocument({ version: document.version, rules: [...document.rules, next] });
+    setDocument({
+      version: document.version,
+      signals: document.signals,
+      rules: [...document.rules, next],
+    });
   };
 
   const conflicts = sharedTargetWarnings(document).filter((warning) =>
@@ -148,6 +148,7 @@ export function AutomationEditor({
                 key={`${index}-${rule.id}`}
                 rule={rule}
                 topology={topology}
+                signals={document.signals}
                 unavailableTrainIds={indexedRules
                   .filter((item) => item.index !== index)
                   .map((item) => item.rule.root.train_id)}
@@ -157,6 +158,7 @@ export function AutomationEditor({
                     id: uniqueRuleId(
                       {
                         version: document.version,
+                        signals: document.signals,
                         rules: document.rules.filter((_, itemIndex) => itemIndex !== index),
                       },
                       ruleId(hubId, detectorId, trainId),
@@ -168,6 +170,7 @@ export function AutomationEditor({
                 onRemove={() =>
                   setDocument({
                     version: document.version,
+                    signals: document.signals,
                     rules: document.rules.filter((_, itemIndex) => itemIndex !== index),
                   })
                 }
@@ -193,6 +196,7 @@ export function AutomationEditor({
 function RuleEditor({
   rule,
   topology,
+  signals,
   unavailableTrainIds,
   onTrainChange,
   onChange,
@@ -200,6 +204,7 @@ function RuleEditor({
 }: {
   readonly rule: AutomationRule;
   readonly topology: AutomationTopology;
+  readonly signals: readonly string[];
   readonly unavailableTrainIds: readonly string[];
   readonly onTrainChange: (trainId: string) => void;
   readonly onChange: (rule: AutomationRule) => void;
@@ -234,6 +239,7 @@ function RuleEditor({
         <AutomationNodeList
           nodes={rule.root.children}
           switches={topology.switches}
+          signals={signals}
           accessibleLabel="Automation steps"
           onChange={(children) => onChange({ ...rule, root: { ...rule.root, children } })}
         />
@@ -268,8 +274,12 @@ function uniqueRuleId(document: AutomationDocument, base: string) {
   return `${base}_${suffix}`;
 }
 
-function sharedTargetWarnings(document: AutomationDocument) {
+export function sharedTargetWarnings(document: AutomationDocument) {
   const ruleTargets = new Map<string, { label: string; ruleIds: string[] }>();
+  const ruleSignals = new Map<
+    string,
+    { label: string; readers: Set<string>; writers: Set<string> }
+  >();
   const warnings: Array<{
     key: string;
     message: string;
@@ -291,6 +301,24 @@ function sharedTargetWarnings(document: AutomationDocument) {
         ruleIds: [...(existing?.ruleIds ?? []), rule.id],
       });
     }
+    for (const [signal, label] of analysis.signalReads) {
+      const access = ruleSignals.get(signal) ?? {
+        label,
+        readers: new Set<string>(),
+        writers: new Set<string>(),
+      };
+      access.readers.add(rule.id);
+      ruleSignals.set(signal, access);
+    }
+    for (const [signal, label] of analysis.signalWrites) {
+      const access = ruleSignals.get(signal) ?? {
+        label,
+        readers: new Set<string>(),
+        writers: new Set<string>(),
+      };
+      access.writers.add(rule.id);
+      ruleSignals.set(signal, access);
+    }
   }
   for (const [target, { label, ruleIds }] of ruleTargets) {
     if (ruleIds.length > 1) {
@@ -301,11 +329,23 @@ function sharedTargetWarnings(document: AutomationDocument) {
       });
     }
   }
+  for (const [signal, { label, readers, writers }] of ruleSignals) {
+    const ruleIds = [...new Set([...readers, ...writers])];
+    if (writers.size > 0 && ruleIds.length > 1) {
+      warnings.push({
+        key: `rules:signal:${signal}`,
+        message: `${label} is read or changed by concurrent rules.`,
+        ruleIds,
+      });
+    }
+  }
   return warnings;
 }
 
 interface TargetAnalysis {
   targets: Map<string, string>;
+  signalReads: Map<string, string>;
+  signalWrites: Map<string, string>;
   conflicts: Map<string, string>;
 }
 
@@ -314,6 +354,8 @@ function analyzeConcurrentTargets(
   trainId: string,
 ): TargetAnalysis {
   const targets = new Map<string, string>();
+  const signalReads = new Map<string, string>();
+  const signalWrites = new Map<string, string>();
   const conflicts = new Map<string, string>();
   for (const node of nodes) {
     const child = analyzeTargetNode(node, trainId);
@@ -322,8 +364,22 @@ function analyzeConcurrentTargets(
       if (targets.has(target)) conflicts.set(target, label);
       targets.set(target, label);
     }
+    for (const [signal, label] of child.signalWrites) {
+      if (signalWrites.has(signal) || signalReads.has(signal)) {
+        conflicts.set(`signal:${signal}`, label);
+      }
+    }
+    for (const [signal, label] of child.signalReads) {
+      if (signalWrites.has(signal)) conflicts.set(`signal:${signal}`, label);
+    }
+    for (const [signal, label] of child.signalWrites) {
+      signalWrites.set(signal, label);
+    }
+    for (const [signal, label] of child.signalReads) {
+      signalReads.set(signal, label);
+    }
   }
-  return { targets, conflicts };
+  return { targets, signalReads, signalWrites, conflicts };
 }
 
 function analyzeTargetNode(
@@ -339,36 +395,47 @@ function analyzeTargetNode(
       `Switch ${node.hub_id} / ${node.switch_id}`,
     );
   }
-  if (node.type === "if_count") {
+  if (node.type === "set_signal") {
+    return {
+      targets: new Map(),
+      signalReads: new Map(),
+      signalWrites: new Map([[node.signal, `Signal ${node.signal}`]]),
+      conflicts: new Map(),
+    };
+  }
+  if (node.type === "if_count" || node.type === "if_signal") {
     const alternatives = node.children.map((branch) =>
       analyzeConcurrentTargets(branch.children, trainId),
     );
     const targets = new Map<string, string>();
+    const signalReads = new Map<string, string>();
+    const signalWrites = new Map<string, string>();
     const conflicts = new Map<string, string>();
     for (const alternative of alternatives) {
       for (const [target, label] of alternative.targets) targets.set(target, label);
+      for (const [signal, label] of alternative.signalReads) signalReads.set(signal, label);
+      for (const [signal, label] of alternative.signalWrites) signalWrites.set(signal, label);
       for (const [target, label] of alternative.conflicts) conflicts.set(target, label);
     }
-    return { targets, conflicts };
+    if (node.type === "if_signal") {
+      signalReads.set(node.signal, `Signal ${node.signal}`);
+    }
+    return { targets, signalReads, signalWrites, conflicts };
   }
-  return analyzeConcurrentTargets(node.children, trainId);
+  const nested = analyzeConcurrentTargets(node.children, trainId);
+  if (node.type === "on_signal" || node.type === "when_signal_is") {
+    nested.signalReads.set(node.signal, `Signal ${node.signal}`);
+  }
+  return nested;
 }
 
 function targetAnalysis(target: string, label: string): TargetAnalysis {
   return {
     targets: new Map([[target, label]]),
+    signalReads: new Map(),
+    signalWrites: new Map(),
     conflicts: new Map(),
   };
-}
-
-function containsIfCount(document: AutomationDocument): boolean {
-  let found = false;
-  for (const rule of document.rules) {
-    visitAutomationNodes(rule.root.children, (node) => {
-      if (node.type === "if_count") found = true;
-    });
-  }
-  return found;
 }
 
 function getValidationError(

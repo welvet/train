@@ -93,7 +93,7 @@ async def test_state_returns_complete_domain_snapshot(
     assert envelope["version"] == 4
     assert envelope["snapshot_at"] > 0
     assert envelope["automation"] == {
-        "document": {"version": 3, "rules": []},
+        "document": {"version": 4, "signals": [], "rules": []},
         "eligible_train_ids": [],
         "paused": False,
         "statuses": [],
@@ -393,7 +393,7 @@ async def test_automation_update_returns_and_streams_replacement(
     bus: EventBus,
 ) -> None:
     current = {
-        "document": {"version": 1, "rules": []},
+        "document": {"version": 4, "signals": [], "rules": []},
         "eligible_train_ids": ["express"],
         "paused": False,
         "statuses": [],
@@ -422,7 +422,7 @@ async def test_automation_update_returns_and_streams_replacement(
     stream = await client.get("/api/state/stream")
     try:
         await _read_state_event(stream)
-        replacement = {"version": 1, "rules": []}
+        replacement = {"version": 4, "signals": [], "rules": []}
         response = await client.put("/api/automation", json=replacement)
 
         assert response.status == 200

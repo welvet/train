@@ -287,7 +287,7 @@ describe("TrainApiClient", () => {
     );
 
     await expect(
-      new TrainApiClient().replaceAutomation({ version: 1, rules: [] }),
+      new TrainApiClient().replaceAutomation({ version: 4, signals: [], rules: [] }),
     ).rejects.toMatchObject({
       message: "$.rules[0].root.train_id: train has no configured tag: express",
       status: 400,
@@ -296,7 +296,8 @@ describe("TrainApiClient", () => {
 
   it("replaces the complete automation document", async () => {
     const document = {
-      version: 1 as const,
+      version: 4 as const,
+      signals: [],
       rules: [],
     };
     const fetchMock = vi.fn().mockResolvedValue(
@@ -336,7 +337,7 @@ describe("TrainApiClient", () => {
     );
 
     await expect(
-      new TrainApiClient().replaceAutomation({ version: 1, rules: [] }),
+      new TrainApiClient().replaceAutomation({ version: 4, signals: [], rules: [] }),
     ).rejects.toMatchObject({
       message: "The backend returned an unsupported automation format",
       status: 0,
@@ -459,7 +460,7 @@ function stateEnvelope(): StateEnvelope {
     version: 4 as const,
     snapshot_at: 2,
     automation: {
-      document: { version: 1, rules: [] },
+      document: { version: 4, signals: [], rules: [] },
       eligible_train_ids: [],
       paused: false,
       statuses: [],

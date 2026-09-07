@@ -59,12 +59,42 @@ class _ExecutionContext(FunctionContext):
         return self._runtime.definition.trigger
 
     async def sleep(self, seconds: float) -> None:
+        await self._wait(self._runner._sleep(seconds))
+
+    def get_signal(self, name: str) -> int:
+        return self._runner._signals[name]
+
+    def set_signal(self, name: str, value: int) -> None:
+        self._runner._signals[name] = value
+        for waiter in tuple(self._runner._signal_waiters.get(name, ())):
+            if not waiter.done():
+                waiter.set_result(None)
+
+    async def wait_for_signal(
+        self,
+        name: str,
+        predicate: Callable[[int], bool],
+    ) -> None:
+        while not predicate(self.get_signal(name)):
+            waiter = asyncio.get_running_loop().create_future()
+            waiters = self._runner._signal_waiters.setdefault(name, set())
+            waiters.add(waiter)
+            try:
+                if predicate(self.get_signal(name)):
+                    return
+                await self._wait(waiter)
+            finally:
+                waiters.discard(waiter)
+                if not waiters:
+                    self._runner._signal_waiters.pop(name, None)
+
+    async def _wait(self, awaitable: Awaitable[None]) -> None:
         self._runtime.waiters += 1
         if self._runtime.waiters == 1:
             self._runtime.state = RuleState.WAITING
             self._runner._notify_status_changed()
         try:
-            await self._runner._sleep(seconds)
+            await awaitable
         finally:
             self._runtime.waiters -= 1
             if self._runtime.waiters == 0 and self._runtime.task is not None:
@@ -96,8 +126,11 @@ class AutomationRunner:
         self._triggers: dict[Trigger, _RuntimeRule] = {}
         self._document = AutomationDocument(
             version=CURRENT_AUTOMATION_DOCUMENT_VERSION,
+            signals=(),
             rules=(),
         )
+        self._signals: dict[str, int] = {}
+        self._signal_waiters: dict[str, set[asyncio.Future[None]]] = {}
         self._lock = asyncio.Lock()
         self._paused = False
         self._closed = False
@@ -143,13 +176,7 @@ class AutomationRunner:
                         f"{document.version}"
                     )
                 self._validate_functions(document)
-                definitions = {rule.id: rule for rule in document.rules}
-                changing = [
-                    runtime
-                    for rule_id, runtime in self._rules.items()
-                    if not preserve_unchanged
-                    or definitions.get(rule_id) != runtime.definition
-                ]
+                changing = list(self._rules.values())
                 rules: dict[str, _RuntimeRule] = {}
                 for definition in document.rules:
                     existing = self._rules.get(definition.id)
@@ -171,6 +198,8 @@ class AutomationRunner:
 
                 self._rules = rules
                 self._triggers = triggers
+                self._signals = {signal: 0 for signal in document.signals}
+                self._signal_waiters = {}
                 self._document = document
                 self._notify_status_changed()
         finally:
