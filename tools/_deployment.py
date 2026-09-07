@@ -5,7 +5,6 @@ import gzip
 import hashlib
 import io
 import json
-import math
 import os
 import platform
 import re
@@ -22,18 +21,24 @@ import urllib.request
 import uuid
 import zipfile
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Callable
 
-from _workspace import REPO_ROOT, WorkspaceError, data_dir, read_json, validate_workspace
+from _workspace import (
+    REPO_ROOT,
+    WorkspaceError,
+    data_dir,
+    read_json,
+    validate_runtime_configuration,
+)
 
-RUNTIME_DATA_FILES = (
+PERSISTENT_CONFIGURATION_FILES = (
     "backend.json",
     "trains.json",
     "arduinos.json",
     "automations.json",
 )
-LEGACY_AUTOMATION_FILE = "automation.py"
+SUPERVISOR_PROTOCOL = 2
 WEB_BUILD_INPUTS = (
     "app",
     "public",
@@ -77,12 +82,6 @@ class RuntimeTarget:
             "platform": self.platform,
             "soabi": self.soabi,
         }
-
-
-@dataclass(frozen=True, slots=True)
-class SyncedDocument:
-    modified_at: float
-    value: dict[str, object]
 
 
 def load_deployment(root: Path | None = None) -> DeploymentConfig:
@@ -139,226 +138,192 @@ def load_deployment(root: Path | None = None) -> DeploymentConfig:
     )
 
 
-def synchronize_configuration(
+def pull_configuration(
     config: DeploymentConfig,
     workspace: Path,
-) -> dict[str, str]:
-    """Synchronize editable documents with the running backend."""
-    endpoint = config.health_url.rstrip("/") + "/api/configuration"
-    return {
-        name: _synchronize_document(endpoint, workspace, name)
-        for name in ("trains", "arduinos")
-    }
+    *,
+    ftp_factory: Callable[[], ftplib.FTP] | None = None,
+) -> None:
+    """Replace all local persistent configuration with the server copy."""
+    with tempfile.TemporaryDirectory(prefix="train-conf-pull-") as directory:
+        staged = Path(directory)
+        ftp = _connect(config, ftp_factory)
+        try:
+            ftp.cwd(_configuration_remote_dir(config))
+            previous: dict[str, bytes] | None = None
+            for _ in range(3):
+                current = {
+                    name: _retrieve_file(ftp, name)
+                    for name in PERSISTENT_CONFIGURATION_FILES
+                }
+                if current == previous:
+                    break
+                previous = current
+            else:
+                raise RuntimeError(
+                    "Server configuration changed repeatedly while being pulled"
+                )
+        except ftplib.all_errors as exc:
+            raise RuntimeError("Could not pull configuration from the server") from exc
+        finally:
+            _close(ftp)
+
+        if previous is None:
+            raise RuntimeError("Server configuration could not be read")
+        for name, contents in previous.items():
+            (staged / name).write_bytes(contents)
+        validate_runtime_configuration(staged)
+        _replace_configuration_files(workspace, previous)
 
 
-def _synchronize_document(endpoint: str, workspace: Path, name: str) -> str:
-    local_path = workspace / f"{name}.json"
-    for _ in range(3):
-        local = _local_configuration_document(local_path, workspace, name)
-        remote = _fetch_configuration(endpoint)
-        if remote is None:
-            return "unavailable"
-        remote_document = _configuration_document(
-            remote,
-            name,
-            missing_ok=name == "arduinos",
-        )
-        if remote_document is None:
-            return "unavailable"
-        if local != _local_configuration_document(local_path, workspace, name):
-            continue
-        if remote_document.value == local.value:
-            return "unchanged"
-        if remote_document.modified_at > local.modified_at:
-            if local != _local_configuration_document(local_path, workspace, name):
-                continue
-            _atomic_write_json(
-                local_path,
-                remote_document.value,
-                remote_document.modified_at,
-            )
-            return "downloaded"
-        if remote_document.modified_at == local.modified_at:
-            raise RuntimeError(
-                f"Configuration sync found different {name}.json documents with the "
-                "same timestamp; touch the intended winner and retry"
-            )
-
-        uploaded = _upload_configuration(
-            endpoint,
-            name,
-            local,
-            remote_document.modified_at,
-        )
-        if (
-            uploaded is None
-            or local != _local_configuration_document(local_path, workspace, name)
-        ):
-            continue
-        _atomic_write_json(
-            local_path,
-            uploaded.value,
-            uploaded.modified_at,
-        )
-        return "uploaded"
-    raise RuntimeError(
-        f"{name}.json changed repeatedly during synchronization; retry when edits stop"
-    )
-
-
-def _local_configuration_document(
-    path: Path,
+def push_configuration(
+    config: DeploymentConfig,
     workspace: Path,
-    name: str,
-) -> SyncedDocument:
-    for _ in range(3):
-        before = path.stat()
-        value = read_json(f"{name}.json", workspace)
-        after = path.stat()
-        if _file_identity(before) == _file_identity(after):
-            return SyncedDocument(after.st_mtime_ns / 1_000_000_000, value)
-    raise RuntimeError(
-        f"Local {name}.json changed repeatedly while being read; retry when edits stop"
-    )
+    *,
+    ftp_factory: Callable[[], ftplib.FTP] | None = None,
+) -> None:
+    """Replace all persistent server configuration with the local copy."""
+    with tempfile.TemporaryDirectory(prefix="train-conf-push-") as directory:
+        staged = Path(directory)
+        for _ in range(3):
+            before = {
+                name: _file_identity((workspace / name).stat())
+                for name in PERSISTENT_CONFIGURATION_FILES
+            }
+            for name in PERSISTENT_CONFIGURATION_FILES:
+                (staged / name).write_bytes((workspace / name).read_bytes())
+            after = {
+                name: _file_identity((workspace / name).stat())
+                for name in PERSISTENT_CONFIGURATION_FILES
+            }
+            if before == after:
+                break
+        else:
+            raise RuntimeError(
+                "Local configuration changed repeatedly while being prepared"
+            )
+        validate_runtime_configuration(staged)
+
+        _push_configuration_snapshot(config, staged, ftp_factory)
+
+
+def _push_configuration_snapshot(
+    config: DeploymentConfig,
+    staged: Path,
+    ftp_factory: Callable[[], ftplib.FTP] | None,
+) -> None:
+    attempt = uuid.uuid4().hex
+    ftp = _connect(config, ftp_factory)
+    parent = str(PurePosixPath(_configuration_remote_dir(config)).parent)
+    incoming = f".data.{attempt}.uploading"
+    previous = f".data.{attempt}.previous"
+    moved_previous = False
+    try:
+        _ensure_remote_dir(ftp, parent)
+        ftp.mkd(incoming)
+        ftp.cwd(incoming)
+        for name in PERSISTENT_CONFIGURATION_FILES:
+            with (staged / name).open("rb") as source:
+                ftp.storbinary(f"STOR {name}", source)
+        ftp.cwd(parent)
+        try:
+            ftp.rename("data", previous)
+            moved_previous = True
+        except ftplib.error_perm:
+            pass
+        try:
+            ftp.rename(incoming, "data")
+        except ftplib.all_errors:
+            if moved_previous:
+                try:
+                    ftp.rename(previous, "data")
+                except ftplib.all_errors as rollback_exc:
+                    raise RuntimeError(
+                        "Could not push configuration and the previous server "
+                        "configuration could not be restored"
+                    ) from rollback_exc
+            raise
+        if moved_previous:
+            try:
+                ftp.cwd(previous)
+                for name in PERSISTENT_CONFIGURATION_FILES:
+                    ftp.delete(name)
+                ftp.cwd(parent)
+                ftp.rmd(previous)
+            except ftplib.all_errors:
+                pass
+    except ftplib.all_errors as exc:
+        raise RuntimeError("Could not push configuration to the server") from exc
+    finally:
+        _close(ftp)
+
+
+def _configuration_remote_dir(config: DeploymentConfig) -> str:
+    return str(PurePosixPath(config.remote_dir).parent / "data")
+
+
+def _retrieve_file(ftp: ftplib.FTP, name: str) -> bytes:
+    output = io.BytesIO()
+    ftp.retrbinary(f"RETR {name}", output.write)
+    return output.getvalue()
 
 
 def _file_identity(value: os.stat_result) -> tuple[int, int, int, int]:
     return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns)
 
 
-def _fetch_configuration(endpoint: str) -> dict[str, object] | None:
+def _replace_configuration_files(
+    workspace: Path,
+    contents: dict[str, bytes],
+) -> None:
+    attempt = uuid.uuid4().hex
+    staged: dict[str, Path] = {}
+    backups: dict[str, Path] = {}
     try:
-        request = urllib.request.Request(
-            endpoint,
-            headers={"Accept": "application/json"},
-        )
-        with urllib.request.urlopen(request, timeout=5) as response:
-            contents = response.read()
-    except urllib.error.HTTPError as exc:
-        if exc.code == 404:
-            return None
-        raise RuntimeError(
-            f"Configuration sync failed: backend returned HTTP {exc.code}"
-        ) from exc
-    except (OSError, urllib.error.URLError) as exc:
-        raise RuntimeError(
-            "Configuration sync failed: backend is unreachable"
-        ) from exc
-    try:
-        remote = json.loads(contents)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise RuntimeError(
-            "Configuration sync failed: backend returned invalid JSON"
-        ) from exc
-    if not isinstance(remote, dict):
-        raise RuntimeError("Backend returned an unsupported configuration format")
-    return remote
-
-
-def _upload_configuration(
-    endpoint: str,
-    name: str,
-    local: SyncedDocument,
-    base_modified_at: float,
-) -> SyncedDocument | None:
-    payload = {
-        "version": 1,
-        "documents": {
-            name: {
-                "base_modified_at": base_modified_at,
-                "modified_at": local.modified_at,
-                "value": local.value,
-            }
-        },
-    }
-    request = urllib.request.Request(
-        endpoint,
-        data=(json.dumps(payload) + "\n").encode(),
-        headers={
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-        },
-        method="PUT",
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=5) as response:
-            return _configuration_document(json.loads(response.read()), name)
-    except urllib.error.HTTPError as exc:
-        if exc.code == 409:
-            return None
+        for name in PERSISTENT_CONFIGURATION_FILES:
+            destination = workspace / name
+            staged_path = workspace / f".{name}.{attempt}.pulling"
+            backup_path = workspace / f".{name}.{attempt}.previous"
+            _write_new_file(staged_path, contents[name])
+            os.link(destination, backup_path)
+            staged[name] = staged_path
+            backups[name] = backup_path
         try:
-            detail = json.loads(exc.read()).get("error")
-        except (AttributeError, json.JSONDecodeError, UnicodeDecodeError):
-            detail = None
-        message = detail if isinstance(detail, str) else f"HTTP {exc.code}"
-        raise RuntimeError(f"Configuration upload failed: {message}") from exc
-    except (
-        OSError,
-        UnicodeDecodeError,
-        json.JSONDecodeError,
-        urllib.error.URLError,
-    ) as exc:
-        raise RuntimeError("Configuration upload failed") from exc
-
-
-def _configuration_document(
-    value: object,
-    name: str,
-    *,
-    missing_ok: bool = False,
-) -> SyncedDocument | None:
-    if not isinstance(value, dict) or value.get("version") != 1:
-        raise RuntimeError("Backend returned an unsupported configuration format")
-    documents = value.get("documents")
-    if not isinstance(documents, dict):
-        raise RuntimeError("Backend returned an unsupported configuration format")
-    if name not in documents and missing_ok:
-        if set(documents) != {"trains"}:
-            raise RuntimeError("Backend returned an unsupported configuration format")
-        _configuration_document(value, "trains")
-        return None
-    document_entry = documents.get(name)
-    if not isinstance(document_entry, dict):
-        raise RuntimeError(f"Backend configuration is missing {name}")
-    modified_at = document_entry.get("modified_at")
-    document = document_entry.get("value")
-    if (
-        not isinstance(modified_at, (int, float))
-        or isinstance(modified_at, bool)
-        or not math.isfinite(modified_at)
-        or modified_at <= 0
-        or not isinstance(document, dict)
-    ):
-        raise RuntimeError(f"Backend returned an invalid {name} configuration")
-    return SyncedDocument(float(modified_at), document)
-
-
-def _atomic_write_json(path: Path, value: object, modified_at: float) -> None:
-    descriptor, name = tempfile.mkstemp(
-        dir=path.parent,
-        prefix=f".{path.name}.",
-        suffix=".tmp",
-    )
-    staged = Path(name)
-    try:
-        with os.fdopen(descriptor, "w") as output:
-            json.dump(value, output, indent=2)
-            output.write("\n")
-            output.flush()
-            os.fsync(output.fileno())
-        os.utime(staged, ns=(int(modified_at * 1_000_000_000),) * 2)
-        os.replace(staged, path)
-        directory = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
+            for name in PERSISTENT_CONFIGURATION_FILES:
+                os.replace(staged[name], workspace / name)
+            _fsync_directory(workspace)
+        except OSError as exc:
+            try:
+                for name in PERSISTENT_CONFIGURATION_FILES:
+                    os.replace(backups[name], workspace / name)
+                _fsync_directory(workspace)
+            except OSError as rollback_exc:
+                raise RuntimeError(
+                    "Configuration pull failed and local rollback was incomplete"
+                ) from rollback_exc
+            raise exc
     finally:
-        staged.unlink(missing_ok=True)
+        for path in (*staged.values(), *backups.values()):
+            path.unlink(missing_ok=True)
 
 
-def build_bundle(workspace: Path, destination: Path, target: RuntimeTarget) -> str:
-    validate_workspace(workspace)
+def _write_new_file(path: Path, contents: bytes) -> None:
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "wb") as output:
+        output.write(contents)
+        output.flush()
+        os.fsync(output.fileno())
+
+
+def _fsync_directory(path: Path) -> None:
+    directory = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
+def build_bundle(_workspace: Path, destination: Path, target: RuntimeTarget) -> str:
     with tempfile.TemporaryDirectory(prefix="train-release-build-") as directory:
         build_dir = Path(directory)
         web_source = build_dir / "web-source"
@@ -442,21 +407,12 @@ def build_bundle(workspace: Path, destination: Path, target: RuntimeTarget) -> s
         for wheel in wheels:
             _normalize_wheel(wheel)
 
-        # Supervisors from before the JSON migration require this path but do
-        # not execute it when starting a current backend release.
-        legacy_automation = build_dir / LEGACY_AUTOMATION_FILE
-        legacy_automation.write_bytes(b"")
-        payloads = {
-            **{f"wheels/{path.name}": path for path in wheels},
-            **{f"data/{name}": workspace / name for name in RUNTIME_DATA_FILES},
-            f"data/{LEGACY_AUTOMATION_FILE}": legacy_automation,
-        }
+        payloads = {f"wheels/{path.name}": path for path in wheels}
         manifest = {
             "format": 1,
             "runtime": target.as_dict(),
             "components": {
                 "backend": {"wheelhouse": "wheels", "package": "train"},
-                "data": {"path": "data"},
             },
             "files": {
                 name: _sha256(path)
@@ -488,12 +444,6 @@ def publish_bundle(
             ftp.storbinary(f"STOR {archive_temporary}", source)
         _replace_remote(ftp, archive_temporary, archive_name)
 
-        bootstrap = REPO_ROOT / "tools" / "server-loop"
-        bootstrap_temporary = f"server-loop.{attempt}.uploading"
-        with bootstrap.open("rb") as source:
-            ftp.storbinary(f"STOR {bootstrap_temporary}", source)
-        _replace_remote(ftp, bootstrap_temporary, "server-loop")
-
         pointer_name = f"release.{attempt}.json.uploading"
         pointer = json.dumps({"release": digest, "attempt": attempt}) + "\n"
         ftp.storbinary(f"STOR {pointer_name}", io.BytesIO(pointer.encode()))
@@ -501,6 +451,73 @@ def publish_bundle(
     finally:
         _close(ftp)
     return attempt
+
+
+def prepare_supervisor(
+    config: DeploymentConfig,
+    *,
+    ftp_factory: Callable[[], ftplib.FTP] | None = None,
+) -> None:
+    protocol = _supervisor_protocol(config, ftp_factory)
+    if protocol > SUPERVISOR_PROTOCOL:
+        return
+    if protocol == SUPERVISOR_PROTOCOL:
+        _upload_supervisor(config, ftp_factory)
+        return
+
+    _upload_supervisor(config, ftp_factory)
+    raise RuntimeError(
+        "Installed the new server-loop, but the running supervisor does not support "
+        "code-only releases. Restart server-loop on the server, then run "
+        "server-push again."
+    )
+
+
+def _supervisor_protocol(
+    config: DeploymentConfig,
+    ftp_factory: Callable[[], ftplib.FTP] | None,
+) -> int:
+    ftp = _connect(config, ftp_factory)
+    try:
+        _ensure_remote_dir(ftp, config.remote_dir)
+        names = {PurePosixPath(name).name for name in ftp.nlst()}
+        if "supervisor.json" not in names:
+            return 0
+        output = io.BytesIO()
+        ftp.retrbinary("RETR supervisor.json", output.write)
+    except ftplib.all_errors as exc:
+        raise RuntimeError("Could not inspect the running server-loop") from exc
+    finally:
+        _close(ftp)
+
+    try:
+        state = json.loads(output.getvalue())
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("The running server-loop returned invalid state") from exc
+    protocol = state.get("protocol") if isinstance(state, dict) else None
+    if (
+        not isinstance(protocol, int)
+        or isinstance(protocol, bool)
+        or protocol < 1
+    ):
+        raise RuntimeError("The running server-loop returned invalid state")
+    return protocol
+
+
+def _upload_supervisor(
+    config: DeploymentConfig,
+    ftp_factory: Callable[[], ftplib.FTP] | None,
+) -> None:
+    ftp = _connect(config, ftp_factory)
+    try:
+        _ensure_remote_dir(ftp, config.remote_dir)
+        ftp.cwd(config.remote_dir)
+        temporary = f"server-loop.{uuid.uuid4().hex}.uploading"
+        with (REPO_ROOT / "tools" / "server-loop").open("rb") as source:
+            ftp.storbinary(f"STOR {temporary}", source)
+        _replace_remote(ftp, temporary, "server-loop")
+    finally:
+        _close(ftp)
 
 
 def wait_until_active(

@@ -11,6 +11,7 @@ import sysconfig
 import tarfile
 from pathlib import Path
 from types import ModuleType
+from unittest.mock import Mock
 
 import pytest
 
@@ -66,6 +67,18 @@ def test_new_attempt_can_retry_the_same_release(tmp_path: Path) -> None:
     assert loop._read_request(pointer) == (digest, "b" * 32)
 
 
+def test_supervisor_writes_protocol_marker(tmp_path: Path) -> None:
+    server_loop = _load_tool("server-loop")
+    root = tmp_path / "server"
+    (root / "deploy").mkdir(parents=True)
+
+    server_loop.ServerLoop(root)._write_supervisor_state()
+
+    assert json.loads((root / "deploy" / "supervisor.json").read_text()) == {
+        "protocol": server_loop.SUPERVISOR_PROTOCOL
+    }
+
+
 def test_runtime_manifest_must_match_server() -> None:
     server_loop = _load_tool("server-loop")
     runtime = {
@@ -83,15 +96,12 @@ def test_runtime_manifest_must_match_server() -> None:
         server_loop._verify_runtime(runtime)
 
 
-def test_release_without_automations_uses_compatible_empty_default(
+def test_release_manifest_does_not_require_configuration(
     tmp_path: Path,
 ) -> None:
     server_loop = _load_tool("server-loop")
     release = tmp_path / "release"
     files = {
-        "data/backend.json": b"{}",
-        "data/trains.json": b"{}",
-        "data/arduinos.json": b"{}",
         "wheels/train-0.1.0-py3-none-any.whl": b"wheel",
     }
     for name, contents in files.items():
@@ -110,7 +120,6 @@ def test_release_without_automations_uses_compatible_empty_default(
         },
         "components": {
             "backend": {"wheelhouse": "wheels", "package": "train"},
-            "data": {"path": "data"},
         },
         "files": {
             name: hashlib.sha256(contents).hexdigest()
@@ -120,16 +129,6 @@ def test_release_without_automations_uses_compatible_empty_default(
     (release / "manifest.json").write_text(json.dumps(manifest))
 
     server_loop._verify_manifest(release)
-    destination = tmp_path / "persistent" / "automations.json"
-    server_loop.ServerLoop._seed_automations(
-        release / "data" / "automations.json", destination
-    )
-
-    assert json.loads(destination.read_text()) == {
-        "version": 4,
-        "signals": [],
-        "rules": [],
-    }
 
 
 def test_remove_tree_does_not_follow_directory_symlinks(tmp_path: Path) -> None:
@@ -147,66 +146,48 @@ def test_remove_tree_does_not_follow_directory_symlinks(tmp_path: Path) -> None:
     assert protected.read_text() == "keep"
 
 
-def test_automation_seed_is_persistent_across_releases(tmp_path: Path) -> None:
+def test_start_requires_explicitly_pushed_configuration(tmp_path: Path) -> None:
     server_loop = _load_tool("server-loop")
-    first = tmp_path / "first.json"
-    second = tmp_path / "second.json"
-    destination = tmp_path / "data" / "automations.json"
-    first.write_text('{"version": 4, "signals": [], "rules": []}')
-    second.write_text('{"version": 4, "signals": [], "rules": [{"id": "new"}]}')
+    root = tmp_path / "server"
+    python = root / "releases" / ("a" * 64) / ".venv" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.write_text("")
 
-    server_loop.ServerLoop._seed_automations(first, destination)
-    server_loop.ServerLoop._seed_automations(second, destination)
-
-    assert destination.read_text() == first.read_text()
+    with pytest.raises(server_loop.ReleaseError, match="make push-conf"):
+        server_loop.ServerLoop(root)._start("a" * 64)
 
 
-def test_train_configuration_seed_is_persistent_across_releases(
+def test_start_uses_only_the_persistent_configuration_folder(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     server_loop = _load_tool("server-loop")
-    first = tmp_path / "first.json"
-    second = tmp_path / "second.json"
-    destination = tmp_path / "data" / "trains.json"
-    first.write_text('{"trains": [{"id": "first"}]}')
-    second.write_text('{"trains": [{"id": "second"}]}')
+    root = tmp_path / "server"
+    digest = "a" * 64
+    release = root / "releases" / digest
+    python = release / ".venv" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.write_text("")
+    workspace = root / "data"
+    workspace.mkdir()
+    (workspace / "backend.json").write_text("{}")
+    (root / "deploy").mkdir()
+    for name in (
+        "TRAIN_TRAINS_PATH",
+        "TRAIN_ARDUINOS_PATH",
+        "TRAIN_AUTOMATIONS_PATH",
+    ):
+        monkeypatch.setenv(name, f"/legacy/{name}")
+    child = Mock(pid=123)
+    popen = Mock(return_value=child)
+    monkeypatch.setattr(server_loop.subprocess, "Popen", popen)
 
-    server_loop.ServerLoop._seed_file(first, destination)
-    server_loop.ServerLoop._seed_file(second, destination)
+    server_loop.ServerLoop(root)._start(digest)
 
-    assert destination.read_text() == first.read_text()
-
-
-def test_arduino_configuration_seed_is_persistent_across_releases(
-    tmp_path: Path,
-) -> None:
-    server_loop = _load_tool("server-loop")
-    first = tmp_path / "first.json"
-    second = tmp_path / "second.json"
-    destination = tmp_path / "data" / "arduinos.json"
-    first.write_text('{"devices": {"first": {}}}')
-    second.write_text('{"devices": {"second": {}}}')
-
-    server_loop.ServerLoop._seed_file(first, destination)
-    server_loop.ServerLoop._seed_file(second, destination)
-
-    assert destination.read_text() == first.read_text()
-
-
-def test_failed_automation_seed_does_not_leave_partial_destination(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    server_loop = _load_tool("server-loop")
-    source = tmp_path / "source.json"
-    destination = tmp_path / "data" / "automations.json"
-    source.write_text('{"version": 4, "signals": [], "rules": []}')
-
-    def fail_read(path: Path) -> bytes:
-        raise OSError("read failed")
-
-    monkeypatch.setattr(Path, "read_bytes", fail_read)
-
-    with pytest.raises(OSError, match="read failed"):
-        server_loop.ServerLoop._seed_automations(source, destination)
-
-    assert not destination.exists()
+    environment = popen.call_args.kwargs["env"]
+    assert environment["TRAIN_DATA_DIR"] == str(workspace)
+    assert environment["TRAIN_RELEASE_ID"] == digest
+    assert "TRAIN_TRAINS_PATH" not in environment
+    assert "TRAIN_ARDUINOS_PATH" not in environment
+    assert "TRAIN_AUTOMATIONS_PATH" not in environment
+    assert popen.call_args.kwargs["cwd"] == release

@@ -13,7 +13,6 @@ import subprocess
 import sys
 import sysconfig
 import tarfile
-import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -23,12 +22,7 @@ POLL_SECONDS = 2
 READINESS_TIMEOUT_SECONDS = 15
 STOP_TIMEOUT_SECONDS = 10
 RELEASE_RETENTION = 3
-RUNTIME_DATA_FILES = {
-    "data/backend.json",
-    "data/trains.json",
-    "data/arduinos.json",
-}
-EMPTY_AUTOMATIONS = b'{"version": 4, "signals": [], "rules": []}\n'
+SUPERVISOR_PROTOCOL = 2
 
 
 class ReleaseError(RuntimeError):
@@ -50,6 +44,7 @@ class ServerLoop:
     def run(self) -> None:
         self.deploy_dir.mkdir(parents=True, exist_ok=True)
         self.releases_dir.mkdir(parents=True, exist_ok=True)
+        self._write_supervisor_state()
         self._reconcile_committed_release()
         while not self.stopping:
             try:
@@ -64,6 +59,11 @@ class ServerLoop:
 
     def stop(self, *_: object) -> None:
         self.stopping = True
+
+    def _write_supervisor_state(self) -> None:
+        temporary = self.deploy_dir / ".supervisor.json.next"
+        temporary.write_text(json.dumps({"protocol": SUPERVISOR_PROTOCOL}) + "\n")
+        os.replace(temporary, self.deploy_dir / "supervisor.json")
 
     def _tick(self) -> None:
         requested = self._read_request(self.deploy_dir / "release.json")
@@ -98,7 +98,7 @@ class ServerLoop:
         self._stop_child()
         try:
             self._start(digest)
-            self._wait_ready(release, digest)
+            self._wait_ready(digest)
         except Exception as exc:
             self.log.exception("Release %s failed startup", digest[:12])
             self.failed_attempt = attempt
@@ -174,17 +174,19 @@ class ServerLoop:
         python = release / ".venv" / "bin" / "python"
         if not python.is_file():
             raise ReleaseError(f"release Python is missing: {python}")
+        workspace = self.root / "data"
+        if not (workspace / "backend.json").is_file():
+            raise ReleaseError(
+                "server configuration is missing; run 'make push-conf' first"
+            )
         environment = os.environ.copy()
-        environment["TRAIN_DATA_DIR"] = str(release / "data")
-        trains = self.root / "data" / "trains.json"
-        self._seed_file(release / "data" / "trains.json", trains)
-        environment["TRAIN_TRAINS_PATH"] = str(trains)
-        arduinos = self.root / "data" / "arduinos.json"
-        self._seed_file(release / "data" / "arduinos.json", arduinos)
-        environment["TRAIN_ARDUINOS_PATH"] = str(arduinos)
-        automations = self.root / "data" / "automations.json"
-        self._seed_automations(release / "data" / "automations.json", automations)
-        environment["TRAIN_AUTOMATIONS_PATH"] = str(automations)
+        environment["TRAIN_DATA_DIR"] = str(workspace)
+        for name in (
+            "TRAIN_TRAINS_PATH",
+            "TRAIN_ARDUINOS_PATH",
+            "TRAIN_AUTOMATIONS_PATH",
+        ):
+            environment.pop(name, None)
         environment["TRAIN_RELEASE_ID"] = digest
         log_file = (self.deploy_dir / "backend.log").open("ab")
         try:
@@ -199,53 +201,8 @@ class ServerLoop:
             log_file.close()
         self.log.info("Started backend release %s as pid %d", digest[:12], self.child.pid)
 
-    @staticmethod
-    def _seed_automations(source: Path, destination: Path) -> None:
-        ServerLoop._seed_file(
-            source,
-            destination,
-            missing_default=EMPTY_AUTOMATIONS,
-        )
-
-    @staticmethod
-    def _seed_file(
-        source: Path,
-        destination: Path,
-        *,
-        missing_default: bytes | None = None,
-    ) -> None:
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            contents = source.read_bytes()
-        except FileNotFoundError:
-            if missing_default is None:
-                raise
-            contents = missing_default
-        descriptor, name = tempfile.mkstemp(
-            dir=destination.parent,
-            prefix=f".{destination.name}.",
-            suffix=".tmp",
-        )
-        staged = Path(name)
-        try:
-            with os.fdopen(descriptor, "wb") as output:
-                output.write(contents)
-                output.flush()
-                os.fsync(output.fileno())
-            try:
-                os.link(staged, destination)
-            except FileExistsError:
-                return
-            directory = os.open(destination.parent, os.O_RDONLY)
-            try:
-                os.fsync(directory)
-            finally:
-                os.close(directory)
-        finally:
-            staged.unlink(missing_ok=True)
-
-    def _wait_ready(self, release: Path, digest: str) -> None:
-        backend = json.loads((release / "data" / "backend.json").read_text())
+    def _wait_ready(self, digest: str) -> None:
+        backend = json.loads((self.root / "data" / "backend.json").read_text())
         health_url = str(backend["api"]["url"]).rstrip("/") + "/health"
         deadline = time.monotonic() + READINESS_TIMEOUT_SECONDS
         while time.monotonic() < deadline:
@@ -386,16 +343,14 @@ def _verify_manifest(release: Path, *, allow_runtime: bool = False) -> None:
     if manifest.get("format") != 1 or not isinstance(files, dict):
         raise ReleaseError("unsupported release manifest")
     _verify_runtime(manifest.get("runtime"))
-    if not isinstance(components, dict) or not {"backend", "data"} <= set(components):
+    if not isinstance(components, dict) or "backend" not in components:
         raise ReleaseError("release is missing required components")
     if set(components) - {"backend", "data", "web"}:
         raise ReleaseError("release contains unsupported components")
     if components["backend"] != {"wheelhouse": "wheels", "package": "train"}:
         raise ReleaseError("invalid backend component")
-    if components["data"] != {"path": "data"}:
-        raise ReleaseError("invalid data component")
-    if not RUNTIME_DATA_FILES <= set(files):
-        raise ReleaseError("release is missing runtime data")
+    if "data" in components and components["data"] != {"path": "data"}:
+        raise ReleaseError("invalid legacy data component")
     if not any(name.startswith("wheels/train-") and name.endswith(".whl") for name in files):
         raise ReleaseError("release is missing the backend wheel")
 

@@ -223,10 +223,10 @@ and can be replaced with `PUT /api/automation`. See
 [Configurable automations](docs/configurable-automations.md) for the format and
 runtime semantics.
 
-On the deployment server, the supervisor seeds this file once into the
-persistent `<server-root>/data/` directory. API edits therefore survive backend
-restarts and later content-addressed releases; immutable release data is never
-modified.
+On the deployment server, this file lives in the persistent
+`<server-root>/data/` directory. API edits therefore survive backend restarts
+and later content-addressed releases; immutable releases contain no
+configuration.
 
 ## Commands
 
@@ -236,6 +236,8 @@ tools/arduino upload arduino_1
 tools/arduino monitor arduino_1
 tools/scan-ble
 tools/server-push
+make pull-conf
+make push-conf
 ```
 
 `tools/data init` creates an intentionally empty scaffold. Add at least one
@@ -243,31 +245,38 @@ train and one Arduino device, then run `tools/data validate`.
 
 ## Server deployment
 
-`tools/server-push` builds the static frontend first, packages it with the
-backend and all Python dependencies into a wheel bundle, and adds only the
-runtime data files. Wi-Fi and FTP secrets are never
-included. The release is uploaded under its SHA-256 name, and `release.json`
-with a unique publication attempt is updated last to trigger activation. The
-command returns only after both the FTP activation marker and the backend's
-release-aware health endpoint agree.
+`tools/server-push` builds the static frontend first and packages it with the
+backend and all Python dependencies into a wheel bundle. Configuration and
+secrets are never included. The release is uploaded under its SHA-256 name, and
+`release.json` with a unique publication attempt is updated last to trigger
+activation. The command returns only after both the FTP activation marker and
+the backend's release-aware health endpoint agree.
 
-Before building, `server-push` synchronizes `trains.json` and `arduinos.json`
-independently with the running backend. If a document differs, the file with the newer modification
-timestamp replaces the older one; equal contents need no copy. Keep the
-deployment machine and server clocks synchronized. A backend without the
-configuration endpoint is treated as a bootstrap deployment and uses the local
-files. A PR #32 backend whose version 1 response contains trains but not
-Arduinos is likewise an Arduino-only bootstrap. Other backend and response
-failures stop deployment. On the server, editable trains and Arduino devices
-are stored under persistent server-root `data/`, outside immutable release
-directories.
+Deployment never transfers persistent configuration automatically. Use
+`make pull-conf` to replace local `backend.json`, `trains.json`,
+`arduinos.json`, and `automations.json` with the server copies, or
+`make push-conf` to replace the server folder with the validated local files.
+Both commands transfer the whole runtime configuration in one direction; there
+is no timestamp merge. Local-only `deployment.json` and `secrets.json` are
+never transferred. These are the complete four runtime files currently owned
+by the backend, rather than arbitrary contents from `data/`; extend the command
+when another runtime document is introduced.
 
-After deploying the supervisor that adds persistent Arduino configuration,
-restart the external process supervising `server-loop` once. Uploading the new
-script does not reload the Python process already running. After accepting UI
-Arduino edits, rolling backend code below this feature temporarily uses that
-release's bundled Arduino topology; roll forward to reactivate the preserved
-persistent document.
+`push-conf` is an explicit local-wins maintenance action. Do not edit
+configuration in the web UI while it is running, and restart the backend after
+it completes so the new folder is loaded. `pull-conf` validates server runtime
+configuration without requiring workstation-only device secrets; add any
+missing Wi-Fi secrets locally before compiling or uploading firmware.
+
+On the server, editable configuration is stored under persistent server-root
+`data/`, outside immutable release directories.
+
+This change also moves `backend.json` into that persistent directory. Before
+the first deployment containing this supervisor version, run `make push-conf`.
+The first `tools/server-push` installs the new supervisor and stops with a
+restart instruction before publishing an incompatible release. Restart the
+external `server-loop` process once, then rerun `tools/server-push`; later
+deployments need no migration step.
 
 Bootstrap the permanent watcher once on the server from the FTP root:
 
@@ -275,8 +284,8 @@ Bootstrap the permanent watcher once on the server from the FTP root:
 python3 /train/deploy/server-loop --root /train
 ```
 
-`server-push` uploads this bootstrap script alongside every release. Run it
-under the server's process supervisor so it survives logout and reboot. The FTP
+`server-push` uploads this bootstrap script before every release. Run it under
+the server's process supervisor so it survives logout and reboot. The FTP
 `remote_dir` must map to `<server root>/deploy`; for the example above that is
 `/train/deploy`. The loop verifies and prepares each release in `releases/`,
 starts the candidate before atomically updating `current`, and writes supervisor,
