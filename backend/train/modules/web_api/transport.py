@@ -16,7 +16,6 @@ from automation_tree import (
     CURRENT_AUTOMATION_DOCUMENT_VERSION,
 )
 
-from train.ble_scan import BleScanUnavailable
 from train.configuration import ConfigurationConflict, ConfigurationError
 from train.core.event_bus import CommandFailed, CommandResourceNotFound, EventBus
 from train.domain import (
@@ -335,8 +334,6 @@ class WebApiServer:
 
         try:
             devices = await self._ble_scan()
-        except BleScanUnavailable as exc:
-            return web.json_response({"error": str(exc)}, status=409)
         except asyncio.CancelledError:
             raise
         except Exception:

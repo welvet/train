@@ -10,7 +10,7 @@ from typing import Any
 
 from bleak import BleakClient
 
-from train.ble_scan import BleScanUnavailable, HUB_SERVICE_UUID, scan_lego_hubs
+from train.ble_scan import HUB_SERVICE_UUID, scan_lego_hubs
 from train.core.event_bus import EventBus
 from train.core.module import Module
 from train.domain import (
@@ -56,7 +56,6 @@ class LegoBleModule(Module):
         self._clients: dict[str, BleakClient] = {}
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._adapter_condition = asyncio.Condition()
-        self._connection_attempts = 0
         self._scan_task: asyncio.Task[list[dict[str, object]]] | None = None
         self._battery: dict[str, int] = {}
         self._voltage: dict[str, float] = {}
@@ -111,12 +110,6 @@ class LegoBleModule(Module):
             task.exception()
 
     async def _scan_exclusively(self) -> list[dict[str, object]]:
-        async with self._adapter_condition:
-            if self._clients or self._connection_attempts:
-                raise BleScanUnavailable(
-                    "Disconnect or power down connected train hubs and wait for "
-                    "connection attempts to finish before scanning"
-                )
         return await scan_lego_hubs()
 
     async def _notify_adapter_available(self) -> None:
@@ -126,7 +119,6 @@ class LegoBleModule(Module):
     async def _connect(self, train_name: str, client: BleakClient) -> None:
         async with self._adapter_condition:
             await self._adapter_condition.wait_for(lambda: self._scan_task is None)
-            self._connection_attempts += 1
         connected = False
         try:
             await client.connect()
@@ -135,7 +127,6 @@ class LegoBleModule(Module):
             async with self._adapter_condition:
                 if connected:
                     self._clients[train_name] = client
-                self._connection_attempts -= 1
                 self._adapter_condition.notify_all()
 
     async def _maintain_connection(self, train_name: str, ble_address: str) -> None:
