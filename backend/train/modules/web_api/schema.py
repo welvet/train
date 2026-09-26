@@ -506,7 +506,6 @@ def openapi_document() -> dict[str, object]:
                                 }
                             },
                         },
-                        "409": _error_response("BLE adapter is in use"),
                         "503": _error_response("BLE scanning unavailable or failed"),
                     },
                 }

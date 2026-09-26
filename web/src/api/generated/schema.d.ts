@@ -391,15 +391,6 @@ export interface operations {
                     "application/json": components["schemas"]["BleScanResponse"];
                 };
             };
-            /** @description BLE adapter is in use */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiError"];
-                };
-            };
             /** @description BLE scanning unavailable or failed */
             503: {
                 headers: {

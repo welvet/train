@@ -6,7 +6,6 @@ from unittest.mock import patch
 
 import pytest
 
-from train.ble_scan import BleScanUnavailable
 from train.core.event_bus import EventBus
 from train.domain import (
     Event,
@@ -129,7 +128,7 @@ async def test_cancelled_caller_does_not_cancel_shared_scan(
     await mod.stop()
 
 
-async def test_scan_refuses_to_overlap_connected_hub(
+async def test_scan_allows_connected_hub(
     bus: EventBus,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -144,10 +143,8 @@ async def test_scan_refuses_to_overlap_connected_hub(
     mod = LegoBleModule(bus, train_map={})
     mod._clients["express"] = FakeBleakClient("AA:BB")  # type: ignore[assignment]
 
-    with pytest.raises(BleScanUnavailable, match="power down connected train hubs"):
-        await mod.scan()
-
-    assert not called
+    assert await mod.scan() == []
+    assert called
     await mod.stop()
 
 

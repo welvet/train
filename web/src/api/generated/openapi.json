@@ -926,16 +926,6 @@
             },
             "description": "Nearby LEGO Powered Up BLE hubs"
           },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiError"
-                }
-              }
-            },
-            "description": "BLE adapter is in use"
-          },
           "503": {
             "content": {
               "application/json": {
