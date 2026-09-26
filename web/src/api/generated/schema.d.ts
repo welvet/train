@@ -11,7 +11,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        get: operations["getAutomation"];
         put: operations["replaceAutomation"];
         post?: never;
         delete?: never;
@@ -191,6 +191,11 @@ export interface components {
         AutomationState: {
             halted: boolean;
         };
+        /** @description Server-owned automation document for deployment pull-back */
+        AutomationTransfer: {
+            document: components["schemas"]["AutomationDocument"];
+            modified_at: number;
+        };
         AutomationUpdateResponse: {
             automation: components["schemas"]["AutomationSnapshot"];
         };
@@ -322,6 +327,35 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    getAutomation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Server-owned automation configuration */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutomationTransfer"];
+                };
+            };
+            /** @description Automation runtime unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+        };
+    };
     replaceAutomation: {
         parameters: {
             query?: never;

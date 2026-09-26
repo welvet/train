@@ -153,6 +153,15 @@ class AutomationModule(Module):
             "statuses": [asdict(status) for status in self._runner.statuses()],
         }
 
+    async def transfer_snapshot(self) -> dict[str, object]:
+        """Return one durable automation document snapshot for deployment."""
+        async with self._replace_lock:
+            modified_at = self._path.stat().st_mtime_ns / 1_000_000_000
+            return {
+                "modified_at": modified_at,
+                "document": copy.deepcopy(self._document_json),
+            }
+
     def subscribe_changes(self, handler: Callable[[], None]) -> None:
         self._change_handlers.add(handler)
 

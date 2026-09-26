@@ -33,6 +33,12 @@ RUNTIME_DATA_FILES = (
     "arduinos.json",
     "automations.json",
 )
+# The provisioning workstation owns its Arduino definition. The running server
+# owns railway topology and automation, which operators can edit through its UI.
+# Keep this policy here (rather than timestamp arbitration) so a deployment can
+# never unexpectedly make a local edit win over an operator edit on the server.
+SERVER_PULL_DOCUMENTS = ("trains", "automations")
+SERVER_PUSH_DOCUMENTS = ("arduinos",)
 LEGACY_AUTOMATION_FILE = "automation.py"
 WEB_BUILD_INPUTS = (
     "app",
@@ -139,86 +145,81 @@ def load_deployment(root: Path | None = None) -> DeploymentConfig:
     )
 
 
-def synchronize_configuration(
+def synchronize_deployment_configuration(
     config: DeploymentConfig,
     workspace: Path,
 ) -> dict[str, str]:
-    """Synchronize editable documents with the running backend."""
-    endpoint = config.health_url.rstrip("/") + "/api/configuration"
-    return {
-        name: _synchronize_document(endpoint, workspace, name)
-        for name in ("trains", "arduinos")
+    """Pull server-owned documents before building a release.
+
+    A missing endpoint denotes a bootstrap deployment; local files are left
+    unchanged so they can seed a server that has not yet exposed the document.
+    This intentionally has no upload path.
+    """
+    results = {
+        name: _pull_server_document(config.health_url.rstrip("/"), workspace, name)
+        for name in SERVER_PULL_DOCUMENTS
     }
+    results.update({
+        name: _push_local_document(config.health_url.rstrip("/"), workspace, name)
+        for name in SERVER_PUSH_DOCUMENTS
+    })
+    return results
 
 
-def _synchronize_document(endpoint: str, workspace: Path, name: str) -> str:
+def _pull_server_document(base_url: str, workspace: Path, name: str) -> str:
     local_path = workspace / f"{name}.json"
     for _ in range(3):
-        local = _local_configuration_document(local_path, workspace, name)
-        remote = _fetch_configuration(endpoint)
+        local = _local_json_document(local_path)
+        remote = _fetch_server_document(base_url, name)
         if remote is None:
             return "unavailable"
-        remote_document = _configuration_document(
-            remote,
-            name,
-            missing_ok=name == "arduinos",
-        )
-        if remote_document is None:
-            return "unavailable"
-        if local != _local_configuration_document(local_path, workspace, name):
+        if local != _local_json_document(local_path):
             continue
-        if remote_document.value == local.value:
+        if remote.value == local.value:
             return "unchanged"
-        if remote_document.modified_at > local.modified_at:
-            if local != _local_configuration_document(local_path, workspace, name):
-                continue
-            _atomic_write_json(
-                local_path,
-                remote_document.value,
-                remote_document.modified_at,
-            )
-            return "downloaded"
-        if remote_document.modified_at == local.modified_at:
-            raise RuntimeError(
-                f"Configuration sync found different {name}.json documents with the "
-                "same timestamp; touch the intended winner and retry"
-            )
-
-        uploaded = _upload_configuration(
-            endpoint,
-            name,
-            local,
-            remote_document.modified_at,
-        )
-        if (
-            uploaded is None
-            or local != _local_configuration_document(local_path, workspace, name)
-        ):
-            continue
-        _atomic_write_json(
-            local_path,
-            uploaded.value,
-            uploaded.modified_at,
-        )
-        return "uploaded"
+        _atomic_write_json(local_path, remote.value, remote.modified_at)
+        return "downloaded"
     raise RuntimeError(
-        f"{name}.json changed repeatedly during synchronization; retry when edits stop"
+        f"{name}.json changed repeatedly while pulling from the server; retry when edits stop"
     )
 
 
-def _local_configuration_document(
-    path: Path,
-    workspace: Path,
-    name: str,
-) -> SyncedDocument:
+def _push_local_document(base_url: str, workspace: Path, name: str) -> str:
+    local_path = workspace / f"{name}.json"
+    endpoint = f"{base_url}/api/configuration"
+    for _ in range(3):
+        local = _local_json_document(local_path)
+        remote = _fetch_configuration(endpoint)
+        if remote is None:
+            return "unavailable"
+        remote_document = _configuration_document(remote, name, missing_ok=True)
+        if remote_document is None:
+            return "unavailable"
+        if local.value == remote_document.value:
+            return "unchanged"
+        modified_at = max(time.time(), local.modified_at, remote_document.modified_at + 0.001)
+        if _upload_configuration(endpoint, name, local.value, remote_document.modified_at, modified_at):
+            if local == _local_json_document(local_path):
+                return "uploaded"
+    raise RuntimeError(
+        f"{name}.json changed repeatedly while pushing to the server; retry when edits stop"
+    )
+
+
+def _local_json_document(path: Path) -> SyncedDocument:
     for _ in range(3):
         before = path.stat()
-        value = read_json(f"{name}.json", workspace)
+        try:
+            value = json.loads(path.read_text())
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"Local {path.name} is invalid JSON") from exc
+        if not isinstance(value, dict):
+            raise RuntimeError(f"Local {path.name} must be a JSON object")
         after = path.stat()
         if _file_identity(before) == _file_identity(after):
             return SyncedDocument(after.st_mtime_ns / 1_000_000_000, value)
     raise RuntimeError(
-        f"Local {name}.json changed repeatedly while being read; retry when edits stop"
+        f"Local {path.name} changed repeatedly while being read; retry when edits stop"
     )
 
 
@@ -226,16 +227,31 @@ def _file_identity(value: os.stat_result) -> tuple[int, int, int, int]:
     return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns)
 
 
+def _fetch_server_document(base_url: str, name: str) -> SyncedDocument | None:
+    endpoint = (
+        f"{base_url}/api/configuration"
+        if name == "trains"
+        else f"{base_url}/api/automation"
+    )
+    remote = _fetch_json(endpoint, missing_ok=name == "automations")
+    if remote is None:
+        return None
+    if name == "trains":
+        return _configuration_document(remote, "trains")
+    return _automation_document(remote)
+
+
 def _fetch_configuration(endpoint: str) -> dict[str, object] | None:
+    return _fetch_json(endpoint)
+
+
+def _fetch_json(endpoint: str, *, missing_ok: bool = False) -> dict[str, object] | None:
     try:
-        request = urllib.request.Request(
-            endpoint,
-            headers={"Accept": "application/json"},
-        )
+        request = urllib.request.Request(endpoint, headers={"Accept": "application/json"})
         with urllib.request.urlopen(request, timeout=5) as response:
             contents = response.read()
     except urllib.error.HTTPError as exc:
-        if exc.code == 404:
+        if exc.code == 404 or (missing_ok and exc.code == 405):
             return None
         raise RuntimeError(
             f"Configuration sync failed: backend returned HTTP {exc.code}"
@@ -247,6 +263,11 @@ def _fetch_configuration(endpoint: str) -> dict[str, object] | None:
     try:
         remote = json.loads(contents)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        # Before GET /api/automation existed, the backend's static catch-all
+        # served index.html for this path. Recognize only that known bootstrap
+        # response; malformed JSON from an API remains a deployment failure.
+        if missing_ok and contents.lstrip().lower().startswith(b"<!doctype html"):
+            return None
         raise RuntimeError(
             "Configuration sync failed: backend returned invalid JSON"
         ) from exc
@@ -258,46 +279,25 @@ def _fetch_configuration(endpoint: str) -> dict[str, object] | None:
 def _upload_configuration(
     endpoint: str,
     name: str,
-    local: SyncedDocument,
+    value: dict[str, object],
     base_modified_at: float,
-) -> SyncedDocument | None:
-    payload = {
-        "version": 1,
-        "documents": {
-            name: {
-                "base_modified_at": base_modified_at,
-                "modified_at": local.modified_at,
-                "value": local.value,
-            }
-        },
-    }
+    modified_at: float,
+) -> bool:
+    payload = {"version": 1, "documents": {name: {
+        "base_modified_at": base_modified_at, "modified_at": modified_at, "value": value,
+    }}}
     request = urllib.request.Request(
-        endpoint,
-        data=(json.dumps(payload) + "\n").encode(),
-        headers={
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-        },
-        method="PUT",
+        endpoint, data=(json.dumps(payload) + "\n").encode(),
+        headers={"Accept": "application/json", "Content-Type": "application/json"}, method="PUT",
     )
     try:
-        with urllib.request.urlopen(request, timeout=5) as response:
-            return _configuration_document(json.loads(response.read()), name)
+        with urllib.request.urlopen(request, timeout=5):
+            return True
     except urllib.error.HTTPError as exc:
         if exc.code == 409:
-            return None
-        try:
-            detail = json.loads(exc.read()).get("error")
-        except (AttributeError, json.JSONDecodeError, UnicodeDecodeError):
-            detail = None
-        message = detail if isinstance(detail, str) else f"HTTP {exc.code}"
-        raise RuntimeError(f"Configuration upload failed: {message}") from exc
-    except (
-        OSError,
-        UnicodeDecodeError,
-        json.JSONDecodeError,
-        urllib.error.URLError,
-    ) as exc:
+            return False
+        raise RuntimeError(f"Configuration upload failed: HTTP {exc.code}") from exc
+    except (OSError, urllib.error.URLError) as exc:
         raise RuntimeError("Configuration upload failed") from exc
 
 
@@ -330,6 +330,22 @@ def _configuration_document(
         or not isinstance(document, dict)
     ):
         raise RuntimeError(f"Backend returned an invalid {name} configuration")
+    return SyncedDocument(float(modified_at), document)
+
+
+def _automation_document(value: object) -> SyncedDocument:
+    if not isinstance(value, dict):
+        raise RuntimeError("Backend returned an unsupported automation format")
+    modified_at = value.get("modified_at")
+    document = value.get("document")
+    if (
+        not isinstance(modified_at, (int, float))
+        or isinstance(modified_at, bool)
+        or not math.isfinite(modified_at)
+        or modified_at <= 0
+        or not isinstance(document, dict)
+    ):
+        raise RuntimeError("Backend returned an invalid automation configuration")
     return SyncedDocument(float(modified_at), document)
 
 

@@ -54,6 +54,16 @@ def openapi_document() -> dict[str, object]:
         "required": ["automation"],
         "additionalProperties": False,
     }
+    schemas["AutomationTransfer"] = {
+        "type": "object",
+        "description": "Server-owned automation document for deployment pull-back",
+        "properties": {
+            "modified_at": {"type": "number", "exclusiveMinimum": 0},
+            "document": {"$ref": "#/components/schemas/AutomationDocument"},
+        },
+        "required": ["modified_at", "document"],
+        "additionalProperties": False,
+    }
     schemas["TrainConfiguration"] = {
         "type": "object",
         "properties": {
@@ -403,6 +413,22 @@ def openapi_document() -> dict[str, object]:
                 }
             },
             "/api/automation": {
+                "get": {
+                    "operationId": "getAutomation",
+                    "responses": {
+                        "200": {
+                            "description": "Server-owned automation configuration",
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "$ref": "#/components/schemas/AutomationTransfer"
+                                    }
+                                }
+                            },
+                        },
+                        "503": _error_response("Automation runtime unavailable"),
+                    },
+                },
                 "put": {
                     "operationId": "replaceAutomation",
                     "requestBody": {

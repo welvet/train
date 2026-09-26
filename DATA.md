@@ -125,6 +125,12 @@ they become active:
 - serial port and FQBN affect only the canonical provisioning workstation and
   must be synchronized there before running `tools/arduino`.
 
+For a deployed server, the canonical Arduino file remains on that provisioning
+workstation: every `tools/server-push` uploads its local `arduinos.json` to the
+server. A server UI edit is useful for immediate runtime changes, but it will
+be replaced by that local file on the next deployment; make persistent Arduino
+changes in the provisioning workspace first.
+
 The API never reads or exposes `secrets.json`. Removing a device decommissions
 its flashed board: the backend rejects that device ID after restart until the
 entry is restored or the board is reprovisioned.
@@ -251,16 +257,23 @@ with a unique publication attempt is updated last to trigger activation. The
 command returns only after both the FTP activation marker and the backend's
 release-aware health endpoint agree.
 
-Before building, `server-push` synchronizes `trains.json` and `arduinos.json`
-independently with the running backend. If a document differs, the file with the newer modification
-timestamp replaces the older one; equal contents need no copy. Keep the
-deployment machine and server clocks synchronized. A backend without the
-configuration endpoint is treated as a bootstrap deployment and uses the local
-files. A PR #32 backend whose version 1 response contains trains but not
-Arduinos is likewise an Arduino-only bootstrap. Other backend and response
-failures stop deployment. On the server, editable trains and Arduino devices
-are stored under persistent server-root `data/`, outside immutable release
-directories.
+Before building, `server-push` applies a fixed, one-way configuration policy:
+
+- `trains.json` and `automations.json` are pulled from the running server. The
+  server is authoritative for UI-edited railway topology and automation.
+- `arduinos.json` is pushed from the local provisioning workstation to the
+  running server. The workstation remains authoritative for board ports,
+  firmware settings, and server connection settings; it is never pulled back
+  or replaced by server state. `backend.json` is a local-only release input.
+- `deployment.json` and `secrets.json` are local-only and are never uploaded,
+  downloaded, or included in a release.
+
+There is no timestamp-based upload or conflict resolution. If the server lacks
+the relevant read endpoint (such as on a first deployment), the matching local
+file is retained strictly as bootstrap input. Other server or response failures
+stop deployment. On the server, editable trains, Arduino devices, and
+automations are stored under persistent server-root `data/`, outside immutable
+release directories.
 
 After deploying the supervisor that adds persistent Arduino configuration,
 restart the external process supervising `server-loop` once. Uploading the new
