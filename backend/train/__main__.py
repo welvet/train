@@ -102,6 +102,7 @@ def main() -> None:
         port=config.backend.api_port,
         readiness_check=lambda: automation_module.healthy,
         automation_snapshot=automation_module.snapshot,
+        automation_transfer=automation_module.transfer_snapshot,
         automation_update=update_automation,
         automation_subscribe=automation_module.subscribe_changes,
         automation_unsubscribe=automation_module.unsubscribe_changes,

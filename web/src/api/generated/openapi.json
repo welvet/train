@@ -340,6 +340,24 @@
         ],
         "type": "object"
       },
+      "AutomationTransfer": {
+        "additionalProperties": false,
+        "description": "Server-owned automation document for deployment pull-back",
+        "properties": {
+          "document": {
+            "$ref": "#/components/schemas/AutomationDocument"
+          },
+          "modified_at": {
+            "exclusiveMinimum": 0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "modified_at",
+          "document"
+        ],
+        "type": "object"
+      },
       "AutomationUpdateResponse": {
         "additionalProperties": false,
         "properties": {
@@ -856,6 +874,31 @@
   "openapi": "3.1.0",
   "paths": {
     "/api/automation": {
+      "get": {
+        "operationId": "getAutomation",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutomationTransfer"
+                }
+              }
+            },
+            "description": "Server-owned automation configuration"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Automation runtime unavailable"
+          }
+        }
+      },
       "put": {
         "operationId": "replaceAutomation",
         "requestBody": {

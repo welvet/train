@@ -131,6 +131,43 @@ async def test_openapi_exposes_state_and_public_event_contract(
     }
 
 
+async def test_automation_endpoint_exposes_server_owned_document(
+    bus: EventBus,
+) -> None:
+    document = {"version": 4, "signals": [], "rules": []}
+
+    async def transfer() -> dict[str, object]:
+        return {"modified_at": 1.0, "document": document}
+
+    module = WebApiModule(
+        bus,
+        host="127.0.0.1",
+        port=0,
+        automation_transfer=transfer,
+    )
+    await module.start()
+    assert module._app is not None
+    transfer_client = TestClient(TestServer(module._app))
+    await transfer_client.start_server()
+    try:
+        response = await transfer_client.get("/api/automation")
+
+        assert response.status == 200
+        assert await response.json() == {"modified_at": 1.0, "document": document}
+    finally:
+        await transfer_client.close()
+        await module.stop()
+
+
+async def test_automation_transfer_endpoint_requires_durable_provider(
+    client: TestClient,
+) -> None:
+    response = await client.get("/api/automation")
+
+    assert response.status == 503
+    assert await response.json() == {"error": "automation configuration is unavailable"}
+
+
 async def test_ble_scan_endpoint_returns_discovered_hubs(bus: EventBus) -> None:
     async def scan() -> list[dict[str, object]]:
         return [{"address": "AA:BB", "name": "Express"}]

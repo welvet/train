@@ -44,6 +44,7 @@ class WebApiServer:
         port: int,
         readiness_check: Callable[[], bool],
         automation_snapshot: Callable[[], dict[str, object]] | None = None,
+        automation_transfer: Callable[[], Awaitable[dict[str, object]]] | None = None,
         automation_update: Callable[[str], Awaitable[dict[str, object]]] | None = None,
         automation_subscribe: Callable[[Callable[[], None]], None] | None = None,
         automation_unsubscribe: Callable[[Callable[[], None]], None] | None = None,
@@ -59,6 +60,7 @@ class WebApiServer:
         self._port = port
         self._readiness_check = readiness_check
         self._automation_snapshot = automation_snapshot or _empty_automation_snapshot
+        self._automation_transfer = automation_transfer
         self._automation_update = automation_update
         self._automation_subscribe = automation_subscribe
         self._automation_unsubscribe = automation_unsubscribe
@@ -90,6 +92,7 @@ class WebApiServer:
         app.router.add_get("/api/state/stream", self._handle_state_stream)
         app.router.add_post("/api/events", self._handle_event)
         app.router.add_put("/api/automation", self._handle_automation_update)
+        app.router.add_get("/api/automation", self._handle_automation)
         app.router.add_get("/api/configuration", self._handle_configuration)
         app.router.add_put("/api/configuration", self._handle_configuration_update)
         app.router.add_post("/api/ble/scan", self._handle_ble_scan)
@@ -291,6 +294,19 @@ class WebApiServer:
         except (ConfigurationError, OSError) as exc:
             return web.json_response({"error": str(exc)}, status=500)
         return web.json_response(configuration)
+
+    async def _handle_automation(self, request: web.Request) -> web.Response:
+        """Return the persisted automation document for deployment pull-back."""
+        if self._automation_transfer is None:
+            return web.json_response(
+                {"error": "automation configuration is unavailable"}, status=503
+            )
+        snapshot = await self._automation_transfer()
+        if not isinstance(snapshot.get("document"), dict):
+            return web.json_response(
+                {"error": "automation configuration is unavailable"}, status=503
+            )
+        return web.json_response(snapshot)
 
     async def _handle_configuration_update(
         self, request: web.Request

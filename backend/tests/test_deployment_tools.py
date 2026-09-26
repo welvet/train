@@ -18,8 +18,8 @@ from _deployment import (
     DeploymentConfig,
     RuntimeTarget,
     build_bundle,
+    synchronize_deployment_configuration,
     publish_bundle,
-    synchronize_configuration,
 )
 
 
@@ -235,7 +235,7 @@ def _configuration_snapshot(modified_at: float, train_id: str) -> dict:
     }
 
 
-def test_configuration_sync_downloads_newer_backend_document(
+def test_server_pull_replaces_server_owned_documents(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     workspace = tmp_path / "data"
@@ -253,145 +253,120 @@ def test_configuration_sync_downloads_newer_backend_document(
         ]
     }))
     trains.touch()
-    local_modified_at = trains.stat().st_mtime
-    remote = _configuration_snapshot(local_modified_at + 10, "remote")
-    monkeypatch.setattr(
-        _deployment.urllib.request,
-        "urlopen",
-        lambda request, timeout: FakeHttpResponse(json.dumps(remote).encode()),
-    )
+    remote = _configuration_snapshot(trains.stat().st_mtime + 10, "remote")
+    automation = {"modified_at": trains.stat().st_mtime + 20, "document": {
+        "version": 4, "signals": [], "rules": [{"id": "remote"}]
+    }}
 
-    result = synchronize_configuration(_deployment_config(), workspace)
+    def urlopen(request, timeout):
+        return FakeHttpResponse(json.dumps(
+            remote if request.full_url.endswith("/api/configuration") else automation
+        ).encode())
 
-    assert result == {"trains": "downloaded", "arduinos": "unavailable"}
+    monkeypatch.setattr(_deployment.urllib.request, "urlopen", urlopen)
+    result = synchronize_deployment_configuration(_deployment_config(), workspace)
+
+    assert result == {
+        "trains": "downloaded", "automations": "downloaded", "arduinos": "unavailable"
+    }
     assert json.loads(trains.read_text()) == remote["documents"]["trains"]["value"]
-    assert trains.stat().st_mtime == pytest.approx(local_modified_at + 10)
+    assert json.loads((workspace / "automations.json").read_text()) == automation["document"]
 
 
-def test_configuration_sync_uploads_newer_local_document(
+def test_configuration_bootstrap_retains_local_arduinos(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     workspace = tmp_path / "data"
     workspace.mkdir()
     _write_workspace(workspace)
     trains = workspace / "trains.json"
-    local_modified_at = trains.stat().st_mtime
-    remote = _configuration_snapshot(local_modified_at - 10, "remote")
+    local_arduinos = (workspace / "arduinos.json").read_text()
+    remote = _configuration_snapshot(trains.stat().st_mtime - 10, "remote")
     requests: list[object] = []
 
     def urlopen(request, timeout):
         requests.append(request)
-        if request.get_method() == "GET":
-            return FakeHttpResponse(json.dumps(remote).encode())
-        return FakeHttpResponse(json.dumps(
-            _configuration_snapshot(local_modified_at, "train_1")
-        ).encode())
+        response = remote if request.full_url.endswith("/api/configuration") else {
+            "modified_at": 1, "document": {"version": 4, "signals": [], "rules": []}
+        }
+        return FakeHttpResponse(json.dumps(response).encode())
 
     monkeypatch.setattr(_deployment.urllib.request, "urlopen", urlopen)
-
-    result = synchronize_configuration(_deployment_config(), workspace)
-
-    assert result == {"trains": "uploaded", "arduinos": "unavailable"}
-    assert [request.get_method() for request in requests] == ["GET", "PUT", "GET"]
-    payload = json.loads(requests[1].data)
-    assert payload["documents"]["trains"]["base_modified_at"] == pytest.approx(
-        local_modified_at - 10
-    )
-    assert payload["documents"]["trains"]["value"] == {
-        "trains": [{"id": "train_1", "ble_address": "AA:BB", "tag_ids": []}]
+    assert synchronize_deployment_configuration(_deployment_config(), workspace) == {
+        "trains": "downloaded", "automations": "unchanged", "arduinos": "unavailable"
     }
-    assert json.loads(trains.read_text()) == (
-        _configuration_snapshot(local_modified_at, "train_1")["documents"]
-        ["trains"]["value"]
-    )
+    assert all(request.get_method() == "GET" for request in requests)
+    assert (workspace / "arduinos.json").read_text() == local_arduinos
 
 
-def test_configuration_sync_retries_when_local_file_changes_during_fetch(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    workspace = tmp_path / "data"
-    workspace.mkdir()
-    _write_workspace(workspace)
-    trains = workspace / "trains.json"
-    initial_modified_at = trains.stat().st_mtime
-    remote = _configuration_snapshot(initial_modified_at + 10, "remote")
-    newest = _configuration_snapshot(initial_modified_at + 20, "newest")
-    get_count = 0
-
-    def urlopen(request, timeout):
-        nonlocal get_count
-        if request.get_method() == "GET":
-            get_count += 1
-            if get_count == 1:
-                _deployment._atomic_write_json(
-                    trains,
-                    newest["documents"]["trains"]["value"],
-                    initial_modified_at + 20,
-                )
-            return FakeHttpResponse(json.dumps(remote).encode())
-        return FakeHttpResponse(json.dumps(newest).encode())
-
-    monkeypatch.setattr(_deployment.urllib.request, "urlopen", urlopen)
-
-    result = synchronize_configuration(_deployment_config(), workspace)
-
-    assert result == {"trains": "uploaded", "arduinos": "unavailable"}
-    assert get_count == 3
-    assert json.loads(trains.read_text()) == newest["documents"]["trains"]["value"]
-
-
-def test_configuration_sync_ignores_timestamp_when_contents_match(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    workspace = tmp_path / "data"
-    workspace.mkdir()
-    _write_workspace(workspace)
-    trains = workspace / "trains.json"
-    local = json.loads(trains.read_text())
-    remote = {
-        "version": 1,
-        "documents": {
-            "trains": {
-                "modified_at": trains.stat().st_mtime + 10,
-                "restart_required": True,
-                "value": local,
-            }
-        },
-    }
-    monkeypatch.setattr(
-        _deployment.urllib.request,
-        "urlopen",
-        lambda request, timeout: FakeHttpResponse(json.dumps(remote).encode()),
-    )
-
-    assert synchronize_configuration(_deployment_config(), workspace) == {
-        "trains": "unchanged",
-        "arduinos": "unavailable",
-    }
-
-
-def test_configuration_sync_uploads_arduinos_independently(
+def test_configuration_bootstraps_when_old_server_rejects_automation_get(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     workspace = tmp_path / "data"
     workspace.mkdir()
     _write_workspace(workspace)
     trains = json.loads((workspace / "trains.json").read_text())
-    arduinos = json.loads((workspace / "arduinos.json").read_text())
-    trains_modified_at = (workspace / "trains.json").stat().st_mtime
-    arduinos_modified_at = (workspace / "arduinos.json").stat().st_mtime
+    response = {
+        "version": 1,
+        "documents": {
+            "trains": {"modified_at": 1, "restart_required": True, "value": trains}
+        },
+    }
+
+    def urlopen(request, timeout):
+        if request.full_url.endswith("/api/automation"):
+            raise urllib.error.HTTPError(request.full_url, 405, "Method Not Allowed", {}, None)
+        return FakeHttpResponse(json.dumps(response).encode())
+
+    monkeypatch.setattr(_deployment.urllib.request, "urlopen", urlopen)
+
+    assert synchronize_deployment_configuration(_deployment_config(), workspace) == {
+        "trains": "unchanged", "automations": "unavailable", "arduinos": "unavailable"
+    }
+
+
+def test_configuration_bootstraps_when_old_server_serves_automation_html(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "data"
+    workspace.mkdir()
+    _write_workspace(workspace)
+    trains = json.loads((workspace / "trains.json").read_text())
+    response = {
+        "version": 1,
+        "documents": {
+            "trains": {"modified_at": 1, "restart_required": True, "value": trains}
+        },
+    }
+
+    def urlopen(request, timeout):
+        if request.full_url.endswith("/api/automation"):
+            return FakeHttpResponse(b"<!doctype html><html></html>")
+        return FakeHttpResponse(json.dumps(response).encode())
+
+    monkeypatch.setattr(_deployment.urllib.request, "urlopen", urlopen)
+
+    assert synchronize_deployment_configuration(_deployment_config(), workspace) == {
+        "trains": "unchanged", "automations": "unavailable", "arduinos": "unavailable"
+    }
+
+
+def test_configuration_pushes_local_arduinos_to_existing_server(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "data"
+    workspace.mkdir()
+    _write_workspace(workspace)
+    trains = json.loads((workspace / "trains.json").read_text())
+    local_arduinos = json.loads((workspace / "arduinos.json").read_text())
     remote = {
         "version": 1,
         "documents": {
-            "trains": {
-                "modified_at": trains_modified_at,
-                "restart_required": True,
-                "value": trains,
-            },
+            "trains": {"modified_at": 1, "restart_required": True, "value": trains},
             "arduinos": {
-                "modified_at": arduinos_modified_at - 10,
+                "modified_at": 1,
                 "restart_required": True,
-                "value": {"devices": {"remote": {}}},
+                "value": {"devices": {}},
             },
         },
     }
@@ -399,37 +374,27 @@ def test_configuration_sync_uploads_arduinos_independently(
 
     def urlopen(request, timeout):
         requests.append(request)
-        if request.get_method() == "GET":
-            return FakeHttpResponse(json.dumps(remote).encode())
-        uploaded = json.loads(request.data)
-        response = {
-            "version": 1,
-            "documents": {
-                "arduinos": {
-                    "modified_at": arduinos_modified_at,
-                    "restart_required": True,
-                    "value": uploaded["documents"]["arduinos"]["value"],
-                }
-            },
+        if request.get_method() == "PUT":
+            return FakeHttpResponse(b"{}")
+        value = remote if request.full_url.endswith("/api/configuration") else {
+            "modified_at": 1,
+            "document": {"version": 4, "signals": [], "rules": []},
         }
-        return FakeHttpResponse(json.dumps(response).encode())
+        return FakeHttpResponse(json.dumps(value).encode())
 
     monkeypatch.setattr(_deployment.urllib.request, "urlopen", urlopen)
 
-    assert synchronize_configuration(_deployment_config(), workspace) == {
-        "trains": "unchanged",
-        "arduinos": "uploaded",
+    assert synchronize_deployment_configuration(_deployment_config(), workspace) == {
+        "trains": "unchanged", "automations": "unchanged", "arduinos": "uploaded"
     }
-    put_request = next(
-        request for request in requests if request.get_method() == "PUT"
-    )
-    payload = json.loads(put_request.data)
-    assert set(payload["documents"]) == {"arduinos"}
-    assert payload["documents"]["arduinos"]["value"] == arduinos
+    upload = next(request for request in requests if request.get_method() == "PUT")
+    payload = json.loads(upload.data)
+    assert payload["documents"]["arduinos"]["value"] == local_arduinos
+    assert payload["documents"]["arduinos"]["modified_at"] > 1
 
 
 @pytest.mark.parametrize("modified_at", [0, float("nan"), float("inf")])
-def test_configuration_sync_rejects_invalid_backend_timestamp(
+def test_server_pull_rejects_invalid_backend_timestamp(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     modified_at: float,
@@ -445,10 +410,10 @@ def test_configuration_sync_rejects_invalid_backend_timestamp(
     )
 
     with pytest.raises(RuntimeError, match="invalid trains configuration"):
-        synchronize_configuration(_deployment_config(), workspace)
+        synchronize_deployment_configuration(_deployment_config(), workspace)
 
 
-def test_configuration_sync_rejects_malformed_success_response(
+def test_server_pull_rejects_malformed_success_response(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -462,10 +427,10 @@ def test_configuration_sync_rejects_malformed_success_response(
     )
 
     with pytest.raises(RuntimeError, match="backend returned invalid JSON"):
-        synchronize_configuration(_deployment_config(), workspace)
+        synchronize_deployment_configuration(_deployment_config(), workspace)
 
 
-def test_arduino_bootstrap_rejects_non_pr32_document_shape(
+def test_server_pull_rejects_invalid_automation_response(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -491,11 +456,11 @@ def test_arduino_bootstrap_rejects_non_pr32_document_shape(
         lambda request, timeout: FakeHttpResponse(json.dumps(response).encode()),
     )
 
-    with pytest.raises(RuntimeError, match="unsupported configuration format"):
-        synchronize_configuration(_deployment_config(), workspace)
+    with pytest.raises(RuntimeError, match="invalid automation configuration"):
+        synchronize_deployment_configuration(_deployment_config(), workspace)
 
 
-def test_configuration_sync_fails_when_backend_is_unreachable(
+def test_server_pull_fails_when_backend_is_unreachable(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -509,7 +474,7 @@ def test_configuration_sync_fails_when_backend_is_unreachable(
     monkeypatch.setattr(_deployment.urllib.request, "urlopen", fail)
 
     with pytest.raises(RuntimeError, match="backend is unreachable"):
-        synchronize_configuration(_deployment_config(), workspace)
+        synchronize_deployment_configuration(_deployment_config(), workspace)
 
 
 def test_publish_updates_release_pointer_last(tmp_path: Path) -> None:
