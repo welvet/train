@@ -10,12 +10,18 @@ from train.core.event_bus import EventBus
 from train.domain import (
     Event,
     SetTrainSpeed,
+    ShutdownTrain,
     TrainConnected,
     TrainDisconnected,
     TrainSpeedChanged,
+    TrainShutdown,
     TrainStatus,
 )
-from train.modules.lego_ble import HUB_CHARACTERISTIC_UUID, LegoBleModule
+from train.modules.lego_ble import (
+    HUB_CHARACTERISTIC_UUID,
+    SHUTDOWN_COMMAND,
+    LegoBleModule,
+)
 
 
 class FakeBleakClient:
@@ -67,6 +73,14 @@ def _collect_events(bus: EventBus) -> list[Event]:
 
     bus.subscribe(Event, handler)
     return received
+
+
+async def _wait_for_writes(client: FakeBleakClient, count: int) -> None:
+    for _ in range(20):
+        if len(client.writes) >= count:
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"expected {count} BLE writes, got {len(client.writes)}")
 
 
 async def test_scan_coalesces_callers(
@@ -277,6 +291,139 @@ async def test_speed_command_writes_correct_characteristic(bus: EventBus) -> Non
     new_writes = client.writes[writes_before:]
     assert len(new_writes) == 1
     assert new_writes[0][0] == HUB_CHARACTERISTIC_UUID
+
+    await mod.stop()
+
+
+@patch(PATCH_TARGET, FakeBleakClient)
+async def test_shutdown_command_success(bus: EventBus) -> None:
+    events = _collect_events(bus)
+    mod = LegoBleModule(bus, train_map={"AA:BB": "thomas"})
+    await mod.start()
+    await asyncio.sleep(0.1)
+
+    client = mod._clients["thomas"]
+    assert isinstance(client, FakeBleakClient)
+    writes_before = len(client.writes)
+    command = ShutdownTrain(train_name="thomas")
+    publish = asyncio.create_task(bus.publish(command))
+    await _wait_for_writes(client, writes_before + 1)
+
+    assert client.writes[writes_before:] == [
+        (HUB_CHARACTERISTIC_UUID, SHUTDOWN_COMMAND)
+    ]
+    client.inject_notification(bytearray([0x04, 0x00, 0x02, 0x30]))
+    await publish
+    results = [e for e in events if isinstance(e, TrainShutdown)]
+    assert len(results) == 1
+    assert results[0].train_name == "thomas"
+    assert results[0].success is True
+    assert results[0].request_id == command.request_id
+
+    await mod.stop()
+
+
+@patch(PATCH_TARGET, FakeBleakClient)
+async def test_shutdown_command_disconnected_train(bus: EventBus) -> None:
+    events = _collect_events(bus)
+    mod = LegoBleModule(bus, train_map={})
+    await mod.start()
+
+    command = ShutdownTrain(train_name="thomas")
+    await bus.publish(command)
+
+    results = [e for e in events if isinstance(e, TrainShutdown)]
+    assert len(results) == 1
+    assert results[0].success is False
+    assert results[0].request_id == command.request_id
+
+    await mod.stop()
+
+
+@patch(PATCH_TARGET)
+async def test_shutdown_write_failure(mock_client_cls: type, bus: EventBus) -> None:
+    events = _collect_events(bus)
+    fake = FakeBleakClient("AA:BB")
+    mock_client_cls.return_value = fake  # type: ignore[attr-defined]
+    mod = LegoBleModule(bus, train_map={"AA:BB": "thomas"})
+    await mod.start()
+    await asyncio.sleep(0.1)
+
+    fake._should_fail_write = True
+    command = ShutdownTrain(train_name="thomas")
+    await bus.publish(command)
+
+    results = [e for e in events if isinstance(e, TrainShutdown)]
+    assert len(results) == 1
+    assert results[0].success is False
+    assert results[0].request_id == command.request_id
+
+    await mod.stop()
+
+
+@patch(PATCH_TARGET, FakeBleakClient)
+async def test_shutdown_command_reports_hub_error(bus: EventBus) -> None:
+    events = _collect_events(bus)
+    mod = LegoBleModule(bus, train_map={"AA:BB": "thomas"})
+    await mod.start()
+    await asyncio.sleep(0.1)
+
+    client = mod._clients["thomas"]
+    assert isinstance(client, FakeBleakClient)
+    writes_before = len(client.writes)
+    command = ShutdownTrain(train_name="thomas")
+    publish = asyncio.create_task(bus.publish(command))
+    await _wait_for_writes(client, writes_before + 1)
+    client.inject_notification(bytearray([0x05, 0x00, 0x05, 0x02, 0x05]))
+    await publish
+
+    results = [e for e in events if isinstance(e, TrainShutdown)]
+    assert len(results) == 1
+    assert results[0].success is False
+
+    await mod.stop()
+
+
+@patch(PATCH_TARGET, FakeBleakClient)
+async def test_shutdown_command_waits_past_generic_ack(bus: EventBus) -> None:
+    events = _collect_events(bus)
+    mod = LegoBleModule(bus, train_map={"AA:BB": "thomas"})
+    await mod.start()
+    await asyncio.sleep(0.1)
+
+    client = mod._clients["thomas"]
+    assert isinstance(client, FakeBleakClient)
+    writes_before = len(client.writes)
+    publish = asyncio.create_task(
+        bus.publish(ShutdownTrain(train_name="thomas"))
+    )
+    await _wait_for_writes(client, writes_before + 1)
+
+    client.inject_notification(bytearray([0x05, 0x00, 0x05, 0x02, 0x01]))
+    await asyncio.sleep(0)
+    assert not [e for e in events if isinstance(e, TrainShutdown)]
+
+    client.inject_notification(bytearray([0x04, 0x00, 0x02, 0x30]))
+    await publish
+    results = [e for e in events if isinstance(e, TrainShutdown)]
+    assert len(results) == 1
+    assert results[0].success is True
+
+    await mod.stop()
+
+
+@patch(PATCH_TARGET, FakeBleakClient)
+async def test_shutdown_command_without_confirmation_has_unknown_outcome(
+    bus: EventBus,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("train.modules.lego_ble.SHUTDOWN_CONFIRM_TIMEOUT", 0.01)
+    mod = LegoBleModule(bus, train_map={"AA:BB": "thomas"})
+    await mod.start()
+    await asyncio.sleep(0.1)
+
+    with pytest.raises(TimeoutError):
+        await bus.dispatch(ShutdownTrain(train_name="thomas"), timeout=0.03)
 
     await mod.stop()
 

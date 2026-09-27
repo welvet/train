@@ -14,10 +14,12 @@ from train.ble_scan import HUB_SERVICE_UUID, scan_lego_hubs
 from train.core.event_bus import EventBus
 from train.core.module import Module
 from train.domain import (
+    ShutdownTrain,
     SetTrainSpeed,
     TrainConnected,
     TrainDisconnected,
     TrainSpeedChanged,
+    TrainShutdown,
     TrainStatus,
 )
 
@@ -28,9 +30,13 @@ VOLTAGE_PORT = 0x3C
 RECONNECT_DELAY = 5.0
 POLL_INTERVAL = 1.0
 STATUS_INTERVAL = 5.0
+SHUTDOWN_CONFIRM_TIMEOUT = 2.0
+GENERIC_ERROR_MIN_CODE = 0x03
+GENERIC_ERROR_MAX_CODE = 0x08
 
 BATTERY_REQUEST = bytes([0x05, 0x00, 0x01, 0x06, 0x05])
 BATTERY_ENABLE_UPDATES = bytes([0x05, 0x00, 0x01, 0x06, 0x02])
+SHUTDOWN_COMMAND = bytes([0x04, 0x00, 0x02, 0x01])
 VOLTAGE_MAX_RAW = 3893.0
 VOLTAGE_MAX_V = 9.6
 
@@ -59,10 +65,17 @@ class LegoBleModule(Module):
         self._scan_task: asyncio.Task[list[dict[str, object]]] | None = None
         self._battery: dict[str, int] = {}
         self._voltage: dict[str, float] = {}
+        self._shutdown_confirmations: dict[
+            str, asyncio.Future[bool | None]
+        ] = {}
+        self._subscribed = False
         self._log = logging.getLogger("train.ble")
 
     async def start(self) -> None:
-        self.bus.subscribe(SetTrainSpeed, self._on_set_speed)
+        if not self._subscribed:
+            self.bus.subscribe(SetTrainSpeed, self._on_set_speed)
+            self.bus.subscribe(ShutdownTrain, self._on_shutdown)
+            self._subscribed = True
         for ble_address, train_name in self._train_map.items():
             task = asyncio.create_task(
                 self._maintain_connection(train_name, ble_address),
@@ -81,6 +94,14 @@ class LegoBleModule(Module):
             with suppress(Exception):
                 await client.disconnect()
         self._clients.clear()
+        for confirmation in self._shutdown_confirmations.values():
+            if not confirmation.done():
+                confirmation.set_result(None)
+        self._shutdown_confirmations.clear()
+        if self._subscribed:
+            self.bus.unsubscribe(SetTrainSpeed, self._on_set_speed)
+            self.bus.unsubscribe(ShutdownTrain, self._on_shutdown)
+            self._subscribed = False
 
     async def cancel_scan(self) -> None:
         task = self._scan_task
@@ -116,30 +137,28 @@ class LegoBleModule(Module):
         async with self._adapter_condition:
             self._adapter_condition.notify_all()
 
-    async def _connect(self, train_name: str, client: BleakClient) -> None:
+    async def _connect(self, client: BleakClient) -> None:
         async with self._adapter_condition:
             await self._adapter_condition.wait_for(lambda: self._scan_task is None)
-        connected = False
         try:
             await client.connect()
-            connected = True
         finally:
             async with self._adapter_condition:
-                if connected:
-                    self._clients[train_name] = client
                 self._adapter_condition.notify_all()
 
     async def _maintain_connection(self, train_name: str, ble_address: str) -> None:
         while True:
             was_connected = False
+            was_ready = False
             client = BleakClient(ble_address)
             try:
-                await self._connect(train_name, client)
+                await self._connect(client)
                 was_connected = True
+                await self._setup_notifications(train_name, client)
+                self._clients[train_name] = client
+                was_ready = True
                 await self.bus.publish(TrainConnected(train_name=train_name, ble_address=ble_address))
                 self._log.info("Connected to %s (%s)", train_name, ble_address)
-
-                await self._setup_notifications(train_name, client)
                 await self._poll_while_connected(train_name, client)
 
             except asyncio.CancelledError:
@@ -154,10 +173,16 @@ class LegoBleModule(Module):
 
             if was_connected:
                 self._clients.pop(train_name, None)
+                confirmation = self._shutdown_confirmations.pop(train_name, None)
+                if confirmation is not None and not confirmation.done():
+                    confirmation.set_result(None)
                 self._battery.pop(train_name, None)
                 self._voltage.pop(train_name, None)
-                await self.bus.publish(TrainDisconnected(train_name=train_name, ble_address=ble_address))
-                self._log.info("Disconnected from %s", train_name)
+                with suppress(Exception):
+                    await client.disconnect()
+                if was_ready:
+                    await self.bus.publish(TrainDisconnected(train_name=train_name, ble_address=ble_address))
+                    self._log.info("Disconnected from %s", train_name)
 
             await asyncio.sleep(RECONNECT_DELAY)
 
@@ -171,6 +196,15 @@ class LegoBleModule(Module):
             elif msg_type == 0x45 and len(data) >= 6 and data[3] == VOLTAGE_PORT:
                 raw = int.from_bytes(data[4:6], "little")
                 self._voltage[train_name] = round(raw * VOLTAGE_MAX_V / VOLTAGE_MAX_RAW, 2)
+            elif msg_type == 0x02 and len(data) >= 4 and data[3] == 0x30:
+                self._resolve_shutdown_confirmation(train_name, True)
+            elif (
+                msg_type == 0x05
+                and len(data) >= 5
+                and data[3] == 0x02
+                and GENERIC_ERROR_MIN_CODE <= data[4] <= GENERIC_ERROR_MAX_CODE
+            ):
+                self._resolve_shutdown_confirmation(train_name, False)
 
         await client.start_notify(HUB_CHARACTERISTIC_UUID, on_notification)
         await client.write_gatt_char(HUB_CHARACTERISTIC_UUID, _build_voltage_subscribe(VOLTAGE_PORT))
@@ -226,3 +260,61 @@ class LegoBleModule(Module):
                     request_id=event.request_id,
                 )
             )
+
+    async def _on_shutdown(self, event: ShutdownTrain) -> None:
+        client = self._clients.get(event.train_name)
+        if client is None or not client.is_connected:
+            await self._publish_shutdown_result(event, success=False)
+            return
+
+        confirmation: asyncio.Future[bool | None] = (
+            asyncio.get_running_loop().create_future()
+        )
+        self._shutdown_confirmations[event.train_name] = confirmation
+        try:
+            await client.write_gatt_char(
+                HUB_CHARACTERISTIC_UUID, SHUTDOWN_COMMAND
+            )
+        except Exception:
+            self._shutdown_confirmations.pop(event.train_name, None)
+            self._log.error(
+                "Failed to shut down %s", event.train_name, exc_info=True
+            )
+            await self._publish_shutdown_result(event, success=False)
+            return
+
+        try:
+            success = await asyncio.wait_for(
+                confirmation, timeout=SHUTDOWN_CONFIRM_TIMEOUT
+            )
+        except TimeoutError:
+            self._log.warning(
+                "Timed out waiting for %s to confirm shutdown",
+                event.train_name,
+            )
+            return
+        finally:
+            if self._shutdown_confirmations.get(event.train_name) is confirmation:
+                self._shutdown_confirmations.pop(event.train_name, None)
+
+        if success is None:
+            return
+        await self._publish_shutdown_result(event, success=success)
+
+    def _resolve_shutdown_confirmation(
+        self, train_name: str, success: bool
+    ) -> None:
+        confirmation = self._shutdown_confirmations.get(train_name)
+        if confirmation is not None and not confirmation.done():
+            confirmation.set_result(success)
+
+    async def _publish_shutdown_result(
+        self, event: ShutdownTrain, *, success: bool
+    ) -> None:
+        await self.bus.publish(
+            TrainShutdown(
+                train_name=event.train_name,
+                success=success,
+                request_id=event.request_id,
+            )
+        )

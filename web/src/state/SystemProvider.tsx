@@ -25,6 +25,7 @@ const STATE_QUERY_KEY = ["system-state"] as const;
 
 export interface SystemActions {
   setTrainSpeed(trainId: string, speed: number): Promise<void>;
+  shutdownTrain(trainId: string): Promise<void>;
   setSwitchPosition(
     hubId: string,
     switchId: string,
@@ -137,6 +138,11 @@ export function SystemProvider({ children }: { readonly children: ReactNode }) {
         publish(`train:${trainId}`, {
           type: "set_train_speed",
           data: { train_id: trainId, speed },
+        }),
+      shutdownTrain: (trainId) =>
+        publish(`train:${trainId}`, {
+          type: "shutdown_train",
+          data: { train_id: trainId },
         }),
       setSwitchPosition: (hubId, switchId, target) =>
         publish(`switch:${hubId}:${switchId}`, {

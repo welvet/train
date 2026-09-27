@@ -6,6 +6,7 @@ from train.domain.events.train import (
     TrainConnected,
     TrainDisconnected,
     TrainSpeedChanged,
+    TrainShutdown,
     TrainStatus,
 )
 from train.domain.reducers.base import set_if_different
@@ -35,6 +36,13 @@ def reduce_train_speed_changed(
         return False
     train = state._ensure_train(event.train_name)
     return set_if_different(train, "speed", event.speed)
+
+
+def reduce_train_shutdown(state: SystemState, event: TrainShutdown) -> bool:
+    if not event.success:
+        return False
+    train = state._ensure_train(event.train_name)
+    return set_if_different(train, "speed", 0)
 
 
 def reduce_train_status(state: SystemState, event: TrainStatus) -> bool:

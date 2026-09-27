@@ -4,6 +4,7 @@ from train.domain import (
     HubConnected,
     HubDisconnected,
     SetTrainSpeed,
+    ShutdownTrain,
     SwitchPositionChanged,
     SystemShutdown,
     SystemStarted,
@@ -15,6 +16,7 @@ from train.domain import (
     TrainConnected,
     TrainDisconnected,
     TrainSpeedChanged,
+    TrainShutdown,
     TrainStatus,
 )
 from train.domain.reducers import REDUCERS
@@ -29,6 +31,7 @@ def test_all_state_events_have_explicit_reducers() -> None:
         TrainConnected,
         TrainDisconnected,
         TrainSpeedChanged,
+        TrainShutdown,
         TrainStatus,
         HubConnected,
         HubDisconnected,
@@ -98,12 +101,17 @@ def test_state_reduces_train_and_automation_events() -> None:
     assert state.automation.halted is True
     assert state.revision == 4
 
+    state.apply(TrainShutdown(train_name="express", success=True))
+    assert train.speed == 0
+    assert state.revision == 5
+
     state.apply(SetTrainSpeed(train_name="express", speed=10))
+    state.apply(ShutdownTrain(train_name="express"))
     state.apply(TrainSpeedChanged(
         train_name="express", speed=10, success=False
     ))
-    assert train.speed == 50
-    assert state.revision == 4
+    assert train.speed == 0
+    assert state.revision == 5
 
 
 def test_state_reconciles_hub_snapshot_and_tag_events() -> None:

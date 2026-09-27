@@ -18,6 +18,7 @@ from train.domain.events.train import (
     TrainConnected,
     TrainDisconnected,
     TrainSpeedChanged,
+    TrainShutdown,
     TrainStatus,
 )
 from train.domain.reducers.base import Reducer, adapt
@@ -40,6 +41,7 @@ from train.domain.reducers.train import (
     reduce_train_connected,
     reduce_train_disconnected,
     reduce_train_speed_changed,
+    reduce_train_shutdown,
     reduce_train_status,
 )
 
@@ -52,6 +54,7 @@ REDUCERS: dict[type[Event], Reducer] = {
     TrainConnected: adapt(TrainConnected, reduce_train_connected),
     TrainDisconnected: adapt(TrainDisconnected, reduce_train_disconnected),
     TrainSpeedChanged: adapt(TrainSpeedChanged, reduce_train_speed_changed),
+    TrainShutdown: adapt(TrainShutdown, reduce_train_shutdown),
     TrainStatus: adapt(TrainStatus, reduce_train_status),
     HubConnected: adapt(HubConnected, reduce_hub_connected),
     HubDisconnected: adapt(HubDisconnected, reduce_hub_disconnected),

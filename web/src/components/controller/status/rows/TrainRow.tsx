@@ -46,6 +46,18 @@ export function TrainRow({ train }: { readonly train: TrainModel }) {
               </Button>
             );
           })}
+          <Button
+            size="compact-sm"
+            color="red"
+            variant="outline"
+            disabled={pending || controlsDisabled}
+            aria-label={`Shut down ${train.id}`}
+            onClick={() => {
+              void actions.shutdownTrain(train.id).catch(() => undefined);
+            }}
+          >
+            Shut down
+          </Button>
         </Group>
       }
     >
