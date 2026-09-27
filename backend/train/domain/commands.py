@@ -7,7 +7,12 @@ from typing import Any, Generic, TypeVar
 from train.domain.events.base import Event
 from train.domain.events.hub import SetSwitchPosition, SwitchPositionChanged
 from train.domain.events.system import AutomationHalt, AutomationResume
-from train.domain.events.train import SetTrainSpeed, TrainSpeedChanged
+from train.domain.events.train import (
+    SetTrainSpeed,
+    ShutdownTrain,
+    TrainShutdown,
+    TrainSpeedChanged,
+)
 from train.domain.state import SystemState
 
 
@@ -46,6 +51,20 @@ COMMANDS: tuple[CommandSpec[Any, Any], ...] = (
         ),
         response_succeeded=lambda response: response.success,
     ),
+    CommandSpec[ShutdownTrain, TrainShutdown](
+        command_type=ShutdownTrain,
+        resource_key=lambda event: (
+            "train",
+            event.train_name,
+        ),
+        missing_resource=lambda event, state: _missing_train(event, state),
+        response_type=TrainShutdown,
+        response_matches=lambda command, response: (
+            response.request_id == command.request_id
+            and response.train_name == command.train_name
+        ),
+        response_succeeded=lambda response: response.success,
+    ),
     CommandSpec[SetSwitchPosition, SwitchPositionChanged](
         command_type=SetSwitchPosition,
         resource_key=lambda event: (
@@ -81,7 +100,9 @@ def command_spec(command: Event) -> CommandSpec[Any, Any] | None:
     return _COMMANDS_BY_TYPE.get(type(command))
 
 
-def _missing_train(command: SetTrainSpeed, state: SystemState) -> str | None:
+def _missing_train(
+    command: SetTrainSpeed | ShutdownTrain, state: SystemState
+) -> str | None:
     if command.train_name not in state.trains:
         return f"unknown train: {command.train_name}"
     return None

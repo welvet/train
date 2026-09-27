@@ -570,6 +570,9 @@
             "$ref": "#/components/schemas/SetTrainSpeed"
           },
           {
+            "$ref": "#/components/schemas/ShutdownTrain"
+          },
+          {
             "$ref": "#/components/schemas/SetSwitchPosition"
           },
           {
@@ -667,6 +670,36 @@
         "required": [
           "train_id",
           "speed"
+        ],
+        "type": "object"
+      },
+      "ShutdownTrain": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/ShutdownTrainData"
+          },
+          "type": {
+            "const": "shutdown_train",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "data"
+        ],
+        "type": "object"
+      },
+      "ShutdownTrainData": {
+        "additionalProperties": true,
+        "properties": {
+          "train_id": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "train_id"
         ],
         "type": "object"
       },

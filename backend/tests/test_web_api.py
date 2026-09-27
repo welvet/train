@@ -16,10 +16,12 @@ from train.domain import (
     AutomationHalt,
     SetSwitchPosition,
     SetTrainSpeed,
+    ShutdownTrain,
     SwitchPositionChanged,
     SystemStarted,
     SystemState,
     TrainSpeedChanged,
+    TrainShutdown,
 )
 from train.modules.web_api import WebApiModule
 from train.modules.web_api.static_files import StaticFileResolver
@@ -506,6 +508,33 @@ async def test_event_endpoint_decodes_and_publishes_command(
     assert body["command"]["type"] == "set_train_speed"
     assert body["command"]["data"]["request_id"] == received[0].request_id
     assert bus.state.trains["express"].speed == 60
+
+
+async def test_event_endpoint_dispatches_shutdown_command(
+    bus: EventBus, client: TestClient
+) -> None:
+    received: list[ShutdownTrain] = []
+
+    async def handle(event: ShutdownTrain) -> None:
+        received.append(event)
+        await bus.publish(TrainShutdown(
+            train_name=event.train_name,
+            success=True,
+            request_id=event.request_id,
+        ))
+
+    bus.subscribe(ShutdownTrain, handle)
+
+    response = await client.post("/api/events", json={
+        "type": "shutdown_train",
+        "data": {"train_id": "express"},
+    })
+
+    assert response.status == 200
+    body = await response.json()
+    assert body["completed"] is True
+    assert body["command"]["type"] == "shutdown_train"
+    assert body["command"]["data"]["request_id"] == received[0].request_id
 
 
 async def test_event_endpoint_updates_shared_automation_state(

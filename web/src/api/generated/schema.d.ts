@@ -244,7 +244,7 @@ export interface components {
             train_id: string;
             voltage: number;
         };
-        PublicEvent: components["schemas"]["SetTrainSpeed"] | components["schemas"]["SetSwitchPosition"] | components["schemas"]["AutomationHalt"] | components["schemas"]["AutomationResume"];
+        PublicEvent: components["schemas"]["SetTrainSpeed"] | components["schemas"]["ShutdownTrain"] | components["schemas"]["SetSwitchPosition"] | components["schemas"]["AutomationHalt"] | components["schemas"]["AutomationResume"];
         SetSwitchPosition: {
             data: components["schemas"]["SetSwitchPositionData"];
             /** @constant */
@@ -264,6 +264,16 @@ export interface components {
         };
         SetTrainSpeedData: {
             speed: number;
+            train_id: string;
+        } & {
+            [key: string]: unknown;
+        };
+        ShutdownTrain: {
+            data: components["schemas"]["ShutdownTrainData"];
+            /** @constant */
+            type: "shutdown_train";
+        };
+        ShutdownTrainData: {
             train_id: string;
         } & {
             [key: string]: unknown;

@@ -7,7 +7,7 @@ from typing import Any, cast
 from train.domain.events.base import Event
 from train.domain.events.hub import SetSwitchPosition
 from train.domain.events.system import AutomationHalt, AutomationResume
-from train.domain.events.train import SetTrainSpeed
+from train.domain.events.train import SetTrainSpeed, ShutdownTrain
 
 
 class InvalidPublicEvent(ValueError):
@@ -47,6 +47,25 @@ PUBLIC_EVENTS = (
                 "speed": {"type": "integer", "minimum": -100, "maximum": 100},
             },
             "required": ["train_id", "speed"],
+            "additionalProperties": True,
+        },
+    ),
+    PublicEventSpec(
+        "shutdown_train",
+        ShutdownTrain,
+        lambda data: ShutdownTrain(
+            train_name=_required_string(data, "train_id"),
+        ),
+        lambda event: {
+            "train_id": _shutdown_train(event).train_name,
+            "request_id": _shutdown_train(event).request_id,
+        },
+        {
+            "type": "object",
+            "properties": {
+                "train_id": {"type": "string", "minLength": 1},
+            },
+            "required": ["train_id"],
             "additionalProperties": True,
         },
     ),
@@ -171,6 +190,10 @@ def _switch_target(data: Mapping[str, object]) -> str | int:
 
 def _set_train_speed(event: Event) -> SetTrainSpeed:
     return cast(SetTrainSpeed, event)
+
+
+def _shutdown_train(event: Event) -> ShutdownTrain:
+    return cast(ShutdownTrain, event)
 
 
 def _set_switch_position(event: Event) -> SetSwitchPosition:

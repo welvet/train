@@ -17,10 +17,12 @@ from train.domain.events.system import (
     SystemStarted,
 )
 from train.domain.events.train import (
+    ShutdownTrain,
     SetTrainSpeed,
     TrainConnected,
     TrainDisconnected,
     TrainSpeedChanged,
+    TrainShutdown,
     TrainStatus,
 )
 from train.domain.state import (
@@ -51,6 +53,7 @@ __all__ = [
     "HubDisconnected",
     "InvalidPublicEvent",
     "LegoHubState",
+    "ShutdownTrain",
     "SetSwitchPosition",
     "SetTrainSpeed",
     "SwitchPositionChanged",
@@ -65,6 +68,7 @@ __all__ = [
     "TrainConnected",
     "TrainDisconnected",
     "TrainSpeedChanged",
+    "TrainShutdown",
     "TrainStatus",
     "TrainState",
     "TrainTagRegistry",

@@ -14,9 +14,22 @@ class SetTrainSpeed(Event):
 
 
 @dataclass(frozen=True, slots=True)
+class ShutdownTrain(Event):
+    train_name: str = ""
+    request_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+
+
+@dataclass(frozen=True, slots=True)
 class TrainSpeedChanged(Event):
     train_name: str = ""
     speed: int = 0
+    success: bool = False
+    request_id: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class TrainShutdown(Event):
+    train_name: str = ""
     success: bool = False
     request_id: str = ""
 

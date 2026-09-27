@@ -5,6 +5,7 @@ from train.domain import (
     InvalidPublicEvent,
     SetSwitchPosition,
     SetTrainSpeed,
+    ShutdownTrain,
     TrainConnected,
     decode_public_event,
     encode_public_event,
@@ -20,12 +21,18 @@ def test_decodes_public_command_events() -> None:
         "type": "set_switch_position",
         "data": {"hub_id": "yard", "switch_id": "S1", "target": "d"},
     })
+    shutdown = decode_public_event({
+        "type": "shutdown_train",
+        "data": {"train_id": "express"},
+    })
 
     assert isinstance(speed, SetTrainSpeed)
     assert speed.train_name == "express"
     assert speed.speed == -40
     assert isinstance(switch, SetSwitchPosition)
     assert switch.target == "diverge"
+    assert isinstance(shutdown, ShutdownTrain)
+    assert shutdown.train_name == "express"
 
 
 def test_encodes_event_with_stable_wire_names() -> None:
@@ -40,6 +47,15 @@ def test_encodes_event_with_stable_wire_names() -> None:
         },
     }
 
+    shutdown = ShutdownTrain(train_name="express", request_id="request-2")
+    assert encode_public_event(shutdown) == {
+        "type": "shutdown_train",
+        "data": {
+            "train_id": "express",
+            "request_id": "request-2",
+        },
+    }
+
 
 @pytest.mark.parametrize(
     "payload",
@@ -47,6 +63,7 @@ def test_encodes_event_with_stable_wire_names() -> None:
         {"type": "train_connected", "data": {"train_id": "express"}},
         {"type": "set_train_speed", "data": {"train_id": "express", "speed": True}},
         {"type": "set_train_speed", "data": {"train_id": "express", "speed": 101}},
+        {"type": "shutdown_train", "data": {"train_id": ""}},
         {"type": "set_switch_position", "data": {"hub_id": "yard", "switch_id": "S1", "target": 181}},
     ],
 )

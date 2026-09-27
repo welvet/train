@@ -1,9 +1,11 @@
 from train.domain import (
     Event,
     SetTrainSpeed,
+    ShutdownTrain,
     TrainConnected,
     TrainDisconnected,
     TrainSpeedChanged,
+    TrainShutdown,
 )
 
 
@@ -28,6 +30,18 @@ def test_train_speed_changed_fields() -> None:
     assert e.request_id == "request-1"
 
 
+def test_shutdown_train_fields() -> None:
+    command = ShutdownTrain(train_name="percy")
+    result = TrainShutdown(
+        train_name="percy", success=True, request_id=command.request_id
+    )
+
+    assert command.request_id
+    assert result.train_name == "percy"
+    assert result.success is True
+    assert result.request_id == command.request_id
+
+
 def test_train_connected_fields() -> None:
     e = TrainConnected(train_name="thomas", ble_address="AA:BB:CC:DD:EE:FF")
     assert e.train_name == "thomas"
@@ -41,7 +55,14 @@ def test_train_disconnected_fields() -> None:
 
 
 def test_all_events_are_subclass_of_event() -> None:
-    for cls in (SetTrainSpeed, TrainSpeedChanged, TrainConnected, TrainDisconnected):
+    for cls in (
+        SetTrainSpeed,
+        ShutdownTrain,
+        TrainSpeedChanged,
+        TrainShutdown,
+        TrainConnected,
+        TrainDisconnected,
+    ):
         assert issubclass(cls, Event)
         assert isinstance(cls(), Event)
 
